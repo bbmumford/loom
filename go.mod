@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	filippo.io/edwards25519 v1.2.0
-	github.com/ORBTR/aether v0.0.109
+	github.com/ORBTR/aether v0.0.111
 	github.com/bbmumford/cfgload v0.0.2
 	github.com/bbmumford/envreq v0.0.1
 	github.com/bbmumford/ledger v0.0.20

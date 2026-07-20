@@ -3271,8 +3271,18 @@ func (rt *Runtime) WebSocketHandler() http.HandlerFunc {
 		}
 		remoteNodeID = string(verifiedNodeID)
 
-		// Upgrade to WebSocket using gobwas/ws — hijacks the HTTP connection
-		rawConn, _, _, err := ws.UpgradeHTTP(r, w)
+		// Upgrade to WebSocket using gobwas/ws — hijacks the HTTP connection.
+		// AE-P-26: emit the aether transport's signed identity triple in the 101
+		// response so the dialing peer can verify this server owns the NodeID it
+		// dialed. A bare UpgradeHTTP omits them, and the aether WS dialer then
+		// closes the accepted socket ("server did not present a signed identity")
+		// — which starves gossip, so no 6PN UDP addresses propagate and the
+		// ws→noise-UDP upgrade never fires. AcceptHeaders is aether's own emit,
+		// shared so this custom handler stays byte-for-byte compatible with it.
+		// (Forward-port of the library v0.0.440 fix into the loom-extracted
+		// mesh/node, which was extracted pre-fix — see #P-96.)
+		respHdr := rt.connMgr.wsTr.AcceptHeaders(r)
+		rawConn, _, _, err := ws.HTTPUpgrader{Header: respHdr}.Upgrade(r, w)
 		if err != nil {
 			log.Printf("[WS] Upgrade failed from %s: %v", r.RemoteAddr, err)
 			return
