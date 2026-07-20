@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package hstles.mesh.gossip.v1;
+
+option go_package = "github.com/hstles/library/mesh/core/directory/gossip/pb";
+
+// GossipEnvelope is the wire format for gossip exchanges.
+// The records field carries opaque serialised payloads — the gossip engine
+// does not know or care about record structure. Each consumer (HSTLES LAD,
+// Hospitium CRDTs, Mercury announcements) defines its own record proto.
+//
+// When this package extracts to Whisper, this proto moves with it.
+// The LADRecord message below stays in HSTLES/Ledger.
+message GossipEnvelope {
+    ExchangeMeta meta = 1;
+    repeated bytes records = 2;  // opaque serialised records
+}
+
+// ExchangeMeta carries per-exchange metadata piggybacked on gossip frames.
+message ExchangeMeta {
+    uint64 cache_fingerprint = 1;
+    string region = 2;
+    bool backpressure_signal = 3;
+
+    // PEX entries piggybacked on gossip
+    repeated PEXEntry pex_entries = 4;
+
+    // Connection counts for load balancing
+    map<string, int32> connection_counts = 5;
+
+    // Connection offer for NAT traversal signaling
+    ConnectionOffer offer = 6;
+}
+
+// PEXEntry is a signed peer exchange advertisement.
+//
+// Receivers prefer same-region peers when picking probe targets;
+// without `region` on the wire, every received PEXEntry looks like
+// it could be cross-region and the same-region preference cannot
+// take effect. Mirrors the lad.Record.Region carried in the body
+// for direct LADRecord messages.
+message PEXEntry {
+    string node_id = 1;
+    repeated string addresses = 2;
+    int64 timestamp_unix = 3;
+    bytes signature = 4;
+    string region = 5;
+}
+
+// ConnectionOffer signals desire for a direct connection.
+message ConnectionOffer {
+    string from_node_id = 1;
+    string to_node_id = 2;
+    repeated string addresses = 3;
+    string transport = 4;
+    int64 timestamp_unix = 5;
+    bytes signature = 6;
+}
+
+// LADRecord is the wire format for HSTLES/ORBTR directory records.
+// This message stays in HSTLES/Ledger when Whisper is extracted —
+// it is NOT part of the gossip engine's generic envelope.
+//
+// Fields 12-15 are the C1 follow-up additions so receiving peers can
+// reconstruct the full lad.Record state from a gossip exchange:
+//   - hlc_timestamp: HLC tie-breaker for IBLT reconcile and snapshot
+//     manifest HLC; without it, every peer interprets the record at
+//     HLC=0 and stale records win on equal lamport clocks.
+//   - expires_at_unix: TTL for tombstone pruning; without it the
+//     receiver treats every record as never-expires.
+//   - author_pubkey: signed-topic enforcement — verifiers need the
+//     pubkey alongside the signature.
+//   - blob_cid: content-addressed reference for off-record blobs
+//     (snapshot manifest payloads).
+//
+// All four use the existing zero-check pattern from `deleted_at_unix`
+// so unset fields round-trip cleanly without surprise default-zero
+// effects.
+message LADRecord {
+    string topic = 1;
+    string node_id = 2;
+    string tenant_id = 3;
+    bytes body = 4;             // opaque sub-document (roles, reach, member JSON)
+    int64 timestamp_unix = 5;
+    uint64 lamport_clock = 6;
+    uint64 seq = 7;
+    bool tombstone = 8;
+    int64 deleted_at_unix = 9;
+    string tombstone_reason = 10;
+    bytes signature = 11;
+    uint64 hlc_timestamp = 12;
+    int64 expires_at_unix = 13;
+    bytes author_pubkey = 14;
+    string blob_cid = 15;
+}

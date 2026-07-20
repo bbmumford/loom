@@ -1,0 +1,79 @@
+syntax = "proto3";
+
+package hstles.mesh.transport.v1;
+
+option go_package = "github.com/hstles/library/mesh/contracts/pb";
+
+// NOTE: This file is named mesh_transport.proto (not transport.proto) to
+// avoid a protobuf global-registry collision with aether/grpc/pb's own
+// transport.proto when both packages are linked into the same binary.
+
+// TransportService provides bidirectional streaming for mesh transport.
+service TransportService {
+  // Stream establishes a bidirectional stream for sending/receiving mesh packets.
+  rpc Stream(stream Frame) returns (stream Frame);
+  
+  // Ping checks connectivity and measures latency.
+  rpc Ping(PingRequest) returns (PingResponse);
+}
+
+// Frame represents a single transport frame.
+message Frame {
+  // Unique frame identifier for acknowledgment tracking
+  uint64 frame_id = 1;
+  
+  // Encrypted payload data
+  bytes data = 2;
+  
+  // Frame type for multiplexing
+  FrameType type = 3;
+  
+  // Optional acknowledgment of received frames
+  repeated uint64 acked_frames = 4;
+}
+
+// FrameType identifies the purpose of a frame.
+enum FrameType {
+  FRAME_TYPE_UNSPECIFIED = 0;
+  FRAME_TYPE_DATA = 1;        // Regular encrypted data
+  FRAME_TYPE_PING = 2;        // Ping for health check
+  FRAME_TYPE_PONG = 3;        // Pong response
+  FRAME_TYPE_HANDSHAKE = 4;   // Initial handshake
+  FRAME_TYPE_CLOSE = 5;       // Graceful close
+}
+
+// PingRequest checks connectivity.
+message PingRequest {
+  // Client timestamp for RTT calculation
+  int64 timestamp_ns = 1;
+  
+  // Client's NodeID
+  string node_id = 2;
+}
+
+// PingResponse returns pong with timestamps.
+message PingResponse {
+  // Echoed client timestamp
+  int64 client_timestamp_ns = 1;
+  
+  // Server timestamp for clock skew detection
+  int64 server_timestamp_ns = 2;
+  
+  // Server's NodeID
+  string node_id = 3;
+}
+
+// Handshake initiates a secure connection.
+message Handshake {
+  // Client's Ed25519 public key (NodeID)
+  bytes public_key = 1;
+  
+  // Signature over the challenge nonce
+  bytes signature = 2;
+  
+  // Challenge nonce from server (empty for initial request)
+  bytes challenge = 3;
+  
+  // Protocol version
+  uint32 version = 4;
+}
