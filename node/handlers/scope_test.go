@@ -182,3 +182,63 @@ func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateTenantScope_TransportReconcile is a REGRESSION LOCK on the
+// transport/request tenant reconciliation (handler.go:548-557) — the mechanism
+// that makes a mesh ScopeTenant a real boundary rather than a self-asserted
+// envelope field. On a tenant-specific transport (dedicated port or shared
+// preamble) the aether session's authenticated tenant is stamped into the
+// context by WithTransportTenant; the reconcile then rejects any request whose
+// tenant_id disagrees — a caller cannot forge a cross-tenant envelope over a
+// transport it authenticated as a different tenant. On the single-tenant
+// fallback the transport tenant is "default" (or unset), so the reconcile is
+// deliberately SKIPPED and the envelope tenant is trusted — which is exactly
+// why an empty Config.Tenants deployment self-asserts (#M-10 / #O-284 / #P-114).
+//
+// This is the load-bearing behaviour the endpoint-template Config.Tenants fix
+// (#R-697 Directive-1, "prove enforcement not config-presence") rests on, and
+// it had no direct coverage. The switch arms above return only on failure, so
+// the reconcile is reached on every scope whose context check passes; these
+// cases drive a TenantScopeTenant handler (tenant present) straight into it.
+func TestValidateTenantScope_TransportReconcile(t *testing.T) {
+	const reqTenant = "acme"
+	cases := []struct {
+		name      string
+		transport string // value stamped by WithTransportTenant (ignored if noStamp)
+		noStamp   bool   // if true, stamp no transport tenant at all
+		wantErr   string // "" => expect pass
+	}{
+		// Tenant-specific transport: authenticated tenant matches the envelope.
+		{name: "match_passes", transport: "acme", wantErr: ""},
+		// Tenant-specific transport: envelope lies about its tenant — REJECTED.
+		{name: "mismatch_rejects", transport: "evil", wantErr: "transport/request tenant mismatch"},
+		// Single-tenant fallback: reconcile skipped, envelope self-asserted.
+		{name: "default_skips_selfassert", transport: "default", wantErr: ""},
+		// Shared transport with no resolved ScopeID: skipped (empty == unset).
+		{name: "empty_skips", transport: "", wantErr: ""},
+		{name: "unstamped_skips", noStamp: true, wantErr: ""},
+	}
+	r := NewHandlerRegistry()
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			h := &stubMeta{name: "tenant.op", scope: TenantScopeTenant}
+			ctx := ctxWithRPC(map[string]interface{}{"tenant_id": reqTenant})
+			if !c.noStamp {
+				ctx = WithTransportTenant(ctx, c.transport)
+			}
+			err := r.validateTenantScope(ctx, h)
+			if c.wantErr == "" {
+				if err != nil {
+					t.Fatalf("%s: expected pass; got %v", c.name, err)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("%s: expected error containing %q; got nil", c.name, c.wantErr)
+			}
+			if !strings.Contains(err.Error(), c.wantErr) {
+				t.Fatalf("%s: expected error containing %q; got %v", c.name, c.wantErr, err)
+			}
+		})
+	}
+}
