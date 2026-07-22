@@ -134,3 +134,15 @@ func (defaultValidator) ValidateExecutionAuth(ctx context.Context, h ports.Secur
 func (defaultValidator) WithTenantID(ctx context.Context, tenantID string) context.Context {
 	return WithTenantID(ctx, tenantID)
 }
+
+// WithWireIdentity implements ports.ScopeStamper for the loom-local default
+// validator (#K-32): it records a mesh-propagated principal (userId + scope
+// list) as authenticated so ValidateExecutionAuth's user + scope checks pass
+// for pure-loom deployments. authType is left empty — a mesh peer that
+// already authenticated the caller upstream carries no local auth-type, and
+// handlers that pin AllowedAuthTypes gate that separately. An HSTLES build
+// injects its own validator that stamps the real security-helpers keys
+// instead; this loom-local implementation is the fail-closed default only.
+func (defaultValidator) WithWireIdentity(ctx context.Context, userID string, scopes []string) context.Context {
+	return WithAuth(ctx, userID, "", scopes)
+}

@@ -26,6 +26,42 @@ func TestBuildRequest_PropagatesDeadline(t *testing.T) {
 	}
 }
 
+// TestBuildRPCRequestCtx_SerializesScopesAndUserID verifies #K-32: the
+// caller's scope-list (space-joined per RFC-6749) + userId that the rpc
+// bridge stamped via WithScopes/WithUserID get serialized into req.Context.
+func TestBuildRPCRequestCtx_SerializesScopesAndUserID(t *testing.T) {
+	ctx := WithScopes(context.Background(), []string{"storage:read", "assistant:write"})
+	ctx = WithUserID(ctx, "user-42")
+	req := buildRPCRequestCtx(ctx, "storage", "orbtr.io.storage.Get", nil, 5*time.Second, "tenant-A")
+
+	if got := req.Context["scopes"]; got != "storage:read assistant:write" {
+		t.Errorf("scopes = %q, want space-joined %q", got, "storage:read assistant:write")
+	}
+	if got := req.Context["userId"]; got != "user-42" {
+		t.Errorf("userId = %q, want user-42", got)
+	}
+	// Selective-copy security (R-782): role + tenantId are set authoritatively
+	// by the builder; they must NOT be overridable through the caller ctx.
+	if got := req.Context["tenantId"]; got != "tenant-A" {
+		t.Errorf("tenantId = %q, want tenant-A (authoritative param)", got)
+	}
+	if got := req.Context["role"]; got != "storage" {
+		t.Errorf("role = %q, want storage", got)
+	}
+}
+
+// TestBuildRPCRequestCtx_OmitsEmptyScopesAndUserID verifies the copy is
+// conditional — no scopes/userId stamped means no empty wire keys.
+func TestBuildRPCRequestCtx_OmitsEmptyScopesAndUserID(t *testing.T) {
+	req := buildRPCRequestCtx(context.Background(), "platform", "platform.Ping", nil, time.Second, "")
+	if _, ok := req.Context["scopes"]; ok {
+		t.Error("scopes key present with none stamped — should be omitted")
+	}
+	if _, ok := req.Context["userId"]; ok {
+		t.Error("userId key present with none stamped — should be omitted")
+	}
+}
+
 func TestBuildRequest_NoDeadlineSetsDefault(t *testing.T) {
 	req := buildRPCRequest("platform", "platform.CheckHealth", nil, 0, "")
 	if time.Duration(req.TimeoutNs) != callerRequestTTL {

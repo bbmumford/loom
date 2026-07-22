@@ -20,6 +20,7 @@ import (
 	aethermetrics "github.com/ORBTR/aether/metrics"
 	"github.com/bbmumford/loom/internal/securityctx"
 	"github.com/bbmumford/loom/node/handlers"
+	"github.com/bbmumford/loom/pkg/rpc"
 	"github.com/bbmumford/loom/pkg/trace"
 	"github.com/bbmumford/loom/ports"
 )
@@ -593,6 +594,23 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 	// log helpers (trace.Tag) see the same ID the gateway started with.
 	if req.TraceId != "" {
 		ctx = trace.WithID(ctx, req.TraceId)
+	}
+
+	// #K-32: lift the caller's wire-propagated userId + scope-list onto ctx
+	// via the injected validator (optional ports.ScopeStamper) so scope
+	// enforcement (a handler's RequiredScopes) and userId-scoped handlers see
+	// the authenticated principal that crossed the mesh hop.
+	// buildRPCRequestCtx selectively serialized these into req.Context; a
+	// validator that does not implement ScopeStamper simply ignores them —
+	// the safe, non-breaking default (mesh scope enforcement stays closed
+	// until the endpoint validator adopts it). Mirrors the tenantId lift
+	// above: identity flows through the injected validator, never a
+	// loom-local key an HSTLES build would not read.
+	if ss, ok := s.authValidator.(ports.ScopeStamper); ok {
+		scopes := rpc.ParseScopes(req.Context["scopes"])
+		if uid := req.Context["userId"]; uid != "" || len(scopes) > 0 {
+			ctx = ss.WithWireIdentity(ctx, uid, scopes)
+		}
 	}
 
 	// 3. Intelligent dispatch: local vs forward decision

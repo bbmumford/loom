@@ -65,6 +65,29 @@ type AuthValidator interface {
 	WithTenantID(ctx context.Context, tenantID string) context.Context
 }
 
+// ScopeStamper is an OPTIONAL interface an injected AuthValidator MAY also
+// implement to receive the caller's wire-propagated identity (#K-32). When
+// the RPC server finds its AuthValidator also satisfies ScopeStamper it
+// lifts the userId + scope-list decoded from the request envelope onto ctx,
+// so scope enforcement (a handler's RequiredScopes) and userId-scoped
+// handlers see the authenticated caller that crossed the mesh hop.
+//
+// It is deliberately a SEPARATE, optional interface rather than two more
+// methods on AuthValidator: extending AuthValidator would break every
+// existing injected validator at compile time. A validator that does not
+// implement ScopeStamper simply does not get mesh-propagated scopes — the
+// safe, non-breaking default (enforcement stays closed until the endpoint
+// adopts it). The HSTLES/ORBTR validator implements it by delegating to the
+// real security-helpers keys (symmetric to WithTenantID); loom's default
+// securityctx validator implements it against its loom-local keys.
+type ScopeStamper interface {
+	// WithWireIdentity stamps the mesh-propagated userId + scope-list onto
+	// ctx as an authenticated principal. Called once per inbound RPC after
+	// the tenant lift, before dispatch. An empty userId + nil scopes is a
+	// no-op the implementation may skip.
+	WithWireIdentity(ctx context.Context, userID string, scopes []string) context.Context
+}
+
 // BootstrapInfo is what the VL1 bootstrap handshake knows about a joining
 // node — lifted verbatim from the X-VL1-* header contract (Node-ID,
 // Service-Name, Region, Roles, Private-IP, Public-IP; the header set is on

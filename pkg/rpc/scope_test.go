@@ -18,6 +18,58 @@ func TestEnforceScope_None(t *testing.T) {
 	}
 }
 
+// TestParseScopes verifies #K-32 wire decoding: space-joined → slice, with
+// empty + stray-space robustness (strings.Fields drops empty tokens, so no
+// phantom scope from a double space).
+func TestParseScopes(t *testing.T) {
+	cases := []struct {
+		raw  string
+		want []string
+	}{
+		{"", nil},
+		{"storage:read", []string{"storage:read"}},
+		{"storage:read assistant:write", []string{"storage:read", "assistant:write"}},
+		{"  a   b  ", []string{"a", "b"}},
+	}
+	for _, c := range cases {
+		got := ParseScopes(c.raw)
+		if len(got) != len(c.want) {
+			t.Errorf("ParseScopes(%q) = %v, want %v", c.raw, got, c.want)
+			continue
+		}
+		for i := range got {
+			if got[i] != c.want[i] {
+				t.Errorf("ParseScopes(%q)[%d] = %q, want %q", c.raw, i, got[i], c.want[i])
+			}
+		}
+	}
+}
+
+// TestScopesFromContext_RoundTrip verifies the receive-side accessor decodes
+// scopes surfaced onto ctx via WithRPCContext.
+func TestScopesFromContext_RoundTrip(t *testing.T) {
+	ctx := WithRPCContext(context.Background(), map[string]string{"scopes": "a b c"})
+	got := ScopesFromContext(ctx)
+	if len(got) != 3 || got[0] != "a" || got[1] != "b" || got[2] != "c" {
+		t.Errorf("ScopesFromContext = %v, want [a b c]", got)
+	}
+	if s := ScopesFromContext(context.Background()); s != nil {
+		t.Errorf("ScopesFromContext on bare ctx = %v, want nil", s)
+	}
+}
+
+// TestBridgeWireIdentity_NilSafe verifies the send-side bridge is a no-op
+// when the rpc context map is absent (no panic, ctx unchanged), and does not
+// panic on a populated map.
+func TestBridgeWireIdentity_NilSafe(t *testing.T) {
+	ctx := context.Background()
+	if got := bridgeWireIdentity(ctx); got != ctx {
+		t.Error("bridgeWireIdentity on bare ctx should return ctx unchanged")
+	}
+	ctx = WithRPCContext(context.Background(), map[string]string{"scopes": "x y", "userId": "u1"})
+	_ = bridgeWireIdentity(ctx) // must not panic
+}
+
 func TestEnforceScope_Platform(t *testing.T) {
 	h := &Handler{Namespace: "hstles", Domain: "identity", Operation: "Mint", Scope: ScopePlatform}
 	platforms := NewPlatformTenants("orbtr", "hstles")

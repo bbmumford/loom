@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -876,6 +877,20 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 	if oc := opClassFromContext(ctx); oc != "" {
 		rpcCtx["opClass"] = oc
 	}
+	// #K-32: propagate the caller's authenticated scope-list + userId across
+	// the mesh hop so node-side scope enforcement (RequiredScopes) and
+	// userId-scoped handlers see them. SELECTIVE by design (R-782 security
+	// constraint): copy ONLY these two named keys — never a blanket
+	// rpcContextMap merge — so a caller-supplied ctx cannot override the
+	// authoritative role/tenantId set above (tenant-spoof). scopes is
+	// space-joined per the RFC-6749 §3.3 `scope` convention (space-free
+	// tokens), decoded symmetrically by rpc.ScopesFromContext on the peer.
+	if sc := scopesFromContext(ctx); len(sc) > 0 {
+		rpcCtx["scopes"] = strings.Join(sc, " ")
+	}
+	if uid := userIDFromContext(ctx); uid != "" {
+		rpcCtx["userId"] = uid
+	}
 	return &pb.RPCRequest{
 		Id:        id,
 		Handler:   method,
@@ -1006,6 +1021,59 @@ func opClassFromContext(ctx context.Context) string {
 		return ""
 	}
 	if v, ok := ctx.Value(opClassContextKey{}).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// scopesContextKey / userIDContextKey carry the authenticated caller's
+// scope-list + user id on the SEND side so buildRPCRequestCtx serializes
+// them into req.Context for the mesh hop (#K-32). They mirror opClass. The
+// stamper is rpc.bridgeWireIdentity, which copies scopes+userId out of the
+// edge-stamped rpc context map onto these keys just before the mesh call;
+// dispatch cannot import pkg/rpc (the rpc→dispatch dependency would cycle),
+// so the rpc layer does the copy and these stay dispatch-local keys — the
+// dispatch builder reads them here, symmetric to the rpc-side wire-map
+// accessors that decode them on the peer.
+type scopesContextKey struct{}
+type userIDContextKey struct{}
+
+// WithScopes returns a context carrying the caller's authenticated scope
+// list for propagation across the next mesh dispatch. The slice is copied
+// defensively. An empty list is a no-op.
+func WithScopes(ctx context.Context, scopes []string) context.Context {
+	if len(scopes) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, scopesContextKey{}, append([]string(nil), scopes...))
+}
+
+// scopesFromContext extracts the scope list set by WithScopes (nil when unset).
+func scopesFromContext(ctx context.Context) []string {
+	if ctx == nil {
+		return nil
+	}
+	if v, ok := ctx.Value(scopesContextKey{}).([]string); ok {
+		return v
+	}
+	return nil
+}
+
+// WithUserID returns a context carrying the caller's user id for
+// propagation across the next mesh dispatch. Empty is a no-op.
+func WithUserID(ctx context.Context, userID string) context.Context {
+	if userID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, userIDContextKey{}, userID)
+}
+
+// userIDFromContext extracts the user id set by WithUserID ("" when unset).
+func userIDFromContext(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	if v, ok := ctx.Value(userIDContextKey{}).(string); ok {
 		return v
 	}
 	return ""
