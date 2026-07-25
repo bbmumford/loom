@@ -2200,7 +2200,7 @@ func (rt *Runtime) recordVL1Connection() {
 func (rt *Runtime) RegisterSession(session aether.Connection) {
 	rt.recordVL1Connection()
 	if rt.sessionHealthMonitor != nil {
-		rt.sessionHealthMonitor.Register(session) // TODO: update SessionHealthMonitor to accept Connection
+		rt.sessionHealthMonitor.Register(session)
 	}
 }
 
