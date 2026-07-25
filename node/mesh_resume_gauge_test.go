@@ -96,10 +96,21 @@ func TestMeshResume_SetupMeshSessionCountsBothDirections(t *testing.T) {
 	beforeInit := atomic.LoadUint64(&meshInitiatorSessions)
 	beforeResp := atomic.LoadUint64(&meshResponderSessions)
 
+	// ⚠ ASYMMETRIC ON PURPOSE: 2 initiator, 1 responder.
+	//
+	// The obvious version of this test establishes one session in each direction
+	// and asserts 1/1. That is MUTATION-BLIND to swapped branches: reversing the
+	// if/else produces 1/1 as well, so the test passes while every initiator
+	// session is counted as a responder and vice versa. Measured, not theorised
+	// — the symmetric version of this test passed with the branches swapped.
+	//
+	// With 2/1, correct code gives (2,1) and swapped code gives (1,2). Symmetric
+	// data cannot detect an asymmetric defect.
+	//
 	// net.Pipe is enough: adapter.NewSessionForProtocol is a pure constructor
 	// (factory.go switches on protocol and wraps the conn), so no handshake or
 	// I/O happens here.
-	for _, initiator := range []bool{true, false} {
+	for _, initiator := range []bool{true, true, false} {
 		c1, c2 := net.Pipe()
 		defer c1.Close()
 		defer c2.Close()
@@ -114,13 +125,23 @@ func TestMeshResume_SetupMeshSessionCountsBothDirections(t *testing.T) {
 		}
 	}
 
-	if got := atomic.LoadUint64(&meshInitiatorSessions) - beforeInit; got != 1 {
-		t.Errorf("mesh_initiator_sessions delta = %d, want 1 — the gauge is not "+
+	gotInit := atomic.LoadUint64(&meshInitiatorSessions) - beforeInit
+	gotResp := atomic.LoadUint64(&meshResponderSessions) - beforeResp
+
+	if gotInit != 2 {
+		t.Errorf("mesh_initiator_sessions delta = %d, want 2 — the gauge is not "+
 			"reached by the initiator path, so a zero reading would be a "+
-			"tautology rather than a measurement", got)
+			"tautology rather than a measurement", gotInit)
 	}
-	if got := atomic.LoadUint64(&meshResponderSessions) - beforeResp; got != 1 {
-		t.Errorf("mesh_responder_sessions delta = %d, want 1", got)
+	if gotResp != 1 {
+		t.Errorf("mesh_responder_sessions delta = %d, want 1", gotResp)
+	}
+	// Name the swap explicitly so the failure diagnoses itself rather than
+	// leaving two off-by-one errors for the next reader to correlate.
+	if gotInit == 1 && gotResp == 2 {
+		t.Error("the initiator/responder branches are SWAPPED in " +
+			"SetupMeshSession: 2 initiator + 1 responder sessions were " +
+			"established and the counters report the mirror image")
 	}
 }
 
