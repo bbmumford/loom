@@ -1895,6 +1895,16 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	var preambleMalformed, targetUnknown, innerRelayMalformed,
 		opForwardNoSrc, opReplyStaleFlow, opUnknown uint64
 	var crossOrgMsg1Received uint64
+	// forwarderInstalled/Absent disambiguate a zero cross_org_msg1_received.
+	// The msg1 counter lives INSIDE the forwarder, and the ingress hook returns
+	// early when a transport has none — so msg1==0 means either "no preamble ever
+	// arrived" (the delivery-gap reading) or "nothing was listening for one".
+	// Without these two counters those are indistinguishable, and the decision
+	// tree below silently assumes the former. attachIntraOrgForwarder is called
+	// unconditionally after every transport build (default/shared/tenant), so
+	// forwarder_absent SHOULD be 0 — but that is a source reading, and this makes
+	// it a runtime fact.
+	var forwarderInstalled, forwarderAbsent uint64
 	for _, tr := range rt.listenTransports {
 		var nt *noise.NoiseTransport
 		switch v := tr.(type) {
@@ -1908,8 +1918,10 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		}
 		fwd := nt.Forwarder()
 		if fwd == nil {
+			forwarderAbsent++
 			continue
 		}
+		forwarderInstalled++
 		a, b, c, d, e, f := fwd.Drops()
 		preambleMalformed += a
 		targetUnknown += b
@@ -1919,6 +1931,10 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		opUnknown += f
 		crossOrgMsg1Received += fwd.CrossOrgMsg1Received()
 	}
+	// Read these BEFORE interpreting cross_org_msg1_received: if
+	// forwarder_absent > 0, a zero msg1 count proves nothing about delivery.
+	m["forwarder_installed"] = forwarderInstalled
+	m["forwarder_absent"] = forwarderAbsent
 	m["forwarder_drops_preamble_malformed"] = preambleMalformed
 	m["forwarder_drops_target_unknown"] = targetUnknown
 	m["forwarder_drops_inner_relay_malformed"] = innerRelayMalformed
@@ -1931,6 +1947,19 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	// or UDP/6PN delivery gap) from "arrived and downstream-dropped"
 	// (counter>0 with attempts>0 and forwarder_drops_* climbing → look
 	// at the per-reason drop bucket).
+	//
+	// ⚠ TWO PRECONDITIONS before reading counter==0 as a delivery gap —
+	// both were implicit here and cost three lanes a retracted verdict:
+	//  1. forwarder_absent MUST be 0. The counter lives inside the
+	//     forwarder and the ingress hook returns early when a transport
+	//     has none, so "nothing was listening" reads identically to
+	//     "nothing arrived".
+	//  2. an arriving packet must be RECOGNISED as a routing preamble.
+	//     The increment sits behind IsRoutingPreamble(buf); a datagram
+	//     that arrives but fails that predicate is counted nowhere, so a
+	//     format/version skew also presents as counter==0.
+	// Neither is a Fly problem, and both are fixable in code — so
+	// counter==0 alone does NOT license an infrastructure conclusion.
 	m["cross_org_msg1_received"] = crossOrgMsg1Received
 
 	// Send-side cross-org noise-UDP forwarder dial telemetry. Pairs with
