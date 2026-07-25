@@ -8,6 +8,7 @@ package node
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -17,6 +18,21 @@ import (
 	"github.com/ORBTR/aether"
 	"github.com/bbmumford/swarm"
 )
+
+// ErrPeerNotRegistered is returned by Send when the destination peer has no
+// swarm stream on this transport — it was never attached, or was unregistered.
+//
+// It exists because the previous behaviour was to log "SKIP" and return nil,
+// which reported a successful send for a frame that never reached the wire.
+// That is worse than a swallowed error: a caller told it succeeded cannot
+// retry, and the swarm layer's anti-entropy cannot repair what it believes
+// was delivered. The common way to reach this state is the responder side of
+// RegisterPeer, where a failed AcceptStreamByID(100) returns without attaching
+// and without retrying, so the peer stays absent for the life of the session.
+//
+// Callers that legitimately treat an absent peer as a no-op should compare
+// with errors.Is rather than ignoring every error from Send.
+var ErrPeerNotRegistered = errors.New("swarm transport: peer not registered")
 
 // MeshSwarmTransport bridges aether sessions to the swarm.Transport
 // interface. It owns one dedicated aether stream per connected peer and
@@ -78,9 +94,12 @@ func (t *MeshSwarmTransport) Stop() {
 // LocalID implements swarm.Transport.
 func (t *MeshSwarmTransport) LocalID() swarm.NodeID { return t.localID }
 
-// Send implements swarm.Transport. Writes the framed payload to the
-// peer's dedicated swarm stream. Silently drops if peer is unknown or
-// the stream is closed.
+// Send implements swarm.Transport. Writes the framed payload to the peer's
+// dedicated swarm stream.
+//
+// Returns ErrPeerNotRegistered when the peer has no stream on this transport.
+// It previously returned nil there, which made an unreachable peer
+// indistinguishable from a delivered frame — see that error's doc comment.
 func (t *MeshSwarmTransport) Send(to swarm.NodeID, frame []byte) error {
 	t.mu.RLock()
 	p, ok := t.peers[to]
@@ -89,7 +108,7 @@ func (t *MeshSwarmTransport) Send(to swarm.NodeID, frame []byte) error {
 	t.mu.RUnlock()
 	if !known || !streamOk {
 		log.Printf("[SWARM] Send: SKIP peer=%s known=%v streamOk=%v bytes=%d", truncID(string(to)), known, streamOk, len(frame))
-		return nil
+		return fmt.Errorf("%w: peer=%s known=%v streamOk=%v", ErrPeerNotRegistered, truncID(string(to)), known, streamOk)
 	}
 	err := sendFramed(t.ctx, p.stream, frame)
 	if err != nil {
@@ -100,7 +119,16 @@ func (t *MeshSwarmTransport) Send(to swarm.NodeID, frame []byte) error {
 	return err
 }
 
-// Broadcast implements swarm.Transport. Sends to every registered peer.
+// Broadcast implements swarm.Transport. Sends to every registered peer and
+// returns the joined errors of any that failed; a peer whose stream is absent
+// counts as ErrPeerNotRegistered rather than being skipped silently.
+//
+// NOTE ON REACH: this method currently has NO callers. The swarm engine
+// fans out via repeated Send (plumtrees/merkle) and its own
+// plumtreesEngine.Broadcast, never through the Transport's. It is
+// implemented here only to satisfy swarm.Transport. It is written to report
+// failures anyway because it previously returned nil unconditionally while
+// discarding every error, and whoever wires it first should not inherit that.
 func (t *MeshSwarmTransport) Broadcast(frame []byte) error {
 	t.mu.RLock()
 	peers := make([]*meshSwarmPeer, 0, len(t.peers))
@@ -109,12 +137,18 @@ func (t *MeshSwarmTransport) Broadcast(frame []byte) error {
 	}
 	t.mu.RUnlock()
 	log.Printf("[SWARM] Broadcast: bytes=%d targets=%d", len(frame), len(peers))
+
+	var errs []error
 	for _, p := range peers {
-		if p.stream != nil {
-			_ = sendFramed(t.ctx, p.stream, frame)
+		if p.stream == nil {
+			errs = append(errs, fmt.Errorf("%w: peer=%s", ErrPeerNotRegistered, truncID(string(p.id))))
+			continue
+		}
+		if err := sendFramed(t.ctx, p.stream, frame); err != nil {
+			errs = append(errs, fmt.Errorf("peer=%s: %w", truncID(string(p.id)), err))
 		}
 	}
-	return nil
+	return errors.Join(errs...)
 }
 
 // Peers implements swarm.Transport.
