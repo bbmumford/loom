@@ -1971,20 +1971,24 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 
 	// ── Mesh session resumption: capability census + establishment volume ──
 	//
-	// Together with mesh_initiator_sessions these turn the resumption gap
-	// described at DialAndAcceptMesh into a runtime reading. Interpret as:
+	// ⚠ READ THE NOTE AT DialAndAcceptMesh BEFORE INTERPRETING THESE. An earlier
+	// version of this comment claimed the mesh bypasses resumption entirely and
+	// that we mint tickets no peer can redeem. That was WRONG for the ordinary
+	// noise-UDP path, which reaches tryResumeDial via dialNoiseUDP -> tr.Dial ->
+	// NoiseTransport.Dial. Do not resurrect that reading.
 	//
-	//   mesh_initiator_sessions climbing  AND  mesh_resume_capable_transports > 0
-	//     ⇒ we hold resume-capable transports and keep establishing initiator
-	//       mesh sessions that bypass their resume path. Tickets are minted
-	//       during the handshake (aether/noise/handshake.go IssueTicket) and no
-	//       mesh peer can ever redeem one: pure cost, previously uncounted.
+	// What these four actually support:
 	//
-	//   mesh_resume_capable_transports == 0
-	//     ⇒ the gap is structural for every configured protocol, and the
-	//       "wasted ticket minting" reading above does NOT hold. This is the
-	//       outcome that would refute it, which is why the census is here
-	//       rather than assumed.
+	//   mesh_initiator_sessions / mesh_responder_sessions — mesh session
+	//     establishment volume, split by direction. Useful as the denominator for
+	//     any per-session normalisation, and as a churn signal: a high
+	//     establishment rate against a flat active-session count means sessions
+	//     are being replaced rather than added.
+	//
+	//   mesh_resume_capable_transports / mesh_resume_incapable_transports —
+	//     whether the transports we hold expose resumption to a caller that asks
+	//     for it by interface. Not a statement about whether any given dial
+	//     resumed; NoiseTransport.Dial decides that internally.
 	//
 	// ⚠ The assertion is deliberately made on the transport INTERFACE VALUE, not
 	// on the unwrapped *noise.NoiseTransport. NoiseTransport satisfies
