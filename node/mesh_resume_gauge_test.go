@@ -123,3 +123,44 @@ func TestMeshResume_SetupMeshSessionCountsBothDirections(t *testing.T) {
 		t.Errorf("mesh_responder_sessions delta = %d, want 1", got)
 	}
 }
+
+// TestMeshResume_CountersDoNotMoveWithoutASession is the NEGATIVE CONTROL that
+// R-925 requires, and the test above is incomplete without it.
+//
+// The mutation proof and the delta assertions above establish that the gauge CAN
+// see a session and CAN report a miscount. Neither shows that it stays SILENT on
+// a known-clean case — and an instrument validated only on positives is how you
+// ship one that flags everything. Concretely: if these counters were ever moved
+// to a metrics-read path, or incremented from a constructor or a health tick,
+// every assertion above would still pass while the numbers became meaningless as
+// a session count.
+//
+// So: exercise the surrounding machinery WITHOUT establishing a mesh session and
+// require both counters to be exactly unchanged.
+func TestMeshResume_CountersDoNotMoveWithoutASession(t *testing.T) {
+	rt := &Runtime{identity: &NodeIdentity{}}
+
+	beforeInit := atomic.LoadUint64(&meshInitiatorSessions)
+	beforeResp := atomic.LoadUint64(&meshResponderSessions)
+
+	// Things that must NOT count as establishing a mesh session: reading the
+	// session options, constructing a conn pair and closing it, and mapping a
+	// protocol. None of these should touch the gauge.
+	_ = rt.SessionOptions()
+	rt.SetSessionOptions(rt.SessionOptions())
+	_ = mapProtocol(ProtoNoiseUDP)
+	c1, c2 := net.Pipe()
+	c1.Close()
+	c2.Close()
+
+	if got := atomic.LoadUint64(&meshInitiatorSessions) - beforeInit; got != 0 {
+		t.Errorf("NEGATIVE CONTROL FAILED: mesh_initiator_sessions moved by %d "+
+			"without any session being established. The counter is being "+
+			"incremented from somewhere other than SetupMeshSession, so it no "+
+			"longer measures mesh session establishment", got)
+	}
+	if got := atomic.LoadUint64(&meshResponderSessions) - beforeResp; got != 0 {
+		t.Errorf("NEGATIVE CONTROL FAILED: mesh_responder_sessions moved by %d "+
+			"without any session being established", got)
+	}
+}
