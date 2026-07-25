@@ -8,10 +8,24 @@ import (
 	"context"
 	"log"
 	"net"
+	"sync/atomic"
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/adapter"
 )
+
+// Mesh session-establishment counters, exposed as mesh_initiator_sessions /
+// mesh_responder_sessions. They exist to make the resumption gap documented at
+// DialAndAcceptMesh a RUNTIME fact rather than a source reading: every initiator
+// session counted here was established by wrapping an already-dialled net.Conn,
+// which is precisely the path that cannot reach aether's tryResumeDial.
+//
+// ⚠ Deliberately NOT a mesh_resume_attempted counter. Nothing on this path can
+// increment one, so it would read 0 by construction — a tautology that looks
+// like evidence. These two count something that can come out either way, and
+// the bypass is established by the capability census in runtime.go plus the
+// fact that SetupMeshSession below has no resume call in it at all.
+var meshInitiatorSessions, meshResponderSessions uint64
 
 // SetSessionOptions overrides the Aether SessionOptions used by every
 // subsequent call to SetupMeshSession. Call before the first peer session
@@ -46,6 +60,15 @@ func (rt *Runtime) SetupMeshSession(ctx context.Context, conn net.Conn, nodeID s
 		rt.identity.NodeID, aether.NodeID(nodeID), rt.sessionOpts)
 	if err != nil {
 		return nil, err
+	}
+
+	// Count AFTER the adapter succeeds, so the gauge measures sessions actually
+	// established rather than attempts — a failed setup returns above and must
+	// not inflate the denominator the resumption reading depends on.
+	if isInitiator {
+		atomic.AddUint64(&meshInitiatorSessions, 1)
+	} else {
+		atomic.AddUint64(&meshResponderSessions, 1)
 	}
 
 	dbgNodeIdentity.Printf("Aether session: local=%s remote=%s proto=%s initiator=%v",
@@ -116,11 +139,28 @@ func (rt *Runtime) DialAndAcceptMesh(ctx context.Context, conn net.Conn,
 		return
 	}
 
-	// TODO: wire session resumption end-to-end. The ticket infrastructure
-	// (TicketCapable interface, TicketStore, IssueTicket/ResumeSession in
-	// noise/) already exists, but full wiring needs unification of
-	// AetherSession and aether.Session, FilePeerStore ticket storage, and
-	// reconnect-path ticket passing before it can be enabled.
+	// ⚠ MESH RECONNECTS NEVER ATTEMPT SESSION RESUMPTION, and the reason is
+	// structural rather than missing code. aether's 0.5-RTT resume path is built
+	// and tested — initiatorTicketCache + tryResumeDial + handleResumePacket in
+	// aether/noise/session_resume.go — but its ONLY production entry point is
+	// NoiseTransport.Dial (transport.go:462). Every mesh dial site
+	// (peer_connections.go, multipath_dial.go, holepunch.go, upgrade_walker.go)
+	// dials its own socket and hands the finished net.Conn to DialAndAcceptMesh,
+	// so it enters at SetupMeshSession — BELOW the layer that would consult a
+	// ticket. The tenant path does not have this problem: TransportManager.Dial
+	// -> SharedTransport.Dial delegates to inner.Dial and does resume.
+	//
+	// ⇒ the fix is to route mesh reconnects through a resume-capable dial (or to
+	// lift a resume attempt to this layer), NOT to build ticket infrastructure.
+	//
+	// The prior comment here claimed wiring "needs unification of AetherSession
+	// and aether.Session" plus ticket storage and reconnect-path passing. That
+	// was stale in a way that deterred re-measurement: AetherSession exists
+	// nowhere in loom/ or aether/ except in that sentence, and reconnect-path
+	// ticket passing is already implemented in aether. A TODO that overstates
+	// its own blockers is worse than no TODO — it reads as a considered
+	// estimate. Measured via mesh_initiator_sessions and the TicketCapable
+	// census in runtime.go; see the acceptance note there.
 
 	if rt.connMgr != nil {
 		rt.connMgr.AcceptMeshConnection(ctx, AcceptMeshConnectionOpts{

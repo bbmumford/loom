@@ -1895,7 +1895,14 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	var preambleMalformed, targetUnknown, innerRelayMalformed,
 		opForwardNoSrc, opReplyStaleFlow, opUnknown uint64
 	var crossOrgMsg1Received uint64
-	// forwarderInstalled/Absent disambiguate a zero cross_org_msg1_received.
+	// forwarderAttached/Absent disambiguate a zero cross_org_msg1_received.
+	//
+	// Named "attached" (not "installed") per @P-239 to match the code's own
+	// vocabulary: the constructor is attachIntraOrgForwarder and it logs "VL1
+	// cross-org forwarder attached to %s transport", so one grep now finds the
+	// log line AND the metric. Renamed while the gauge is still unpublished —
+	// loom has no tag carrying it, so there is no consumer to break. Renaming a
+	// metric key AFTER it ships is a different and much worse operation.
 	// The msg1 counter lives INSIDE the forwarder, and the ingress hook returns
 	// early when a transport has none — so msg1==0 means either "no preamble ever
 	// arrived" (the delivery-gap reading) or "nothing was listening for one".
@@ -1904,7 +1911,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	// unconditionally after every transport build (default/shared/tenant), so
 	// forwarder_absent SHOULD be 0 — but that is a source reading, and this makes
 	// it a runtime fact.
-	var forwarderInstalled, forwarderAbsent uint64
+	var forwarderAttached, forwarderAbsent uint64
 	for _, tr := range rt.listenTransports {
 		var nt *noise.NoiseTransport
 		switch v := tr.(type) {
@@ -1921,7 +1928,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 			forwarderAbsent++
 			continue
 		}
-		forwarderInstalled++
+		forwarderAttached++
 		a, b, c, d, e, f := fwd.Drops()
 		preambleMalformed += a
 		targetUnknown += b
@@ -1933,7 +1940,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	}
 	// Read these BEFORE interpreting cross_org_msg1_received: if
 	// forwarder_absent > 0, a zero msg1 count proves nothing about delivery.
-	m["forwarder_installed"] = forwarderInstalled
+	m["forwarder_attached"] = forwarderAttached
 	m["forwarder_absent"] = forwarderAbsent
 	m["forwarder_drops_preamble_malformed"] = preambleMalformed
 	m["forwarder_drops_target_unknown"] = targetUnknown
@@ -1961,6 +1968,45 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	// Neither is a Fly problem, and both are fixable in code — so
 	// counter==0 alone does NOT license an infrastructure conclusion.
 	m["cross_org_msg1_received"] = crossOrgMsg1Received
+
+	// ── Mesh session resumption: capability census + establishment volume ──
+	//
+	// Together with mesh_initiator_sessions these turn the resumption gap
+	// described at DialAndAcceptMesh into a runtime reading. Interpret as:
+	//
+	//   mesh_initiator_sessions climbing  AND  mesh_resume_capable_transports > 0
+	//     ⇒ we hold resume-capable transports and keep establishing initiator
+	//       mesh sessions that bypass their resume path. Tickets are minted
+	//       during the handshake (aether/noise/handshake.go IssueTicket) and no
+	//       mesh peer can ever redeem one: pure cost, previously uncounted.
+	//
+	//   mesh_resume_capable_transports == 0
+	//     ⇒ the gap is structural for every configured protocol, and the
+	//       "wasted ticket minting" reading above does NOT hold. This is the
+	//       outcome that would refute it, which is why the census is here
+	//       rather than assumed.
+	//
+	// ⚠ The assertion is deliberately made on the transport INTERFACE VALUE, not
+	// on the unwrapped *noise.NoiseTransport. NoiseTransport satisfies
+	// TicketCapable statically, so unwrapping first would make this a
+	// compile-time tautology that always reports "capable". Asserting on tr
+	// measures what a caller holding the transport can actually reach — and
+	// *manager.SharedTransport does NOT satisfy TicketCapable (it forwards
+	// Dial/Listen/Close but not IssueTicket/ResumeSession), so a shared-transport
+	// tenant reports INCAPABLE here even though its Dial resumes internally.
+	// That divergence is the finding, and it is invisible if you unwrap.
+	var resumeCapable, resumeIncapable uint64
+	for _, tr := range rt.listenTransports {
+		if _, ok := tr.(aether.TicketCapable); ok {
+			resumeCapable++
+			continue
+		}
+		resumeIncapable++
+	}
+	m["mesh_resume_capable_transports"] = resumeCapable
+	m["mesh_resume_incapable_transports"] = resumeIncapable
+	m["mesh_initiator_sessions"] = atomic.LoadUint64(&meshInitiatorSessions)
+	m["mesh_responder_sessions"] = atomic.LoadUint64(&meshResponderSessions)
 
 	// Send-side cross-org noise-UDP forwarder dial telemetry. Pairs with
 	// the receive-side forwarder_drops_* counters above to triangulate
