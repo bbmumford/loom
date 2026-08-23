@@ -94,6 +94,22 @@ func (g Grade) BetterThan(other Grade) bool { return g > other }
 func (g Grade) AtLeast(minimum Grade) bool  { return g >= minimum }
 func (g Grade) IsConnected() bool           { return g > GradeF }
 
+// CanCoexistWith reports whether two sessions of these grades may be held to
+// the same peer at once: they may exactly when their grades DIFFER, because a
+// lower-grade session is useful only as a dormant fallback for a different
+// transport class.
+//
+// 🛑 REGISTRATION DOES NOT CONSULT THIS (#R-1576 ②). registerMeshSession's
+// lower-grade arm sits inside `newGrade < oldGrade`, which already implies the
+// grades differ — so calling this there was a tautology and the rejection it
+// guarded could never fire. That arm and its comment are gone; a strictly
+// lower grade is now unconditionally accepted as a dormant fallback.
+//
+// It is retained because it is EXPORTED on a published module
+// (github.com/bbmumford/loom, tags v0.0.1-v0.0.3) with consumers pinned across
+// the estate: a workspace census bounds in-tree callers only and says nothing
+// about off-wire ones, and the module proxy caches by content permanently.
+// Deleting it would be a breaking change to an already-shipped API.
 func (g Grade) CanCoexistWith(other Grade) bool { return g != other }
 
 func (g Grade) UpgradeTarget() Grade {
@@ -140,7 +156,7 @@ func MaxSupportedGrade(natType aether.NATType) Grade {
 type OperationClass int
 
 const (
-	OpClassBulk     OperationClass = iota
+	OpClassBulk OperationClass = iota
 	OpClassStandard
 	OpClassRealtime
 	OpClassCritical
