@@ -298,8 +298,30 @@ func (e *Executor) executeAssignment(ctx context.Context, assignment meshtask.As
 		return
 	}
 
-	// Create execution context with timeout
-	execCtx, cancel := context.WithTimeout(ctx, assignment.LeaseDuration)
+	// Re-authorize the product-owned principal retained against this exact
+	// task pointer. This is deliberately not derivable from Task.ID,
+	// Task.TenantID, tags or payload. The product principal repopulates its
+	// private identity context and may reject current revocation/policy.
+	execBase, expectedOwner, releaseAuthority, authorityErr := e.gateway.AuthorizeAssignment(ctx, assignment.Task)
+	if releaseAuthority != nil {
+		defer releaseAuthority()
+	}
+	if authorityErr == nil {
+		reader, ok := e.auth.(ports.ExecutionPrincipalReader)
+		if !ok {
+			authorityErr = fmt.Errorf("auth validator cannot read an execution principal")
+		} else {
+			principal, established := reader.ExecutionPrincipal(execBase)
+			if !established || principal == nil || !principal.OwnerKey().Valid() {
+				authorityErr = fmt.Errorf("authorized context has no execution principal")
+			} else if principal.OwnerKey() != expectedOwner {
+				authorityErr = fmt.Errorf("authorized context owner does not match gateway admission")
+			}
+		}
+	}
+
+	// Create execution context with timeout.
+	execCtx, cancel := context.WithTimeout(execBase, assignment.LeaseDuration)
 	defer cancel()
 
 	// Track execution. MESH-H01: capture startedAt in a local so the Stats
@@ -323,8 +345,17 @@ func (e *Executor) executeAssignment(ctx context.Context, assignment meshtask.As
 		e.mu.Unlock()
 	}()
 
-	// Execute the task
-	result := e.executeTask(execCtx, assignment.Task, assignment.Fence)
+	// Execute the task only after exact-pointer authority revalidation.
+	var result meshtask.Result
+	if authorityErr != nil {
+		result = e.rejectedTaskResult(
+			assignment.TaskID,
+			assignment.Fence,
+			"task authority rejected: "+authorityErr.Error(),
+		)
+	} else {
+		result = e.executeTask(execCtx, assignment.Task, assignment.Fence)
+	}
 
 	// Send result to gateway
 	report := meshtask.ResultReport{
@@ -351,42 +382,27 @@ func (e *Executor) executeTask(ctx context.Context, task *meshtask.Task, fence s
 	// Get handler name
 	handlerName := e.getHandlerName(task)
 
-	// Get handler from registry
-	meta, ok := e.registry.GetMeta(handlerName)
+	// Require the opaque product principal established by the gateway's
+	// execution-time authorization. Task fields are mutable body claims and
+	// never mint or select this owner.
+	ownerReader, ok := e.auth.(ports.ExecutionPrincipalReader)
 	if !ok {
-		return meshtask.Result{
-			TaskID: task.ID,
-			NodeID: e.nodeID,
-			Fence:  fence,
-			Status: meshtask.ResultStatusError,
-			Error:  fmt.Sprintf("handler not found: %s", handlerName),
-			At:     time.Now(),
-		}
+		return e.rejectedTaskResult(task.ID, fence,
+			"task owner rejected: auth validator cannot read an execution principal")
+	}
+	principal, ok := ownerReader.ExecutionPrincipal(ctx)
+	if !ok || principal == nil || !principal.OwnerKey().Valid() {
+		return e.rejectedTaskResult(task.ID, fence,
+			"task owner rejected: established execution principal is missing")
 	}
 
-	// Type-assert to TaskHandler
-	taskHandler, ok := meta.(handlers.TaskHandler)
-	if !ok {
-		return meshtask.Result{
-			TaskID: task.ID,
-			NodeID: e.nodeID,
-			Fence:  fence,
-			Status: meshtask.ResultStatusError,
-			Error:  fmt.Sprintf("handler %s does not support task execution", handlerName),
-			At:     time.Now(),
-		}
-	}
-
-	// ✅ SECURITY ENFORCEMENT: Validate handler auth requirements
-	if err := e.auth.ValidateExecutionAuth(ctx, meta); err != nil {
-		log.Printf("[TaskExecutor] Auth failed for %s (task_id=%s): %v", handlerName, task.ID, err)
-		return meshtask.Result{
-			TaskID: task.ID,
-			NodeID: e.nodeID,
-			Fence:  fence,
-			Status: meshtask.ResultStatusError,
-			Error:  fmt.Sprintf("authorization failed: %v", err),
-			At:     time.Now(),
+	metadata := map[string]interface{}{}
+	sessionID := ""
+	if tenantReader, ok := e.auth.(ports.TenantPrincipalReader); ok {
+		if platformTenant, established := tenantReader.ExecutionTenantID(ctx); established &&
+			platformTenant != "" {
+			metadata["tenant_id"] = platformTenant
+			sessionID = platformTenant
 		}
 	}
 
@@ -398,15 +414,15 @@ func (e *Executor) executeTask(ctx context.Context, task *meshtask.Task, fence s
 		Priority:    int(task.SLO.Priority),
 		Deadline:    time.Now().Add(task.SLO.Latency),
 		Idempotency: task.Idempotency,
-		Metadata:    make(map[string]interface{}),
+		Metadata:    metadata,
 		CreatedAt:   task.CreatedAt,
-		SessionID:   task.TenantID, // Use TenantID as session context
-		TraceID:     task.ID,       // Use task ID for tracing
+		SessionID:   sessionID,
+		TraceID:     task.ID, // Use task ID for tracing
 	}
 
-	// Execute handler via Task execution path (NOT RPC!)
+	// Execute via the same auth + tenant + middleware lifecycle as compose.
 	dbgTaskExec.Printf("Executing handler: %s for task %s", handlerName, task.ID)
-	taskResult, err := taskHandler.ExecuteTask(ctx, nodeTask)
+	taskResult, err := e.registry.DispatchTaskWithAuth(ctx, nodeTask, e.auth)
 
 	if err != nil {
 		return meshtask.Result{
@@ -415,6 +431,16 @@ func (e *Executor) executeTask(ctx context.Context, task *meshtask.Task, fence s
 			Fence:  fence,
 			Status: meshtask.ResultStatusError,
 			Error:  err.Error(),
+			At:     time.Now(),
+		}
+	}
+	if taskResult == nil {
+		return meshtask.Result{
+			TaskID: task.ID,
+			NodeID: e.nodeID,
+			Fence:  fence,
+			Status: meshtask.ResultStatusError,
+			Error:  "task handler returned nil result",
 			At:     time.Now(),
 		}
 	}
@@ -439,6 +465,17 @@ func (e *Executor) executeTask(ctx context.Context, task *meshtask.Task, fence s
 		Status: status,
 		Output: taskResult.Payload,
 		Error:  taskResult.Error,
+		At:     time.Now(),
+	}
+}
+
+func (e *Executor) rejectedTaskResult(taskID, fence, reason string) meshtask.Result {
+	return meshtask.Result{
+		TaskID: taskID,
+		NodeID: e.nodeID,
+		Fence:  fence,
+		Status: meshtask.ResultStatusRejected,
+		Error:  reason,
 		At:     time.Now(),
 	}
 }

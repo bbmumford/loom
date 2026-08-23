@@ -131,24 +131,31 @@ func NewTaskQueue(policy QueuePolicy) *TaskQueue {
 	return &TaskQueue{policy: policy, pq: make(priorityQueue, 0), maxDepth: DefaultMaxQueueDepth}
 }
 
-// Enqueue inserts a task and returns its computed score. MESH-H05: when the
-// queue is at capacity the task is rejected (dropped) rather than growing the
-// heap unbounded — losing a task under sustained overload is preferable to OOM.
-func (q *TaskQueue) Enqueue(task *task.Task) float64 {
+// Enqueue inserts a task and reports both its score and whether the queue
+// accepted it. Callers must not infer acceptance from the score.
+func (q *TaskQueue) Enqueue(task *task.Task) (score float64, accepted bool) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	score := q.policy.score(task)
+	score = q.policy.score(task)
 	max := q.maxDepth
 	if max <= 0 {
 		max = DefaultMaxQueueDepth
 	}
 	if q.pq.Len() >= max {
 		q.dropped++
-		return score // rejected — queue full
+		return score, false
 	}
 	item := &queueItem{task: task, score: score, enqueued: time.Now()}
 	heap.Push(&q.pq, item)
-	return score
+	return score, true
+}
+
+// SetMaxDepth changes the admission bound. It is intended for construction
+// time; reducing it never evicts already admitted tasks.
+func (q *TaskQueue) SetMaxDepth(maxDepth int) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.maxDepth = maxDepth
 }
 
 // Dropped returns the number of tasks rejected because the queue was full.

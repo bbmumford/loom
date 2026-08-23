@@ -66,10 +66,19 @@ func TestBindGatewayTransport(t *testing.T) {
 	// Deliver a successful result back to the gateway.
 	transport.results <- task.ResultReport{Result: task.Result{TaskID: testTask.ID, NodeID: assignment.Primary, Fence: assignment.Fence, Status: task.ResultStatusOK}}
 
-	// Allow processing loop to mark completion.
-	time.Sleep(50 * time.Millisecond)
-	if testTask.Status != task.TaskStatusCompleted {
-		t.Fatalf("task status not updated, got %s", testTask.Status)
+	// Observe completion through the gateway, NOT by reading testTask
+	// directly. The result loop writes Status on its own goroutine under the
+	// gateway's lock; a bare read here is a data race (measured: caught by
+	// -race 1 run in 10), and sleeping does not create a happens-before edge.
+	var status task.TaskStatus
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		if status = gw.StatusOf(testTask); status == task.TaskStatusCompleted {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	if status != task.TaskStatusCompleted {
+		t.Fatalf("task status not updated, got %s", status)
 	}
 
 	// Shutdown binding and check transport closed.
