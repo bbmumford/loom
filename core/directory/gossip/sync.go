@@ -515,11 +515,15 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 		onExchange(res)
 	}
 
-	// Adaptive gossip interval: backs off when idle (60s), accelerates during
-	// convergence (2s), returns to base when stable. Reduces gossip bandwidth
-	// by ~80% in steady state (60s vs 10s = 6× fewer exchanges).
-	adaptive := NewAdaptiveInterval(interval, 2*time.Second, 60*time.Second)
-	timer := time.NewTimer(interval)
+	// Adaptive gossip interval: backs off when idle, accelerates during
+	// convergence, returns to base when stable. Reduces gossip bandwidth in steady
+	// state (fewer exchanges when nothing is changing). The bounds come from a
+	// cadence source the host wires via SetGossipCadence (link type / loss /
+	// battery aware); with none wired they fall back to interval + built-in floor
+	// and ceiling, preserving the previous fixed behaviour.
+	cadBase, cadMin, cadMax := gossipCadenceBounds(interval, 2*time.Second, 60*time.Second)
+	adaptive := NewAdaptiveInterval(cadBase, cadMin, cadMax)
+	timer := time.NewTimer(cadBase)
 	defer timer.Stop()
 
 	// NOTE: Gossip-level keepalive pings removed. They wrote zero-length frames to

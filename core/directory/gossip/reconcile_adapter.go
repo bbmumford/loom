@@ -9,10 +9,10 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/bbmumford/whisper"
-	"github.com/bbmumford/whisper/iblt"
 	lad "github.com/bbmumford/ledger"
 	"github.com/bbmumford/ledger/cache"
+	"github.com/bbmumford/whisper"
+	"github.com/bbmumford/whisper/iblt"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -24,9 +24,9 @@ import (
 // Wire formats (per body, after the engine's [magic][length][flags]
 // envelope):
 //
-//   Table:   [k uint32][seed uint64][cell_count uint32][cells...]
-//   Reply:   [count uint32][len uint32][record_bytes]...
-//   Request: [count uint32][16-byte content_hash]...
+//	Table:   [k uint32][seed uint64][cell_count uint32][cells...]
+//	Reply:   [count uint32][len uint32][record_bytes]...
+//	Request: [count uint32][16-byte content_hash]...
 //
 // Each cell encodes as [16-byte key XOR][8-byte key-hash XOR][4-byte count].
 type ladReconcileCodec struct{}
@@ -183,9 +183,9 @@ func (c *ladReconcileCodec) DecodeRequest(body []byte) ([]iblt.Key, error) {
 // the cache's internal map; Apply hands records to the cache's
 // existing record-apply path.
 type ladReconcileStore struct {
-	cache       *cache.DirectoryCache
-	encodeRec   func(lad.Record) ([]byte, error)
-	decodeRec   func([]byte) (lad.Record, error)
+	cache     *cache.DirectoryCache
+	encodeRec func(lad.Record) ([]byte, error)
+	decodeRec func([]byte) (lad.Record, error)
 }
 
 // NewLADReconcileStore returns a ReconcileStore backed by the

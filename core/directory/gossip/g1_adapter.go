@@ -9,9 +9,9 @@ import (
 
 	lad "github.com/bbmumford/ledger"
 	"github.com/bbmumford/ledger/cache"
+	gossippb "github.com/bbmumford/loom/core/directory/gossip/pb"
 	"github.com/bbmumford/whisper"
 	"google.golang.org/protobuf/proto"
-	gossippb "github.com/bbmumford/loom/core/directory/gossip/pb"
 )
 
 // ladStateStore adapts a DirectoryCache to whisper.StateStore so the

@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bbmumford/ledger/cache"
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/adapter"
+	"github.com/bbmumford/ledger/cache"
 )
 
 // RunGossipLoop runs gossip exchanges natively over an Aether stream.
