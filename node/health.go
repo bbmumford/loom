@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hashicorp/go-multierror"
 	lad "github.com/bbmumford/ledger"
 	"github.com/bbmumford/loom/pkg/obshealth"
+	"github.com/hashicorp/go-multierror"
 )
 
 // HealthCheckDeps holds dependencies needed for health checks
@@ -43,6 +43,7 @@ type HealthCheck struct {
 	deps       HealthCheckDeps
 	interval   time.Duration
 	stopChan   chan struct{}
+	stopOnce   sync.Once // Stop is exported; a second close would panic
 	mu         sync.Mutex
 	lastResult error
 }
@@ -75,9 +76,15 @@ func (h *HealthCheck) Start() {
 	log.Printf("[HEALTH] Health check started (interval: %v)", h.interval)
 }
 
-// Stop terminates health checks
+// Stop terminates health checks. Idempotent.
+//
+// 🔴 The sync.Once is load-bearing — a bare close(h.stopChan) panics with
+// "close of closed channel" on a second call. See the note on
+// SelfHealthMonitor.Stop; this type names its field stopChan, not stopCh.
 func (h *HealthCheck) Stop() {
-	close(h.stopChan)
+	h.stopOnce.Do(func() {
+		close(h.stopChan)
+	})
 }
 
 // LastResult returns the result of the most recent health check

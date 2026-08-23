@@ -126,7 +126,7 @@ func (ds *DiskStore) Put(hash Hash, data []byte) error {
 		return fmt.Errorf("storage: ensure shard dir: %w", err)
 	}
 
-	// MESH-H02: write to a temp file in the same directory, fsync, then
+	// Write to a temp file in the same directory, fsync, then
 	// atomically rename into the content-addressed path. Writing directly to
 	// `path` (O_CREATE|O_EXCL) left a TRUNCATED file there on a crash between
 	// create and Sync; the dedupe Stat above then never rewrote it and Get

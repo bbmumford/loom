@@ -196,9 +196,9 @@ type stubEvaluator struct {
 	lastEval time.Time
 }
 
-func (s *stubEvaluator) ServiceHealth(string) *ServiceHealthReport      { return nil }
-func (s *stubEvaluator) AllServiceHealth() []*ServiceHealthReport       { return nil }
-func (s *stubEvaluator) MeshStatus(string) string                       { return "unreachable" }
-func (s *stubEvaluator) LastEvaluation() time.Time                      { return s.lastEval }
-func (s *stubEvaluator) Start()                                         {}
-func (s *stubEvaluator) Stop()                                          {}
+func (s *stubEvaluator) ServiceHealth(string) *ServiceHealthReport { return nil }
+func (s *stubEvaluator) AllServiceHealth() []*ServiceHealthReport  { return nil }
+func (s *stubEvaluator) MeshStatus(string) string                  { return "unreachable" }
+func (s *stubEvaluator) LastEvaluation() time.Time                 { return s.lastEval }
+func (s *stubEvaluator) Start()                                    {}
+func (s *stubEvaluator) Stop()                                     {}

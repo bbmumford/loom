@@ -20,11 +20,11 @@ import (
 // ObservabilityHealth tracks the health of the observability system itself.
 // Returned by SelfHealthMonitor.Check() and included in topology API responses.
 type ObservabilityHealth struct {
-	LastEvaluation    time.Time     `json:"lastEvaluation"`
-	LastConnectionScan time.Time    `json:"lastConnectionScan"`
-	EvaluationLag     int64 `json:"evaluationLagMs"`
-	ConnectionScanLag int64 `json:"connectionScanLagMs"`
-	Status            string        `json:"status"` // "healthy", "lagging", "stalled"
+	LastEvaluation     time.Time `json:"lastEvaluation"`
+	LastConnectionScan time.Time `json:"lastConnectionScan"`
+	EvaluationLag      int64     `json:"evaluationLagMs"`
+	ConnectionScanLag  int64     `json:"connectionScanLagMs"`
+	Status             string    `json:"status"` // "healthy", "lagging", "stalled"
 }
 
 // ---------------------------------------------------------------------------
@@ -63,14 +63,15 @@ func DefaultSelfHealthMonitorConfig() SelfHealthMonitorConfig {
 // ConnectionReporter are running and not stalled. If either component falls
 // behind its expected interval, the monitor reports a degraded status.
 type SelfHealthMonitor struct {
-	mu               sync.RWMutex
-	evaluator        HealthEvaluator
-	reporter         ConnectionReporter
-	evalInterval     time.Duration // the evaluator's configured eval interval
-	cfg              SelfHealthMonitorConfig
-	lastConnScan     time.Time // when we last successfully read from reporter
-	stopCh           chan struct{}
-	wg               sync.WaitGroup
+	mu           sync.RWMutex
+	evaluator    HealthEvaluator
+	reporter     ConnectionReporter
+	evalInterval time.Duration // the evaluator's configured eval interval
+	cfg          SelfHealthMonitorConfig
+	lastConnScan time.Time // when we last successfully read from reporter
+	stopCh       chan struct{}
+	stopOnce     sync.Once // Stop is exported; a second close would panic
+	wg           sync.WaitGroup
 	// registry is the optional platform-wide subsystem health sink. When
 	// non-nil, the monitor reflects "lagging"/"stalled" states into
 	// SubsystemHealthEvaluator and SubsystemConnectionReporter — so
@@ -197,10 +198,19 @@ func (m *SelfHealthMonitor) reflectToRegistry(h ObservabilityHealth) {
 	}
 }
 
-// Stop halts the self-health monitoring loop.
+// Stop halts the self-health monitoring loop. Idempotent.
+//
+// 🔴 THE sync.Once IS LOAD-BEARING. A bare close(m.stopCh) panics with "close
+// of closed channel" on a second call. Runtime calls Stop only from shutdown
+// (runtime.go:1426), but Stop is exported, so "no current caller does it twice"
+// is a property of today's callers rather than of the method.
+//
+// SessionHealthMonitor.Stop and LADSnapshotCache.Stop guard the same way.
 func (m *SelfHealthMonitor) Stop() {
-	close(m.stopCh)
-	m.wg.Wait()
+	m.stopOnce.Do(func() {
+		close(m.stopCh)
+		m.wg.Wait()
+	})
 }
 
 // Check returns the current health of the observability system.

@@ -27,7 +27,7 @@ type sessionEntry struct {
 type SessionHealthMonitor struct {
 	config   relay.HealthConfig
 	sessions map[aether.NodeID]*list.Element // Map to LRU list element
-	lruList  *list.List                         // LRU ordering (front = most recent)
+	lruList  *list.List                      // LRU ordering (front = most recent)
 	mu       sync.RWMutex
 
 	// Callbacks
@@ -36,6 +36,7 @@ type SessionHealthMonitor struct {
 	// Lifecycle
 	stopChan chan struct{}
 	wg       sync.WaitGroup
+	stopOnce sync.Once // Stop closes stopChan; a second bare close() panics
 }
 
 // NewSessionHealthMonitor creates a new session health monitor with the given config.
@@ -113,24 +114,74 @@ func (m *SessionHealthMonitor) Unregister(nodeID aether.NodeID) {
 	}
 }
 
+// evictionCandidateLocked picks which session to drop at capacity. Must hold mu.
+//
+// Eviction is decided by the session's own LastActivity(), not by
+// entry.lastUsed. There were two definitions of "recently active" in this one
+// monitor — entry.lastUsed for eviction and LastActivity() for health — and
+// lastUsed was written three times and read once, in a debug log, because Touch
+// has no callers, so an "LRU" list built from it is really registration order.
+//
+// 🔴 THE DISCRIMINATOR IS THE LOAD-BEARING PART. A BaseConnection over a raw
+// net.Conn returns a ZERO LastActivity, which means "CANNOT SAY", not "idle
+// since 1970". Sorting naively by LastActivity would therefore evict every
+// WebSocket/gRPC relay session FIRST — precisely the fallback transports
+// the health guard exists to protect, and precisely the churn it was
+// written to stop. checkSession already makes this distinction 120 lines below
+// (`!hr.LastActivity().IsZero()`); the eviction path never got it.
+//
+// So: evict the oldest session that CAN report activity. Only if no session can
+// report at all do we fall back to registration order (the list back) among the
+// cannot-say set.
+func (m *SessionHealthMonitor) evictionCandidateLocked() *list.Element {
+	var oldest *list.Element
+	var oldestAt time.Time
+
+	for elem := m.lruList.Back(); elem != nil; elem = elem.Prev() {
+		hr, ok := elem.Value.(*sessionEntry).session.(aether.HealthReporter)
+		if !ok {
+			continue // cannot report — not a candidate while anything else can
+		}
+		at := hr.LastActivity()
+		if at.IsZero() {
+			continue // "cannot say", not "stale"
+		}
+		if oldest == nil || at.Before(oldestAt) {
+			oldest, oldestAt = elem, at
+		}
+	}
+	if oldest != nil {
+		return oldest
+	}
+	// Nothing could report activity: every session is "cannot say", so fall back
+	// to registration order among them — the back of the list, as before.
+	return m.lruList.Back()
+}
+
 // evictLRULocked evicts the least recently used session. Must hold mu.
 func (m *SessionHealthMonitor) evictLRULocked() {
-	back := m.lruList.Back()
-	if back == nil {
+	victim := m.evictionCandidateLocked()
+	if victim == nil {
 		return
 	}
 
-	entry := back.Value.(*sessionEntry)
+	entry := victim.Value.(*sessionEntry)
 	nodeID := entry.nodeID
 	session := entry.session
 
 	// Remove from LRU and map
-	m.lruList.Remove(back)
+	m.lruList.Remove(victim)
 	delete(m.sessions, nodeID)
 
-	dbgSessionHealth.Printf("LRU evicting session for node %s (idle: %v)", nodeID, time.Since(entry.lastUsed))
+	idle := "unknown (session cannot report activity)"
+	if hr, ok := session.(aether.HealthReporter); ok {
+		if at := hr.LastActivity(); !at.IsZero() {
+			idle = time.Since(at).String()
+		}
+	}
+	dbgSessionHealth.Printf("LRU evicting session for node %s (idle: %s)", nodeID, idle)
 
-	// MESH-C08: snapshot onEvict under m.mu (held by this Locked caller) before
+	// Snapshot onEvict under m.mu (held by this Locked caller) before
 	// launching the goroutine. Reading m.onEvict inside the goroutine raced
 	// SetEvictCallback's write; evictSession already snapshots it under the lock.
 	onEvict := m.onEvict
@@ -153,11 +204,19 @@ func (m *SessionHealthMonitor) Start() {
 		m.config.PingInterval, m.config.IdleTimeout, m.config.MaxMissedPings)
 }
 
-// Stop terminates the health monitor.
+// Stop terminates the health monitor. Idempotent.
+//
+// The sync.Once is load-bearing: the previous bare `close(m.stopChan)` panicked
+// with "close of closed channel" on a second call (measured with a
+// probe). Runtime only calls Stop inside shutdownOnce-guarded Shutdown, so it
+// was not reachable there — but Stop is exported on a published module, and the
+// sibling LADSnapshotCache.Stop 200 lines away already guarded itself this way.
 func (m *SessionHealthMonitor) Stop() {
-	close(m.stopChan)
-	m.wg.Wait()
-	log.Printf("[SESSION_HEALTH] Monitor stopped")
+	m.stopOnce.Do(func() {
+		close(m.stopChan)
+		m.wg.Wait()
+		log.Printf("[SESSION_HEALTH] Monitor stopped")
+	})
 }
 
 // ActiveCount returns the number of active sessions.
@@ -227,14 +286,14 @@ func (m *SessionHealthMonitor) checkSession(session aether.Connection) string {
 	if hr.IsClosed() {
 		return "session closed"
 	}
-	// MESH-G01: IsAlive() returns false in TWO cases: (a) the session genuinely
+	// IsAlive() returns false in TWO cases: (a) the session genuinely
 	// idle-timed out, and (b) the underlying transport can't report health at
 	// all. A WebSocket/gRPC relay session is an aether.BaseConnection wrapping a
 	// raw net.Conn; BaseConnection.IsAlive returns false and LastActivity returns
-	// the zero time whenever the inner conn is not itself a HealthReporter. So
-	// the old unconditional check evicted EVERY healthy WS/gRPC relay session on
-	// each PingInterval — pure reconnect churn on exactly the fallback
-	// transports. Only trust IsAlive==false as an idle timeout when the session
+	// the zero time whenever the inner conn is not itself a HealthReporter. An
+	// unconditional check therefore evicts EVERY healthy WS/gRPC relay session
+	// on each PingInterval, which is pure reconnect churn on exactly the
+	// fallback transports. Only trust IsAlive==false as an idle timeout when the session
 	// actually tracks activity (non-zero LastActivity); otherwise fall through to
 	// the ping-based liveness below, matching the non-HealthReporter skip above.
 	if !hr.LastActivity().IsZero() && !hr.IsAlive(m.config.IdleTimeout) {

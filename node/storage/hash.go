@@ -59,7 +59,7 @@ func (h Hash) Hex() string {
 
 // Equal reports whether two hashes are identical.
 func (h Hash) Equal(other Hash) bool {
-	// MESH-H10: removed a dead `if &h == &other` branch — it compared the
+	// Removed a dead `if &h == &other` branch — it compared the
 	// addresses of two by-value parameter copies, which are always distinct, so
 	// it was always false and misleading. Hash is a comparable array; == is the
 	// correct check.
