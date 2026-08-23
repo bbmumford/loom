@@ -9,6 +9,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestEnforceScope_None(t *testing.T) {
@@ -80,13 +83,17 @@ func TestEnforceScope_Platform(t *testing.T) {
 	}
 
 	// Caller with non-platform tenant — denied
-	ctx := WithRPCContext(context.Background(), map[string]string{"tenantId": "stranger"})
+	ctx := WithAuthenticatedScopeIdentity(context.Background(), AuthenticatedScopeIdentity{
+		PlatformTenantID: "stranger",
+	})
 	if err := EnforceScope(ctx, h, platforms); !errors.Is(err, ErrScopeDenied) {
 		t.Errorf("expected ErrScopeDenied for stranger tenant, got %v", err)
 	}
 
 	// Caller with platform tenant — pass
-	ctx = WithRPCContext(context.Background(), map[string]string{"tenantId": "orbtr"})
+	ctx = WithAuthenticatedScopeIdentity(context.Background(), AuthenticatedScopeIdentity{
+		PlatformTenantID: "orbtr",
+	})
 	if err := EnforceScope(ctx, h, platforms); err != nil {
 		t.Errorf("expected pass for platform tenant, got %v", err)
 	}
@@ -97,7 +104,9 @@ func TestEnforceScope_Tenant(t *testing.T) {
 	if err := EnforceScope(context.Background(), h, nil); !errors.Is(err, ErrScopeDenied) {
 		t.Errorf("expected ErrScopeDenied for missing tenant, got %v", err)
 	}
-	ctx := WithRPCContext(context.Background(), map[string]string{"tenantId": "orbtr"})
+	ctx := WithAuthenticatedScopeIdentity(context.Background(), AuthenticatedScopeIdentity{
+		PlatformTenantID: "orbtr",
+	})
 	if err := EnforceScope(ctx, h, nil); err != nil {
 		t.Errorf("expected pass with tenant, got %v", err)
 	}
@@ -107,32 +116,56 @@ func TestEnforceScope_Org(t *testing.T) {
 	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopeOrg}
 
 	// Tenant only — denied for missing org
-	ctx := WithRPCContext(context.Background(), map[string]string{"tenantId": "orbtr"})
+	ctx := WithAuthenticatedScopeIdentity(context.Background(), AuthenticatedScopeIdentity{
+		PlatformTenantID: "orbtr",
+	})
 	if err := EnforceScope(ctx, h, nil); !errors.Is(err, ErrScopeDenied) {
 		t.Errorf("expected ErrScopeDenied for missing org, got %v", err)
 	}
 
 	// Tenant + org — pass
-	ctx = WithRPCContext(context.Background(), map[string]string{
-		"tenantId": "orbtr",
-		"orgId":    "acme",
+	ctx = WithAuthenticatedScopeIdentity(context.Background(), AuthenticatedScopeIdentity{
+		PlatformTenantID: "orbtr",
+		OrganizationID:   "acme",
 	})
 	if err := EnforceScope(ctx, h, nil); err != nil {
 		t.Errorf("expected pass with tenant+org, got %v", err)
+	}
+
+	// Mutable wire-map hints cannot manufacture either prerequisite.
+	ctx = WithRPCContext(context.Background(), map[string]string{
+		"tenantId": "orbtr",
+		"orgId":    "forged",
+	})
+	if err := EnforceScope(ctx, h, nil); !errors.Is(err, ErrScopeDenied) {
+		t.Errorf("expected ErrScopeDenied for wire-only tenant+org hints, got %v", err)
+	}
+
+	// A conflicting wire hint cannot replace an independently authenticated
+	// organisation. Presence enforcement consumes only the typed snapshot.
+	ctx = WithRPCContext(ctx, map[string]string{"orgId": "evil"})
+	ctx = WithAuthenticatedScopeIdentity(ctx, AuthenticatedScopeIdentity{
+		PlatformTenantID: "orbtr",
+		OrganizationID:   "acme",
+	})
+	if err := EnforceScope(ctx, h, nil); err != nil {
+		t.Errorf("authenticated organisation must survive conflicting wire hint: %v", err)
 	}
 }
 
 func TestEnforceScope_User(t *testing.T) {
 	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopeUser}
 
-	ctx := WithRPCContext(context.Background(), map[string]string{"tenantId": "orbtr"})
+	ctx := WithAuthenticatedScopeIdentity(context.Background(), AuthenticatedScopeIdentity{
+		PlatformTenantID: "orbtr",
+	})
 	if err := EnforceScope(ctx, h, nil); !errors.Is(err, ErrScopeDenied) {
 		t.Errorf("expected ErrScopeDenied for missing user, got %v", err)
 	}
 
-	ctx = WithRPCContext(context.Background(), map[string]string{
-		"tenantId": "orbtr",
-		"userId":   "u1",
+	ctx = WithAuthenticatedScopeIdentity(context.Background(), AuthenticatedScopeIdentity{
+		PlatformTenantID: "orbtr",
+		UserID:           "u1",
 	})
 	if err := EnforceScope(ctx, h, nil); err != nil {
 		t.Errorf("expected pass with tenant+user, got %v", err)
@@ -169,6 +202,56 @@ func TestPlatformTenants_NilSafe(t *testing.T) {
 	}
 }
 
+func TestRegistryDispatch_UsesOnlyAuthenticatedScopeIdentity(t *testing.T) {
+	var calls int
+	h := Handler{
+		Namespace: "test",
+		Domain:    "scope",
+		Operation: "OrgRead",
+		Scope:     ScopeOrg,
+		Request:   (*structpb.Struct)(nil),
+		Response:  (*structpb.Struct)(nil),
+		Func: func(_ context.Context, req proto.Message) (proto.Message, error) {
+			calls++
+			return req, nil
+		},
+	}
+	registry := NewRegistry()
+	if err := registry.Register(h); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+
+	hints := map[string]string{
+		"tenantId":  "orbtr",
+		"tenant_id": "evil",
+		"orgId":     "forged",
+		"org_id":    "also-forged",
+		"userId":    "forged-user",
+	}
+	hintOnly := WithRPCContext(context.Background(), hints)
+	hints["orgId"] = "mutated-after-context"
+	if _, err := registry.Dispatch(hintOnly, h.FQN(), nil); !errors.Is(err, ErrScopeDenied) {
+		t.Fatalf("map-only identity must deny with ErrScopeDenied, got %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("handler ran on map-only identity: calls=%d", calls)
+	}
+
+	exact := WithAuthenticatedScopeIdentity(hintOnly, AuthenticatedScopeIdentity{
+		PlatformTenantID: "orbtr",
+		OrganizationID:   "org-1",
+		UserID:           "user-1",
+	})
+	hints["tenantId"] = "mutated-too"
+	hints["orgId"] = "conflicting"
+	if _, err := registry.Dispatch(exact, h.FQN(), nil); err != nil {
+		t.Fatalf("exact authenticated axes must pass despite mutable hints: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("handler calls=%d, want 1", calls)
+	}
+}
+
 func TestExtractRole(t *testing.T) {
 	cases := []struct{ in, out string }{
 		{"hstles.identity.MintSession", "hstles.identity"},
@@ -176,12 +259,12 @@ func TestExtractRole(t *testing.T) {
 		// malformed inputs all return "" — previous impl returned the whole
 		// string for these.
 		{"bogus", ""},
-		{"bogus.x", ""},      // only one dot
-		{".x.y", ""},         // empty namespace
-		{"x.y.", ""},         // empty operation
-		{"x..y", ""},         // empty domain
-		{"", ""},             // empty
-		{"....", ""},         // dots only
+		{"bogus.x", ""}, // only one dot
+		{".x.y", ""},    // empty namespace
+		{"x.y.", ""},    // empty operation
+		{"x..y", ""},    // empty domain
+		{"", ""},        // empty
+		{"....", ""},    // dots only
 	}
 	for _, c := range cases {
 		if got := ExtractRole(c.in); got != c.out {
@@ -193,7 +276,7 @@ func TestExtractRole(t *testing.T) {
 func TestRegistry_RegisterCopiesSlices(t *testing.T) {
 	reg := NewRegistry()
 	tags := []string{"x"}
-	if err := reg.Register(Handler{Namespace: "n", Domain: "d", Operation: "P", Tags: tags}); err != nil {
+	if err := reg.Register(Handler{Namespace: "n", Domain: "d", Operation: "P", Scope: ScopeNone, Tags: tags}); err != nil {
 		t.Fatalf("register: %v", err)
 	}
 	// Mutate caller's slice — registry must not see it

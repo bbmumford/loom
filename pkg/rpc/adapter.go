@@ -51,11 +51,11 @@ func newRegistryShim(h *Handler) *registryShim {
 }
 
 // HandlerMeta interface
-func (s *registryShim) Name() string                     { return s.handler.FQN() }
-func (s *registryShim) Role() string                     { return s.handler.Role() }
-func (s *registryShim) RequiresAuth() bool               { return !s.handler.IsPublic() }
-func (s *registryShim) AllowedAuthTypes() []string       { return nil }
-func (s *registryShim) Scopes() []string                 { return nil }
+func (s *registryShim) Name() string                      { return s.handler.FQN() }
+func (s *registryShim) Role() string                      { return s.handler.Role() }
+func (s *registryShim) RequiresAuth() bool                { return !s.handler.IsPublic() }
+func (s *registryShim) AllowedAuthTypes() []string        { return nil }
+func (s *registryShim) Scopes() []string                  { return nil }
 func (s *registryShim) TenantScope() handlers.TenantScope { return s.handler.Scope }
 func (s *registryShim) AllowedTenants() []string          { return nil }
 

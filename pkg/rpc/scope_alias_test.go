@@ -48,11 +48,8 @@ func TestScopeAlias_HandlersEqualsRPC(t *testing.T) {
 // TestScopeAlias_TypeIdentity asserts that rpc.TenantScope, handlers.TenantScope,
 // and scope.TenantScope are the SAME type identity — not merely compatible
 // via structural string aliasing. If someone reverts one of them to a
-// standalone `type TenantScope = string`, this test still passes (because
-// all three are ultimately string), but the assignment-round-trip below
-// exercises the intended type equivalence so any bespoke defined-type
-// substitution (e.g. `type TenantScope string`) would break compilation
-// rather than silently allow drift.
+// standalone type, the assignment round-trip below breaks at compile time.
+// All three aliases must retain the canonical defined type's exact identity.
 func TestScopeAlias_TypeIdentity(t *testing.T) {
 	// Round-trip each canonical value through both aliases; if the
 	// aliases diverge, the assignments fail to compile.

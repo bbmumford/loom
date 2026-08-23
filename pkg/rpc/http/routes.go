@@ -3,8 +3,8 @@ package rpchttp
 import (
 	"net/http"
 
-	"github.com/go-chi/chi/v5"
 	"github.com/bbmumford/loom/pkg/rpc"
+	"github.com/go-chi/chi/v5"
 )
 
 // RegisterAll registers each handler from the rpc.Registry as an HTTP route.
