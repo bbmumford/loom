@@ -16,8 +16,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/ORBTR/aether"
+	"github.com/ORBTR/aether/rpc/pb"
+	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/pkg/trace"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/protobuf/proto"
@@ -101,22 +102,22 @@ func (cs *cachedSession) idleSince() time.Duration {
 //   - Load-aware routing via LAD latency records
 //   - Forwarding sessions NOT cached (prevents lock-in)
 type HWPCaller struct {
-	mu             sync.RWMutex
-	sessions       map[string]*cachedSession // role → cached session
-	finder         SessionFinder
+	mu       sync.RWMutex
+	sessions map[string]*cachedSession // role → cached session
+	finder   SessionFinder
 	// findGroup coalesces concurrent getOrFindSession callers for the
 	// same role onto one in-flight result. Without this, a cache miss
 	// for a hot role spawned N parallel FindSession calls that all
 	// walked the directory/LAD then raced to overwrite the cache —
 	// each loser leaked its StreamPool fill. M-FindSession-Stampede fix.
-	findGroup      singleflight.Group
+	findGroup singleflight.Group
 	// (removed: per-caller streamID counter — replaced by session-scoped
 	// counter in streamid.go.nextDynamicStreamID to prevent collisions
 	// between HWPCaller and StreamPool allocators sharing the same
 	// session. H-Dispatch-StreamIDCollision fix.)
 	stopCh         chan struct{}
 	bmu            sync.RWMutex               // separate lock for breakers (reduces contention)
-	breakers       map[string]*CircuitBreaker  // nodeID → breaker (per-node, not per-role)
+	breakers       map[string]*CircuitBreaker // nodeID → breaker (per-node, not per-role)
 	metrics        *RPCMetrics
 	platformTenant string // HSTLES platform tenant (e.g., "orbtr", "hstles") — injected into every RPC context
 
@@ -188,6 +189,16 @@ const bidiProbeTimeout = 3 * time.Second
 //
 // The platform tenant is the HSTLES-level app identity (e.g., "orbtr"),
 // NOT the end-user's org ID. Set once at startup from cfg.Apps.App.TenantID.
+//
+// 🛑 THIS IS THE ONLY WAY tenantId REACHES THE WIRE, AND THERE IS NO
+// PER-CALL OVERRIDE (#R-1598 ③). buildRPCRequestCtx copies only scopes and
+// userId out of the caller's context, so a tenant placed in a ctx before an
+// outgoing call is silently ignored — deliberately, per #R-782/#K-32, so a
+// caller-supplied context cannot choose the authoritative tenant.
+//
+// A caller that needs to act for an end-user tenant does NOT set it here.
+// The authenticated principal travels as userId + scopes and the tenant is
+// resolved SERVER-SIDE at the handler (platform §4.2, ruled #R-1598 ①).
 func (c *HWPCaller) SetPlatformTenant(tenantID string) {
 	c.platformTenant = tenantID
 }
@@ -861,6 +872,64 @@ func buildRPCRequest(role, method string, payload []byte, remaining time.Duratio
 // has a Go context carrying opClass via WithOpClass — the hint gets
 // propagated to req.Context["opClass"] so the receiver's stream
 // priority + scheduling matches the sender's intent.
+// CallNode implements TargetedCaller: dispatch to ONE named node, or fail.
+//
+// This is deliberately NOT a variant of Call. Call resolves a role to up to
+// three routes, probes them in parallel, and falls back to a dynamic stream —
+// every one of those behaviours is correct for role-addressed dispatch and
+// wrong here. A targeted call that quietly reached a different node serving the
+// same role would be worse than no targeting at all, because the caller would
+// believe the target was honoured.
+//
+// The fail-closed conversion is the whole point. finder.CallViaBidi reports
+// "no bidi channel for this node" as an ordinary (nil, false, nil) — a signal
+// its other callers (see the probe loop and callOnce above) correctly read as
+// "take the untargeted arm". Here that same signal MUST become an error, or the
+// guarantee this method exists to provide evaporates exactly when it matters:
+// a node that has just been placed is precisely the node with no bidi yet.
+//
+// Deliberate omission: this path does NOT record circuit-breaker state. The
+// breakers are shared per-node and are driven by the role-dispatch probe loop's
+// own success/failure accounting; having a second, differently-shaped caller
+// mutate them would corrupt that signal. A targeted call that fails returns the
+// error to its caller and lets the placement layer decide.
+func (c *HWPCaller) CallNode(ctx context.Context, nodeID, role, method string, payload []byte) ([]byte, error) {
+	if c == nil || c.finder == nil {
+		return nil, fmt.Errorf("dispatch %s/%s: no session finder: %w", role, method, ErrNoRouteToNode)
+	}
+	if nodeID == "" {
+		return nil, fmt.Errorf("dispatch %s/%s: empty nodeID: %w", role, method, ErrNoRouteToNode)
+	}
+
+	var remaining time.Duration
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining = time.Until(deadline)
+	}
+	req := buildRPCRequestCtx(ctx, role, method, payload, remaining, c.platformTenant)
+	if remaining > 0 {
+		req.Deadline = time.Now().Add(remaining).UnixNano()
+	}
+
+	resp, ok, err := c.finder.CallViaBidi(ctx, nodeID, req)
+	if !ok {
+		// The load-bearing line. CallViaBidi returns ok=false for "no mesh
+		// session", "no bidi registered" and "bidi not alive" — all with a nil
+		// error. Returning anything other than a failure here would silently
+		// hand the request to role resolution.
+		return nil, fmt.Errorf("dispatch %s/%s to node %s: %w", role, method, nodeID, ErrNoRouteToNode)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("dispatch %s/%s to node %s: %w", role, method, nodeID, err)
+	}
+	if resp == nil {
+		return nil, fmt.Errorf("dispatch %s/%s to node %s: nil response: %w", role, method, nodeID, ErrNoRouteToNode)
+	}
+	if !resp.Success {
+		return nil, NewHandlerError(resp.Error)
+	}
+	return resp.Payload, nil
+}
+
 func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte, remaining time.Duration, platformTenant string, gradeTimeout ...time.Duration) *pb.RPCRequest {
 	timeout := callerRequestTTL
 	if len(gradeTimeout) > 0 && gradeTimeout[0] > 0 {
@@ -871,6 +940,10 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 	}
 	id := strconv.FormatUint(atomic.AddUint64(&requestIDCounter, 1), 36)
 	rpcCtx := map[string]string{"role": role}
+	// tenantId is the PLATFORM identity from startup config — never the end
+	// user's org, and never taken from ctx. See SetPlatformTenant and
+	// rpc.TenantFromContext; a caller needing an end-user tenant relies on
+	// server-side resolution from userId+scopes (platform §4.2, #R-1598 ①).
 	if platformTenant != "" {
 		rpcCtx["tenantId"] = platformTenant
 	}
@@ -891,6 +964,16 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 	if uid := userIDFromContext(ctx); uid != "" {
 		rpcCtx["userId"] = uid
 	}
+	var wirePrincipal *pb.AuthenticatedPrincipal
+	if principal, ok := tenantScope.AuthenticatedPrincipalFromContext(ctx); ok {
+		identity := principal.Identity()
+		wirePrincipal = &pb.AuthenticatedPrincipal{
+			PlatformTenantId: identity.PlatformTenantID,
+			CustomerOrgId:    identity.OrganizationID,
+			UserId:           identity.UserID,
+			Scopes:           principal.Scopes(),
+		}
+	}
 	return &pb.RPCRequest{
 		Id:        id,
 		Handler:   method,
@@ -898,6 +981,7 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 		Context:   rpcCtx,
 		TimeoutNs: int64(timeout),
 		TraceId:   trace.FromContext(ctx),
+		Principal: wirePrincipal,
 	}
 }
 
