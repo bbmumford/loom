@@ -31,6 +31,7 @@ const (
 	scopesKey
 	authTypeKey
 	authenticatedKey
+	executionPrincipalKey
 )
 
 // WithTenantID stamps the tenant onto ctx under the loom-local key.
@@ -85,6 +86,16 @@ func IsAuthenticated(ctx context.Context) bool {
 	return ok && v
 }
 
+// WithExecutionPrincipal stamps a product-created immutable principal onto
+// the Pure-Loom private context. The principal—not a task body—must have
+// established its owner key before calling this helper.
+func WithExecutionPrincipal(
+	ctx context.Context,
+	principal ports.ExecutionPrincipal,
+) context.Context {
+	return context.WithValue(ctx, executionPrincipalKey, principal)
+}
+
 // Default returns the fail-closed loom-local validator.
 func Default() ports.AuthValidator { return defaultValidator{} }
 
@@ -133,6 +144,22 @@ func (defaultValidator) ValidateExecutionAuth(ctx context.Context, h ports.Secur
 
 func (defaultValidator) WithTenantID(ctx context.Context, tenantID string) context.Context {
 	return WithTenantID(ctx, tenantID)
+}
+
+// ExecutionTenantID reads the private Pure-Loom tenant principal without
+// creating one. This is the read-only executor side of WithTenantID: callers
+// must establish the principal before task dispatch, and the mutable task body
+// is only compared against it.
+func (defaultValidator) ExecutionTenantID(ctx context.Context) (string, bool) {
+	tenantID := ExtractTenantID(ctx)
+	return tenantID, tenantID != ""
+}
+
+// ExecutionPrincipal reads the private Pure-Loom owner principal without
+// constructing one from request or task data.
+func (defaultValidator) ExecutionPrincipal(ctx context.Context) (ports.ExecutionPrincipal, bool) {
+	principal, ok := ctx.Value(executionPrincipalKey).(ports.ExecutionPrincipal)
+	return principal, ok && principal != nil && principal.OwnerKey().Valid()
 }
 
 // WithWireIdentity implements ports.ScopeStamper for the loom-local default

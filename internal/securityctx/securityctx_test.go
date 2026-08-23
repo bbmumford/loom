@@ -18,7 +18,7 @@ type meshHandler struct {
 	scopes []string
 }
 
-func (h meshHandler) Name() string                  { return h.name }
+func (h meshHandler) Name() string                   { return h.name }
 func (h meshHandler) RequiresAuth() bool             { return true }
 func (h meshHandler) AllowedAuthTypes() []string     { return nil }
 func (h meshHandler) Scopes() []string               { return h.scopes }
@@ -64,5 +64,25 @@ func TestWithWireIdentity_EnablesScopeEnforcement(t *testing.T) {
 	}
 	if !IsAuthenticated(ctx) {
 		t.Error("WithWireIdentity should mark the ctx authenticated")
+	}
+}
+
+func TestDefaultExecutionTenantIDReadsWithoutMinting(t *testing.T) {
+	reader, ok := Default().(ports.TenantPrincipalReader)
+	if !ok {
+		t.Fatal("default validator must implement ports.TenantPrincipalReader")
+	}
+
+	if tenantID, ok := reader.ExecutionTenantID(context.Background()); ok || tenantID != "" {
+		t.Fatalf("empty context principal = (%q, %v), want (\"\", false)", tenantID, ok)
+	}
+
+	ctx := WithTenantID(context.Background(), "org-authoritative")
+	if tenantID, ok := reader.ExecutionTenantID(ctx); !ok || tenantID != "org-authoritative" {
+		t.Fatalf(
+			"established context principal = (%q, %v), want (org-authoritative, true)",
+			tenantID,
+			ok,
+		)
 	}
 }
