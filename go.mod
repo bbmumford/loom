@@ -4,7 +4,7 @@ go 1.25.0
 
 require (
 	filippo.io/edwards25519 v1.2.0
-	github.com/ORBTR/aether v0.0.111
+	github.com/ORBTR/aether v0.0.117
 	github.com/bbmumford/cfgload v0.0.2
 	github.com/bbmumford/envreq v0.0.1
 	github.com/bbmumford/ledger v0.0.20
@@ -22,6 +22,7 @@ require (
 	github.com/soheilhy/cmux v0.1.5
 	golang.org/x/crypto v0.50.0
 	golang.org/x/sync v0.22.0
+	golang.org/x/tools v0.43.0
 	google.golang.org/grpc v1.82.1
 	google.golang.org/protobuf v1.36.11
 )
@@ -79,7 +80,6 @@ require (
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
-	golang.org/x/tools v0.43.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	turso.tech/database/tursogo v0.5.3 // indirect
