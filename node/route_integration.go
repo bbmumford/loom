@@ -83,9 +83,9 @@ func (rt *Runtime) InitRoute(ctx context.Context, transit route.TransitMode) (*R
 		// route module upgrade dropped the method, interface signature
 		// changed, or a mock router was wired in — every Advertise()
 		// will skip publishing (publisher==nil) and route_paths will
-		// stay empty forever. That mode previously failed silently;
-		// log loudly so operators can correlate it to "swarm route
-		// paths never populate".
+		// stay empty forever. Log loudly rather than failing silently, so
+		// operators can correlate this to "swarm route paths never
+		// populate".
 		log.Printf("[ROUTE] WARNING: route.Router (%T) does not implement SetPublisher(route.AdvertisementPublisher) — advertisements will not publish onto fleet.route topic; route_paths will remain empty", r)
 	}
 
@@ -158,7 +158,7 @@ func (rt *Runtime) Route() *RouteIntegration {
 // single topic carries both so a peer leaving the fabric can withdraw
 // without needing a second subscription.
 type routeEnvelope struct {
-	Kind          string                    `json:"kind"`            // "advert" | "withdraw"
+	Kind          string                   `json:"kind"` // "advert" | "withdraw"
 	Advertisement *route.PathAdvertisement `json:"advert,omitempty"`
 	Withdrawal    *route.PathWithdrawal    `json:"withdraw,omitempty"`
 }

@@ -23,8 +23,6 @@ import (
 // Installed once at runtime startup via rpc.SetLocalDispatcher; from that
 // point every rpc.Call / rpc.CallRaw consults the local registry FIRST
 // and skips the mesh entirely when this process hosts the handler.
-//
-// Cascade C fix (L3 #1 + #2) from the 2026-05-23 routing review.
 type localDispatcherAdapter struct {
 	registry *handlers.HandlerRegistry
 }

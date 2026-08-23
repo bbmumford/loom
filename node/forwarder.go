@@ -6,6 +6,7 @@ package node
 
 import (
 	"context"
+	"github.com/bbmumford/loom/ports"
 	"log"
 	"net"
 	"strconv"
@@ -13,8 +14,6 @@ import (
 
 	aether "github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/noise"
-	lad "github.com/bbmumford/ledger"
-	ladcache "github.com/bbmumford/ledger/cache"
 )
 
 // Cross-org noise-UDP forwarder wiring.
@@ -26,11 +25,11 @@ import (
 //
 // Library's job here is to:
 //
-//  1. Provide a ForwarderLookup callback that resolves a target NodeID
-//     to a same-org 6PN UDP address using the LAD reach cache.
-//  2. Attach an IntraOrgForwarder to each NoiseTransport at startup so
-//     the listener path branches into the forwarder before normal
-//     classify+dispatch.
+// 1. Provide a ForwarderLookup callback that resolves a target NodeID
+// to a same-org 6PN UDP address using the LAD reach cache.
+// 2. Attach an IntraOrgForwarder to each NoiseTransport at startup so
+// the listener path branches into the forwarder before normal
+// classify+dispatch.
 //
 // The dialer-side preamble emission lives in peer_connections.go — the
 // connection manager decides per-dial whether to set the cross-org flag
@@ -43,9 +42,9 @@ import (
 // noise-UDP port, and returns it as a *net.UDPAddr.
 //
 // Returns (nil, false) when:
-//   - the runtime has no cache (boot-time race)
-//   - the target NodeID is not in the directory
-//   - the target's reach has no 6PN/udp entry
+// - the runtime has no cache (boot-time race)
+// - the target NodeID is not in the directory
+// - the target's reach has no 6PN/udp entry
 //
 // All three are "drop the packet"-class failures from the forwarder's
 // POV — the dialer's WS fallback will still establish a session.
@@ -62,44 +61,47 @@ const forwarderLookupTimeout = 100 * time.Millisecond
 
 func (rt *Runtime) forwarderLookup() noise.ForwarderLookup {
 	return func(target aether.NodeID) (*net.UDPAddr, bool) {
-		if rt == nil || rt.cache == nil {
+		if rt == nil || rt.liveDir == nil {
 			return nil, false
 		}
 		lookupCtx, cancel := context.WithTimeout(rt.Context(), forwarderLookupTimeout)
 		defer cancel()
-		recs, err := rt.cache.Reach(lookupCtx, "", ladcache.ReachQuery{NodeID: string(target)})
-		if err != nil || len(recs) == 0 {
+		addrs, err := rt.liveDir.Reach(lookupCtx, "", ports.NodeID(target))
+		if err != nil || len(addrs) == 0 {
 			return nil, false
 		}
-		for _, rec := range recs {
-			for _, a := range rec.Addresses {
-				if a.Scope != "private" || a.Proto != "udp" {
-					continue
-				}
-				udp, ok := parseSixPNUDPAddr(a)
-				if !ok {
-					continue
-				}
-				return udp, true
+		for _, a := range addrs {
+			// 🛑 RawProtocol, NOT Protocol. The port normalises the reach
+			// layer's "udp" to the address table's "noise-udp"; matching the
+			// normalised value here would select NOTHING, silently disabling
+			// 6PN direct dialling so every peer falls back to relay with no
+			// error anywhere. The raw tier exists for exactly this comparison.
+			if a.Scope != "private" || a.RawProtocol != "udp" {
+				continue
 			}
+			udp, ok := parseSixPNUDPAddr(a)
+			if !ok {
+				continue
+			}
+			return udp, true
 		}
 		return nil, false
 	}
 }
 
-// parseSixPNUDPAddr converts a LAD ReachAddress into a *net.UDPAddr if
+// parseSixPNUDPAddr converts a reach address into a *net.UDPAddr if
 // the address is a Fly 6PN ULA (fdaa::/8) — anything else (Docker
 // bridge IPv4, link-local, non-Fly ULA like Tailscale fd7a::) is not a
 // valid intra-org forwarder target.
 //
-// L2 #8 fix: previous implementation only checked `ip.IsPrivate()`
+// Previous implementation only checked `ip.IsPrivate()`
 // which covers all of fc00::/7 (the full IPv6 ULA range). A node
 // running Tailscale on the same host could publish a fd7a:.. address
 // with Scope:"private",Proto:"udp"; forwarderLookup would accept it
 // and the hairpin would route into Tailscale's overlay instead of
 // Fly's 6PN, where the target machine isn't reachable. Strict
 // fdaa::/8 match aligns with extractOriginPrefix's policy.
-func parseSixPNUDPAddr(a lad.ReachAddress) (*net.UDPAddr, bool) {
+func parseSixPNUDPAddr(a ports.ReachAddress) (*net.UDPAddr, bool) {
 	host := a.Host
 	port := a.Port
 	// Reach records sometimes encode host as "[ipv6]:port" — split if so.

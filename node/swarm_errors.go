@@ -9,6 +9,6 @@ import "errors"
 
 // Sentinel errors returned by the swarm integration helpers on Runtime.
 var (
-	ErrSwarmIdentityUnset = errors.New("mesh/node: swarm requires Runtime identity to be loaded first")
+	ErrSwarmIdentityUnset  = errors.New("mesh/node: swarm requires Runtime identity to be loaded first")
 	ErrSwarmNotInitialized = errors.New("mesh/node: swarm not initialized — call Runtime.InitSwarm first")
 )

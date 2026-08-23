@@ -11,16 +11,19 @@ import (
 	"io"
 	"log"
 	"sort"
+	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/ORBTR/aether"
 	aethermetrics "github.com/ORBTR/aether/metrics"
+	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/bbmumford/loom/internal/securityctx"
 	"github.com/bbmumford/loom/node/handlers"
 	"github.com/bbmumford/loom/pkg/rpc"
+	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/pkg/trace"
 	"github.com/bbmumford/loom/ports"
 )
@@ -280,6 +283,11 @@ const (
 	rpcRegionKey  rpcContextKey = "rpc.region"
 	rpcServiceKey rpcContextKey = "rpc.service"
 	rpcHopsKey    rpcContextKey = "rpc.hops"
+	// rpcCallerNodeKey carries the mesh node ID of the peer whose session
+	// delivered this request. Set by every session-scoped entry point
+	// (ServeMeshStream, BidiRPC.serve, HandleSession) and read only by the
+	// dedup cache key. Empty on any path with no peer session.
+	rpcCallerNodeKey rpcContextKey = "rpc.callerNode"
 )
 
 // RPCServer handles incoming RPC connections using binary TLV wire format.
@@ -294,7 +302,7 @@ type RPCServer struct {
 	localID        string
 	region         string
 	serviceName    string
-	activeHandlers int32 // atomic — concurrent handler goroutines
+	activeHandlers int32          // atomic — concurrent handler goroutines
 	responseCache  *ResponseCache // dedup cache for parallel probes
 
 	// authValidator stamps wire-envelope tenant IDs onto the platform-
@@ -320,9 +328,9 @@ type RPCServer struct {
 
 	// bidiPhase{Marshal,Send,Wait} decompose the OBS-7 aggregate into
 	// the three contiguous wall-clock phases inside BidiRPC.Call:
-	//   marshal = pb.MarshalRequest + Type-prefix concat
-	//   send    = stream.Send (wire write + scheduler enqueue + park)
-	//   wait    = pending-channel select waiting on the response demux
+	// marshal = pb.MarshalRequest + Type-prefix concat
+	// send = stream.Send (wire write + scheduler enqueue + park)
+	// wait = pending-channel select waiting on the response demux
 	// Sum approximation: bidiLatency ≈ marshal + send + wait (modulo
 	// the inflight gauge / pending-map mutex overhead, all sub-µs).
 	// Decomposition lets operators attribute a 5ms p50 same-origin
@@ -527,11 +535,62 @@ func (s *RPCServer) ServeSession(ctx context.Context, session aether.Connection)
 			return fmt.Errorf("read message: %w", err)
 		}
 
-		resp := s.handleRequest(ctx, req)
+		// Dedup entries are scoped to the delivering peer.
+		resp := s.handleRequest(withCallerNode(ctx, string(session.RemoteNodeID())), req)
 		if err := s.writeMessage(ctx, session, resp); err != nil {
 			return fmt.Errorf("write response: %w", err)
 		}
 	}
+}
+
+// withCallerNode stamps the peer node ID whose session delivered a request.
+// Called by every session-scoped entry point; see rpcCallerNodeKey.
+func withCallerNode(ctx context.Context, nodeID string) context.Context {
+	if nodeID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, rpcCallerNodeKey, nodeID)
+}
+
+// callerNodeFromCtx returns the delivering peer's node ID, or "" when the
+// request did not arrive over a peer session.
+func callerNodeFromCtx(ctx context.Context) string {
+	if v, ok := ctx.Value(rpcCallerNodeKey).(string); ok {
+		return v
+	}
+	return ""
+}
+
+// dedupCacheKey composes the response-cache key from every dimension a cached
+// response must not cross.
+//
+// 🔴 req.Id ALONE IS NOT AN IDENTITY. It is a caller-supplied wire string in a
+// process-global namespace, read at step 0a before any principal is bound and
+// written for every successful local execution with a 10s TTL. Keyed on it
+// alone, any two requests sharing an id collide regardless of who sent them or
+// what they called — peer A's `orbtr.ai.auth.Login` response answers peer B's
+// `orbtr.io.dhcp.ListLeases`, because the only thing compared is "42" == "42".
+// pkg/dispatch mints these ids from a process-global base36 counter
+// (hwp_dispatch.go:231), so two nodes booting together emit the same low ids.
+//
+// 🔑 LENGTH-PREFIXED, NOT DELIMITER-JOINED. requestID is fully caller-
+// controlled, so any fixed separator is forgeable: with "a|b|c" a caller could
+// send Id = "|orbtr.ai.auth.Login|42" and land on another handler's entry.
+// Length prefixes make the encoding injective — one key can be produced by
+// exactly one triple — so no choice of requestID can impersonate a different
+// (caller, handler) pair.
+//
+// callerNode is empty for requests that arrived over no peer session; those
+// share one namespace with each other, still separated by handler.
+func dedupCacheKey(callerNode, handler, requestID string) string {
+	var b strings.Builder
+	b.Grow(len(callerNode) + len(handler) + len(requestID) + 12)
+	for _, part := range []string{callerNode, handler, requestID} {
+		b.WriteString(strconv.Itoa(len(part)))
+		b.WriteByte(':')
+		b.WriteString(part)
+	}
+	return b.String()
 }
 
 // handleRequest processes a binary RPC request with intelligent dispatch.
@@ -539,9 +598,13 @@ func (s *RPCServer) ServeSession(ctx context.Context, session aether.Connection)
 func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.RPCResponse {
 	startTime := time.Now()
 
+	// The dedup identity for this request. Scoped by delivering peer and
+	// handler, not by the caller-supplied id alone — see dedupCacheKey.
+	dedupKey := dedupCacheKey(callerNodeFromCtx(ctx), req.Handler, req.Id)
+
 	// 0a. Dedup check — return cached response for parallel probes
 	if req.Id != "" && s.responseCache != nil {
-		if cached := s.responseCache.Get(req.Id); cached != nil {
+		if cached := s.responseCache.Get(dedupKey); cached != nil {
 			return cached
 		}
 	}
@@ -549,9 +612,9 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 	// 0b. Absolute deadline check — reject if already expired
 	if req.Deadline > 0 && time.Now().UnixNano() > req.Deadline {
 		return &pb.RPCResponse{
-			Id:      req.Id,
-			Success: false,
-			Error:   "request deadline exceeded at hop",
+			Id:        req.Id,
+			Success:   false,
+			Error:     "request deadline exceeded at hop",
 			LatencyNs: int64(time.Since(startTime)),
 		}
 	}
@@ -573,21 +636,32 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 		ctx = context.WithValue(ctx, rpcHopsKey, int(req.Hops))
 	}
 
-	// 2b. Lift wire-envelope identity values onto platform-canonical
-	// context keys. HSTLES has two coexisting conventions:
-	//   (a) req.Context map — used by validateTenantScope &
-	//       handlers.GetTenantIDFromContext.
-	//   (b) the platform's typed tenant ctx key — used by domain
-	//       handlers like identity.EnsureIdentity.
-	// The wire side populates (a) via HWPCaller.platformTenant; this
-	// lift makes (b) see the same value so a nested rpc.Call from a
-	// handler (e.g., CompleteOAuth → EnsureIdentity) carries tenant
-	// through. The key written is whatever Config.AuthValidator's
-	// WithTenantID writes — HSTLES injects a validator delegating to
-	// security/helpers so its unexported key is the one stamped.
-	// Long-term: collapse the two surfaces into one.
-	if tid := req.Context["tenantId"]; tid != "" {
+	// 2b. Bind the platform identity to the authenticated transport, then bind
+	// the optional typed caller principal. RPCRequest.Context is mutable
+	// metadata: its tenant/user/org/scope spellings are compare-only candidates
+	// and never establish authority.
+	transportTenant := handlers.TransportTenantFromContext(ctx)
+	if transportTenant != "" && transportTenant != "default" {
+		ctx = s.authValidator.WithTenantID(ctx, transportTenant)
+	} else if tid := req.Context["tenantId"]; tid != "" {
+		// Compatibility for dedicated transports that have no ScopeID. Such a
+		// context may satisfy legacy platform-only handlers, but a typed
+		// customer principal below is refused without a bound transport.
 		ctx = s.authValidator.WithTenantID(ctx, tid)
+	}
+	typedPrincipal := false
+	if req.Principal != nil {
+		var err error
+		ctx, err = s.bindAuthenticatedPrincipal(ctx, req, transportTenant)
+		if err != nil {
+			return &pb.RPCResponse{
+				Id:        req.Id,
+				Success:   false,
+				Error:     fmt.Sprintf("authenticated principal denied: %v", err),
+				LatencyNs: int64(time.Since(startTime)),
+			}
+		}
+		typedPrincipal = true
 	}
 	// Propagate the e2e trace ID from the wire envelope to ctx so this
 	// node's handler logs, nested rpc.Call sites, and downstream-only
@@ -596,7 +670,7 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 		ctx = trace.WithID(ctx, req.TraceId)
 	}
 
-	// #K-32: lift the caller's wire-propagated userId + scope-list onto ctx
+	// Lift the caller's wire-propagated userId + scope-list onto ctx
 	// via the injected validator (optional ports.ScopeStamper) so scope
 	// enforcement (a handler's RequiredScopes) and userId-scoped handlers see
 	// the authenticated principal that crossed the mesh hop.
@@ -606,10 +680,12 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 	// until the endpoint validator adopts it). Mirrors the tenantId lift
 	// above: identity flows through the injected validator, never a
 	// loom-local key an HSTLES build would not read.
-	if ss, ok := s.authValidator.(ports.ScopeStamper); ok {
-		scopes := rpc.ParseScopes(req.Context["scopes"])
-		if uid := req.Context["userId"]; uid != "" || len(scopes) > 0 {
-			ctx = ss.WithWireIdentity(ctx, uid, scopes)
+	if !typedPrincipal {
+		if ss, ok := s.authValidator.(ports.ScopeStamper); ok {
+			scopes := rpc.ParseScopes(req.Context["scopes"])
+			if uid := req.Context["userId"]; uid != "" || len(scopes) > 0 {
+				ctx = ss.WithWireIdentity(ctx, uid, scopes)
+			}
 		}
 	}
 
@@ -644,14 +720,14 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 	if hasLocal {
 		resp := s.executeLocal(ctx, req, startTime)
 		s.metrics.RecordLocal(req.Handler, resp.Success, time.Since(startTime))
-		// Cascade D fix (L3 #5+#13): cache only successful responses.
+		// Cache only successful responses.
 		// Caching failures (e.g., "handler not found" returned because
 		// of a hot-reload race) poisons subsequent parallel-probe
 		// lookups for 10 s — even when a different valid target
 		// exists in the mesh. Treating failures as cacheable
 		// effectively rate-limits recovery to the cache TTL.
 		if req.Id != "" && s.responseCache != nil && resp != nil && resp.Success {
-			s.responseCache.Put(req.Id, resp)
+			s.responseCache.Put(dedupKey, resp)
 		}
 		return resp
 	}
@@ -660,9 +736,9 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 	// fail immediately instead of re-forwarding (prevents routing loops).
 	if req.TargetNodeId != "" && s.localID != "" && req.TargetNodeId == s.localID {
 		return &pb.RPCResponse{
-			Id:      req.Id,
-			Success: false,
-			Error:   fmt.Sprintf("handler %s not found on target node", req.Handler),
+			Id:        req.Id,
+			Success:   false,
+			Error:     fmt.Sprintf("handler %s not found on target node", req.Handler),
 			LatencyNs: int64(time.Since(startTime)),
 		}
 	}
@@ -674,9 +750,9 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 		if err != nil {
 			s.metrics.RecordForwardFail(req.Handler, time.Since(startTime))
 			return &pb.RPCResponse{
-				Id:      req.Id,
-				Success: false,
-				Error:   fmt.Sprintf("forward %s failed (hop %d): %v", req.Handler, req.Hops, err),
+				Id:        req.Id,
+				Success:   false,
+				Error:     fmt.Sprintf("forward %s failed (hop %d): %v", req.Handler, req.Hops, err),
 				LatencyNs: int64(time.Since(startTime)),
 			}
 		}
@@ -686,11 +762,114 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 
 	// No handler found anywhere
 	return &pb.RPCResponse{
-		Id:      req.Id,
-		Success: false,
-		Error:   fmt.Sprintf("unknown handler: %s (hops: %d)", req.Handler, req.Hops),
+		Id:        req.Id,
+		Success:   false,
+		Error:     fmt.Sprintf("unknown handler: %s (hops: %d)", req.Handler, req.Hops),
 		LatencyNs: int64(time.Since(startTime)),
 	}
+}
+
+func (s *RPCServer) bindAuthenticatedPrincipal(
+	ctx context.Context,
+	req *pb.RPCRequest,
+	transportTenant string,
+) (context.Context, error) {
+	wire := req.Principal
+	if wire == nil {
+		return ctx, nil
+	}
+	if transportTenant == "" || transportTenant == "default" {
+		return ctx, fmt.Errorf("customer authority requires a tenant-bound transport")
+	}
+	if wire.PlatformTenantId != transportTenant {
+		return ctx, fmt.Errorf(
+			"transport/principal platform mismatch: transport=%q principal=%q",
+			transportTenant,
+			wire.PlatformTenantId,
+		)
+	}
+	if candidate := mismatchedWireCandidate(
+		req.Context,
+		wire.PlatformTenantId,
+		"tenantId",
+		"tenant_id",
+	); candidate != "" {
+		return ctx, fmt.Errorf(
+			"request/platform candidate mismatch: candidate=%q principal=%q",
+			candidate,
+			wire.PlatformTenantId,
+		)
+	}
+	if candidate := mismatchedWireCandidate(
+		req.Context,
+		wire.CustomerOrgId,
+		"orgId",
+		"org_id",
+		"organizationId",
+		"organization_id",
+	); candidate != "" {
+		return ctx, fmt.Errorf(
+			"request/customer-org candidate mismatch: candidate=%q principal=%q",
+			candidate,
+			wire.CustomerOrgId,
+		)
+	}
+	if candidate := mismatchedWireCandidate(
+		req.Context,
+		wire.UserId,
+		"userId",
+		"user_id",
+	); candidate != "" {
+		return ctx, fmt.Errorf(
+			"request/user candidate mismatch: candidate=%q principal=%q",
+			candidate,
+			wire.UserId,
+		)
+	}
+	if candidate := rpc.ParseScopes(req.Context["scopes"]); len(candidate) > 0 &&
+		!equalWireScopes(candidate, wire.Scopes) {
+		return ctx, fmt.Errorf("request/scope candidate mismatch")
+	}
+
+	principal, err := tenantScope.NewAuthenticatedPrincipal(
+		wire.PlatformTenantId,
+		wire.CustomerOrgId,
+		wire.UserId,
+		wire.Scopes,
+	)
+	if err != nil {
+		return ctx, err
+	}
+	ctx = tenantScope.WithAuthenticatedPrincipal(ctx, principal)
+	if stamper, ok := s.authValidator.(ports.AuthenticatedPrincipalStamper); ok {
+		ctx = stamper.WithAuthenticatedPrincipal(ctx, principal)
+	}
+	return ctx, nil
+}
+
+func mismatchedWireCandidate(
+	values map[string]string,
+	expected string,
+	keys ...string,
+) string {
+	for _, key := range keys {
+		if value := values[key]; value != "" && value != expected {
+			return value
+		}
+	}
+	return ""
+}
+
+func equalWireScopes(a []string, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }
 
 // executeLocal dispatches an RPC to the local HandlerRegistry with active handler tracking.
@@ -725,13 +904,13 @@ func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startT
 	s.dispatchLatency.Record(req.Handler, time.Since(t0), err == nil && resp != nil && resp.Success)
 	if err != nil {
 		return &pb.RPCResponse{
-			Id:      req.Id,
-			Success: false,
-			Error:   err.Error(),
+			Id:        req.Id,
+			Success:   false,
+			Error:     err.Error(),
 			LatencyNs: int64(time.Since(startTime)),
 		}
 	}
-	// MESH-D02: Dispatch can return (nil, nil) — e.g. a custom RPCHandler or an
+	// Dispatch can return (nil, nil) — e.g. a custom RPCHandler or an
 	// After middleware that returns no response and no error. The raw
 	// ServeSession path (a bare goroutine with no recover) would then panic on
 	// the resp.* dereferences below and crash the process. Fail closed instead.
@@ -744,10 +923,10 @@ func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startT
 		}
 	}
 	return &pb.RPCResponse{
-		Id:      req.Id,
-		Success: resp.Success,
-		Payload: resp.Payload,
-		Error:   resp.Error,
+		Id:        req.Id,
+		Success:   resp.Success,
+		Payload:   resp.Payload,
+		Error:     resp.Error,
 		LatencyNs: int64(resp.Latency),
 	}
 }
@@ -844,13 +1023,13 @@ func (s *RPCServer) HandleIncomingSessionsForTenant(ctx context.Context, listene
 // Echoes the payload back with a JSON response containing a timestamp.
 type PingRPCHandler struct{}
 
-func (h *PingRPCHandler) Name() string                         { return "ping" }
-func (h *PingRPCHandler) Role() string                         { return "system" }
-func (h *PingRPCHandler) RequiresAuth() bool                   { return false }
-func (h *PingRPCHandler) AllowedAuthTypes() []string           { return nil }
-func (h *PingRPCHandler) Scopes() []string                     { return nil }
-func (h *PingRPCHandler) TenantScope() handlers.TenantScope    { return "" }
-func (h *PingRPCHandler) AllowedTenants() []string             { return nil }
+func (h *PingRPCHandler) Name() string                      { return "ping" }
+func (h *PingRPCHandler) Role() string                      { return "system" }
+func (h *PingRPCHandler) RequiresAuth() bool                { return false }
+func (h *PingRPCHandler) AllowedAuthTypes() []string        { return nil }
+func (h *PingRPCHandler) Scopes() []string                  { return nil }
+func (h *PingRPCHandler) TenantScope() handlers.TenantScope { return handlers.TenantScopeNone }
+func (h *PingRPCHandler) AllowedTenants() []string          { return nil }
 
 func (h *PingRPCHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	type PingRequest struct {
@@ -879,32 +1058,116 @@ func (h *PingRPCHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCReques
 }
 
 // StatusRPCHandler returns node status information.
+//
+// `Status` is derived from three sources with three DIFFERENT roles, which are
+// deliberately not averaged. A literal "healthy" would be infinitely confident
+// and computed from nothing:
+//
+//	HealthEvaluator    AUTHORITATIVE for the headline — the per-service verdict a
+//	                   remote caller acts on ("should I route work here").
+//	SelfHealthMonitor  a META signal, not a peer of the other two. If observability
+//	                   itself is stalled the other sources are UNRELIABLE, so it maps
+//	                   to "unknown" — NEVER to "degraded", NEVER silently to "healthy".
+//	obshealth.Registry DETAIL. Degraded subsystems belong in a detail field, not the
+//	                   headline.
+//
+// 🔴 THE RULE THAT DECIDES EVERY CASE BELOW: never report a verdict more confident
+// than the instrument that produced it. A node that cannot see itself must say so
+// on the wire — reporting "healthy" from stalled observability is signed false
+// evidence, and it is read at exactly the moment it matters, during an outage.
+//
+// rt may be nil (the pre-construction, and tests); everything degrades to
+// "unknown" rather than panicking or inventing confidence.
 type StatusRPCHandler struct {
 	identity  *NodeIdentity
 	startTime time.Time
+	rt        *Runtime
 }
 
-func (h *StatusRPCHandler) Name() string                         { return "status" }
-func (h *StatusRPCHandler) Role() string                         { return "system" }
-func (h *StatusRPCHandler) RequiresAuth() bool                   { return false }
-func (h *StatusRPCHandler) AllowedAuthTypes() []string           { return nil }
-func (h *StatusRPCHandler) Scopes() []string                     { return nil }
-func (h *StatusRPCHandler) TenantScope() handlers.TenantScope    { return "" }
-func (h *StatusRPCHandler) AllowedTenants() []string             { return nil }
+// Status verdict values. "unknown" is a first-class answer here, not a failure.
+const (
+	statusUnknown = "unknown"
+
+	// confidence reports how much the verdict is worth, so a caller never has to
+	// infer instrument health from the verdict itself.
+	confidenceAuthoritative = "authoritative" // observability healthy
+	confidenceLagging       = "lagging"       // observability behind but reporting
+	confidenceLow           = "low"           // observability stalled or absent
+)
+
+// statusVerdict computes the headline and its confidence from the three sources.
+// Split out from ExecuteRPC so the precedence is testable without an RPC.
+func (h *StatusRPCHandler) statusVerdict() (status, confidence string, obs ObservabilityHealth) {
+	if h.rt == nil {
+		return statusUnknown, confidenceLow, obs
+	}
+
+	// META FIRST: if observability is stalled, no verdict below it is trustworthy,
+	// so we do not compute one. This ordering IS the rule — asking the evaluator
+	// first and then downgrading would still let a stale verdict reach the wire.
+	if sh := h.rt.SelfHealth(); sh != nil {
+		obs = sh.Check()
+		if obs.Status == "stalled" {
+			return statusUnknown, confidenceLow, obs
+		}
+	}
+
+	ev := h.rt.HealthEvaluator()
+	if ev == nil {
+		return statusUnknown, confidenceLow, obs
+	}
+
+	conf := confidenceAuthoritative
+	if obs.Status == "lagging" {
+		conf = confidenceLagging
+	}
+	return ev.MeshStatus(h.rt.Config().ServiceName), conf, obs
+}
+
+func (h *StatusRPCHandler) Name() string                      { return "status" }
+func (h *StatusRPCHandler) Role() string                      { return "system" }
+func (h *StatusRPCHandler) RequiresAuth() bool                { return false }
+func (h *StatusRPCHandler) AllowedAuthTypes() []string        { return nil }
+func (h *StatusRPCHandler) Scopes() []string                  { return nil }
+func (h *StatusRPCHandler) TenantScope() handlers.TenantScope { return handlers.TenantScopeNone }
+func (h *StatusRPCHandler) AllowedTenants() []string          { return nil }
 
 func (h *StatusRPCHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
+	// The four original fields keep their names and meanings; everything new is
+	// ADDITIVE, which is what makes this wire-safe for any existing reader.
 	type StatusResponse struct {
 		NodeID    string    `json:"nodeId"`
 		Uptime    string    `json:"uptime"`
 		Timestamp time.Time `json:"timestamp"`
 		Status    string    `json:"status"`
+
+		// Confidence says how much Status is worth, so a caller never has to
+		// infer instrument health from the verdict.
+		Confidence string `json:"confidence"`
+		// Observability is the META signal, reported beside the verdict rather
+		// than folded into it.
+		Observability string `json:"observability,omitempty"`
+		// Subsystems is DETAIL: degraded subsystems never move the headline.
+		DegradedSubsystems int `json:"degradedSubsystems"`
+	}
+
+	status, confidence, obs := h.statusVerdict()
+
+	degraded := 0
+	if h.rt != nil {
+		if reg := h.rt.HealthRegistry(); reg != nil {
+			degraded = reg.DegradedCount()
+		}
 	}
 
 	resp := StatusResponse{
-		NodeID:    h.identity.String(),
-		Uptime:    time.Since(h.startTime).String(),
-		Timestamp: time.Now(),
-		Status:    "healthy",
+		NodeID:             h.identity.String(),
+		Uptime:             time.Since(h.startTime).String(),
+		Timestamp:          time.Now(),
+		Status:             status,
+		Confidence:         confidence,
+		Observability:      obs.Status,
+		DegradedSubsystems: degraded,
 	}
 
 	payload, _ := json.Marshal(resp)

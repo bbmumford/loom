@@ -16,14 +16,13 @@ import (
 // relayed paths on like terms.
 //
 // Components:
-//   - base: measured RTT (ms) to the first hop if known, else a
-//     grade-derived synthetic latency (A=5, B=20, C=40, F=1000)
-//   - hopPenalty: ~100ms per intermediate node in the route (direct=0)
+// - base: measured RTT (ms) to the first hop if known, else a
+// grade-derived synthetic latency (A=5, B=20, C=40, F=1000)
+// - hopPenalty: ~100ms per intermediate node in the route (direct=0)
 //
-// Cascade F (L3 #3): FindRoutes used to return routes in positional
-// order — direct first, then relays sorted by their leg-RTT to the
-// target. Parallel probes in HWPCaller.Call could let a low-RTT relay
-// beat a high-RTT direct path. With this scoring the slice is sorted by
+// Positional ordering — direct first, then relays sorted by their leg-RTT to
+// the target — lets a low-RTT relay beat a high-RTT direct path once
+// HWPCaller.Call probes them in parallel. With this scoring the slice is sorted by
 // composite cost, so a healthy direct path wins as long as its total
 // RTT is comparable to the relay's combined two-leg RTT.
 //

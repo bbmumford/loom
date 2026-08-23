@@ -49,6 +49,16 @@ type MeshSwarmTransport struct {
 	onJoin   func(id swarm.NodeID)
 	onLeave  func(id swarm.NodeID)
 
+	// stopped is set by Stop under mu. attachPeer refuses once it is set:
+	// spawning a read loop after Stop has begun would both leak the
+	// goroutine past shutdown and race wg.Add against wg.Wait.
+	stopped bool
+	// wg counts live per-peer read loops so Stop can JOIN them rather than
+	// merely signalling them. Without it Stop returns while a read loop is
+	// still inside the OnReceive callback, delivering a frame into a swarm
+	// engine the caller has already torn down.
+	wg sync.WaitGroup
+
 	cancel context.CancelFunc
 	ctx    context.Context
 }
@@ -75,10 +85,22 @@ func NewMeshSwarmTransport(localID swarm.NodeID) *MeshSwarmTransport {
 	}
 }
 
-// Stop shuts down all peer read loops and closes streams.
+// Stop shuts down all peer read loops, closes streams, and WAITS for the read
+// loops to finish.
+//
+// The wait is the point. Cancelling a read loop's context only asks it to
+// stop; the loop may be inside the OnReceive callback at that instant, and
+// that callback reaches into the swarm engine the caller is shutting down.
+// Returning before the join makes "transport stopped" a claim the transport
+// cannot honour — the map is empty and the frame still lands afterwards.
+// Same defect class as swarm's own blocker 1 ("join its goroutines"), on
+// loom's side of the seam.
+//
+// Idempotent, and safe to call concurrently with itself.
 func (t *MeshSwarmTransport) Stop() {
 	t.cancel()
 	t.mu.Lock()
+	t.stopped = true
 	for _, p := range t.peers {
 		if p.cancel != nil {
 			p.cancel()
@@ -88,7 +110,12 @@ func (t *MeshSwarmTransport) Stop() {
 		}
 	}
 	t.peers = make(map[swarm.NodeID]*meshSwarmPeer)
+	// Released BEFORE the join: a read loop's teardown
+	// (unregisterPeerInstance) takes this same lock, so waiting while
+	// holding it deadlocks shutdown outright.
 	t.mu.Unlock()
+
+	t.wg.Wait()
 }
 
 // LocalID implements swarm.Transport.
@@ -98,8 +125,8 @@ func (t *MeshSwarmTransport) LocalID() swarm.NodeID { return t.localID }
 // dedicated swarm stream.
 //
 // Returns ErrPeerNotRegistered when the peer has no stream on this transport.
-// It previously returned nil there, which made an unreachable peer
-// indistinguishable from a delivered frame — see that error's doc comment.
+// Returning nil there would make an unreachable peer indistinguishable from a
+// delivered frame.
 func (t *MeshSwarmTransport) Send(to swarm.NodeID, frame []byte) error {
 	t.mu.RLock()
 	p, ok := t.peers[to]
@@ -126,9 +153,9 @@ func (t *MeshSwarmTransport) Send(to swarm.NodeID, frame []byte) error {
 // NOTE ON REACH: this method currently has NO callers. The swarm engine
 // fans out via repeated Send (plumtrees/merkle) and its own
 // plumtreesEngine.Broadcast, never through the Transport's. It is
-// implemented here only to satisfy swarm.Transport. It is written to report
-// failures anyway because it previously returned nil unconditionally while
-// discarding every error, and whoever wires it first should not inherit that.
+// implemented here only to satisfy swarm.Transport. It reports failures anyway
+// so that whoever wires it first does not inherit a method that returns nil
+// unconditionally while discarding every error.
 func (t *MeshSwarmTransport) Broadcast(frame []byte) error {
 	t.mu.RLock()
 	peers := make([]*meshSwarmPeer, 0, len(t.peers))
@@ -232,7 +259,7 @@ func (t *MeshSwarmTransport) RegisterPeer(ctx context.Context, peerID swarm.Node
 		return nil
 	}
 
-	// MESH-E03: responder — AcceptStreamByID(100) blocks up to 30s waiting for
+	// Responder — AcceptStreamByID(100) blocks up to 30s waiting for
 	// the peer's OPEN(100). RegisterPeer fires from the session hook BEFORE this
 	// session's keepalive/gossip/bidi service goroutines start, so blocking here
 	// for a slow or older-binary peer stalled the entire session's startup (up
@@ -334,6 +361,17 @@ func (t *MeshSwarmTransport) unregisterPeerInstance(p *meshSwarmPeer) {
 // existing entry for the same peerID (and tears down the prior stream).
 func (t *MeshSwarmTransport) attachPeer(peerID swarm.NodeID, session aether.Session, stream aether.Stream) {
 	t.mu.Lock()
+	if t.stopped {
+		// Attaching after Stop would leak a read loop past shutdown and race
+		// wg.Add against the wg.Wait already in progress. Close the stream
+		// we were handed rather than silently retaining it.
+		t.mu.Unlock()
+		if stream != nil {
+			_ = stream.Close()
+		}
+		log.Printf("[SWARM] attachPeer: REFUSED peer=%s — transport stopped", truncID(string(peerID)))
+		return
+	}
 	if existing, ok := t.peers[peerID]; ok {
 		if existing.cancel != nil {
 			existing.cancel()
@@ -352,6 +390,9 @@ func (t *MeshSwarmTransport) attachPeer(peerID swarm.NodeID, session aether.Sess
 	t.peers[peerID] = p
 	onJoin := t.onJoin
 	peerCount := len(t.peers)
+	// Counted while still holding mu, so it cannot race the wg.Wait that a
+	// concurrent Stop performs after releasing the lock.
+	t.wg.Add(1)
 	t.mu.Unlock()
 
 	log.Printf("[SWARM] attachPeer: installed peer=%s onJoin=%v totalPeers=%d", truncID(string(peerID)), onJoin != nil, peerCount)
@@ -369,6 +410,9 @@ func (t *MeshSwarmTransport) attachPeer(peerID swarm.NodeID, session aether.Sess
 // length prefixing is needed at this layer — each Receive call yields
 // one logical swarm frame.
 func (t *MeshSwarmTransport) readLoop(ctx context.Context, p *meshSwarmPeer) {
+	// Deferred FIRST so it runs LAST: Stop's join must not be released until
+	// the peer teardown below has also finished.
+	defer t.wg.Done()
 	defer t.unregisterPeerInstance(p)
 	log.Printf("[SWARM] readLoop: entry peer=%s streamID=%d", truncID(string(p.id)), p.stream.StreamID())
 

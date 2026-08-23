@@ -108,7 +108,7 @@ func (tr *TopologyRouter) RouteToNode(ctx context.Context, nodeID string) (aethe
 // Checks for a direct Grade A/B connection and returns a session if available.
 // Returns nil if no suitable direct connection exists (caller falls back).
 //
-// MESH-G05: despite the "existing session" name, this DIALS A FRESH transport
+// Despite the "existing session" name, this DIALS A FRESH transport
 // session on every call (RouteToNode → dialDirect → connMgr.dialWithProtocol) —
 // it does NOT return a pooled/reused session from the ConnectionManager's
 // session table. The CALLER MUST Close the returned Connection; treating it like
@@ -151,7 +151,7 @@ func (tr *TopologyRouter) dialDirect(ctx context.Context, nodeID string, proto P
 		tr.connMgr.mu.Unlock()
 		return nil, fmt.Errorf("peer %s not found in ConnectionManager", shortID(nodeID))
 	}
-	// Copy what we need under lock, then release. MESH-G06: the scalar fields are
+	// Copy what we need under lock, then release. : the scalar fields are
 	// a stable snapshot, but a bare `*peer` also aliases the shared addresses
 	// backing array (and the transports/drainedAt maps) that resync/scan mutate
 	// under m.mu. Deep-copy the addresses slice — the only shared store the dial

@@ -47,7 +47,7 @@ func TestSend_UnregisteredPeerErrorIsMatchableAndIdentifiesPeer(t *testing.T) {
 	}
 }
 
-// Broadcast previously returned nil unconditionally while discarding every
+// A Broadcast that returns nil unconditionally while discarding every
 // error. With no peers there is nothing to report, so nil is correct here —
 // this pins the empty case so the error-joining change cannot start inventing
 // failures for an idle transport.
