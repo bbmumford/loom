@@ -9,9 +9,9 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/bbmumford/whisper"
 	lad "github.com/bbmumford/ledger"
 	"github.com/bbmumford/ledger/cache"
+	"github.com/bbmumford/whisper"
 )
 
 // ladSnapshotCodec implements whisper.SnapshotCodec on top of the
