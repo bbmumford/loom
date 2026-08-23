@@ -23,11 +23,11 @@ import (
 // PeerRecord published roles intersect the local node's interest set.
 // "Interest" is decomposed into three independent signals:
 //
-//	  +1 carryAny     peer publishes ≥1 role → warm at least one session
-//	  +1 sameRegion   peer publishes ≥1 role AND is co-regional → intra-
-//	                  region dispatch path stays inside the region
-//	  +1 dispatchTgt  peer publishes ≥1 role we DON'T serve locally →
-//	                  unique remote capability, prioritise over redundancy
+//	+1 carryAny     peer publishes ≥1 role → warm at least one session
+//	+1 sameRegion   peer publishes ≥1 role AND is co-regional → intra-
+//	                region dispatch path stays inside the region
+//	+1 dispatchTgt  peer publishes ≥1 role we DON'T serve locally →
+//	                unique remote capability, prioritise over redundancy
 //
 // Each tier fires independently; bonuses stack so a same-region peer
 // holding a role nobody else co-regional has gets +3. The TargetConnections

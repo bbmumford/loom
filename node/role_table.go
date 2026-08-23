@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
+	lad "github.com/bbmumford/ledger"
 	"github.com/bbmumford/swarm"
 	swarmpb "github.com/bbmumford/swarm/proto/pb"
-	lad "github.com/bbmumford/ledger"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -131,9 +131,8 @@ func (t *RoleTable) All() map[string]lad.RoleRecord {
 
 // AllPeerInfo returns the richer per-peer projection (roles + edge_roles
 // + service_name + region + tags + grade) for every known peer. Topology
-// builders consume this so post-LAD cutover they can still surface
-// operator-facing identifiers (service / region) that the legacy reach
-// record used to carry in its Metadata map.
+// builders consume this to surface the operator-facing identifiers
+// (service / region) that no other record carries.
 func (t *RoleTable) AllPeerInfo() map[string]PeerInfo {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -177,11 +176,11 @@ func (t *RoleTable) PruneStale(cutoff time.Time) int {
 // WHY THIS EXISTS: a RoleTable entry has exactly one removal path — an inbound
 // tombstone on fleet.peer (see onRecord). There is no TTL and no expiry. So an
 // entry survives only two possible deaths: the owner's own graceful tombstone
-// (never emitted when a deploy destroys the machine) or an observer tombstone,
-// which until now was published solely by ConnectionManager.sweepZombieSessions
-// — a sweep over dead SESSIONS, structurally blind to a node this process never
-// held a session with. Every machine replaced by a deploy landed in exactly that
-// gap: unreachable by every removal path, immortal.
+// (never emitted when a deploy destroys the machine) or an observer tombstone.
+// One publisher of those is ConnectionManager.sweepZombieSessions — a sweep
+// over dead SESSIONS, structurally blind to a node this process never held a
+// session with. A machine replaced by a deploy falls in exactly that gap:
+// unreachable by every removal path.
 //
 // Measured on the live fleet: the LAD directory (which does have a TTL and a
 // liveness sweep) reported a clean 8 records while this table held 40 against 11
@@ -384,7 +383,7 @@ func peerRecordToInfo(pr *swarmpb.PeerRecord, nodeIDStr string) PeerInfo {
 		Tags:     make(map[string]string),
 		MaxGrade: int(pr.MaxGrade),
 	}
-	// MESH-G03: map IssuedAt==0 to the zero time, not 1970. time.Unix(0,0) is
+	// Map IssuedAt==0 to the zero time, not 1970. time.Unix(0,0) is
 	// 1970-01-01 — which is NOT time.Time{}.IsZero(), so the "zero IssuedAt is
 	// left alone" guards in onRecord / StaleNodes never fired and a peer
 	// publishing IssuedAt==0 was dropped as born-stale and never became routable.

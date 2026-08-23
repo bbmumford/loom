@@ -18,10 +18,10 @@ const (
 )
 
 var (
-	SessionGrade        = grade.SessionGrade
+	SessionGrade          = grade.SessionGrade
 	GradeFromCapabilities = grade.GradeFromCapabilities
-	ProtocolGrade       = grade.ProtocolGrade
-	MaxSupportedGrade   = grade.MaxSupportedGrade
+	ProtocolGrade         = grade.ProtocolGrade
+	MaxSupportedGrade     = grade.MaxSupportedGrade
 )
 
 type OperationClass = grade.OperationClass
