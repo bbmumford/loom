@@ -50,16 +50,16 @@ type Task struct {
 	OfferedAt   time.Time            `json:"offeredAt"`
 }
 
-// CloneForRetry duplicates the task for a retry attempt, bumping the attempt counter.
-func (t *Task) CloneForRetry() *Task {
+// Clone creates a deep copy of the task.
+//
+// Task contains slices and mutable lifecycle fields. Gateways use Clone at the
+// admission boundary so caller-owned memory cannot become scheduler-owned
+// state merely because the caller retained a pointer passed to Enqueue.
+func (t *Task) Clone() *Task {
 	if t == nil {
 		return nil
 	}
 	clone := *t
-	clone.Attempt = t.Attempt + 1
-	clone.Status = TaskStatusQueued
-	clone.EnqueuedAt = time.Time{}
-	clone.OfferedAt = time.Time{}
 	if t.Tags != nil {
 		clone.Tags = append([]string(nil), t.Tags...)
 	}
@@ -77,6 +77,19 @@ func (t *Task) CloneForRetry() *Task {
 		clone.Artifacts = dup
 	}
 	return &clone
+}
+
+// CloneForRetry duplicates the task for a retry attempt, bumping the attempt counter.
+func (t *Task) CloneForRetry() *Task {
+	clone := t.Clone()
+	if clone == nil {
+		return nil
+	}
+	clone.Attempt = t.Attempt + 1
+	clone.Status = TaskStatusQueued
+	clone.EnqueuedAt = time.Time{}
+	clone.OfferedAt = time.Time{}
+	return clone
 }
 
 // TaskOffer represents an offer broadcast from a gateway to potential executors.
