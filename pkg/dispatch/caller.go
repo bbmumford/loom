@@ -15,6 +15,7 @@ package dispatch
 
 import (
 	"context"
+	"errors"
 	"sync"
 )
 
@@ -24,6 +25,39 @@ import (
 type Caller interface {
 	Call(ctx context.Context, role, method string, payload []byte) ([]byte, error)
 	Close()
+}
+
+// ErrNoRouteToNode is returned by TargetedCaller.CallNode when the named node
+// cannot be reached. It is deliberately an ERROR and never a fallback: the
+// whole point of a targeted call is that reaching some OTHER node serving the
+// same role is a wrong answer, not a degraded one.
+var ErrNoRouteToNode = errors.New("dispatch: no route to target node")
+
+// TargetedCaller is an OPTIONAL capability a Caller may also implement: dispatch
+// to one NAMED node rather than to whichever node happens to serve a role.
+//
+// Why optional rather than a method on Caller: adding to Caller would break every
+// implementor. loom already uses optional-capability type assertion in this exact
+// shape elsewhere — ports.ScopeStamper on the auth validator (node/rpc.go), and
+// aether.TicketCapable / RelayCapable / TenantAwareSession / ConnProvider on
+// transports and sessions. A caller that does not implement TargetedCaller simply
+// cannot be targeted, and the rpc layer reports that rather than silently
+// downgrading to role dispatch.
+//
+// CONTRACT — this is the part that matters, and it is the opposite of the
+// role-addressed path's:
+//
+//   - Reaching nodeID, or an error. Never another node.
+//   - If nodeID is unreachable, return ErrNoRouteToNode. Do NOT fall back to
+//     role resolution, and do NOT return a response from a different peer.
+//
+// That constraint exists because the underlying transport primitive
+// (SessionFinder.CallViaBidi) reports "no bidi channel for this node" as an
+// ordinary (nil, false, nil) — a signal its existing callers correctly treat as
+// "take the untargeted arm". For placement-bound dispatch that fallback is
+// exactly the defect, so implementations MUST convert it into ErrNoRouteToNode.
+type TargetedCaller interface {
+	CallNode(ctx context.Context, nodeID, role, method string, payload []byte) ([]byte, error)
 }
 
 // ─── Global Caller Registry ─────────────────────────────────────────────────
