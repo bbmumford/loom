@@ -7,7 +7,13 @@ package ports
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
 	"net"
+	"strings"
+
+	"github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // This file holds the Config injection seams that replace the HSTLES
@@ -25,13 +31,11 @@ import (
 // metrics schema is unchanged.
 type MeshFallbackStatsFunc func() (hits, misses uint64)
 
-// TenantScope is the tenant-isolation level of a handler. It is an ALIAS of
-// string — the same underlying declaration as pkg/rpc/scope.TenantScope and
-// handlers.TenantScope — so SecureHandler is structurally satisfied by the
-// registry's handler metadata without any adaptation. Do not change this to
-// a defined type: that silently breaks the implicit interface conversion at
-// every ValidateExecutionAuth call site.
-type TenantScope = string
+// TenantScope is the tenant-isolation level of a handler. It aliases the one
+// canonical defined type in pkg/rpc/scope, so SecureHandler remains
+// structurally satisfied by registry metadata without permitting arbitrary
+// strings or creating a second scope identity.
+type TenantScope = scope.TenantScope
 
 // SecureHandler is the handler metadata surface AuthValidator judges.
 // It mirrors platform/security/helpers.SecureHandler method-for-method
@@ -63,6 +67,92 @@ type AuthValidator interface {
 
 	// WithTenantID stamps the tenant onto ctx for nested calls.
 	WithTenantID(ctx context.Context, tenantID string) context.Context
+}
+
+// TenantPrincipalReader is an OPTIONAL, read-only extension implemented by an
+// AuthValidator that can read the private tenant principal already established
+// by its authenticated transport, session, or authoritative store.
+//
+// It deliberately cannot stamp a tenant. The asynchronous task body carries a
+// mutable TenantID claim, so the executor may project only this private
+// principal into handler metadata and must never turn the body field into
+// authority by calling AuthValidator.WithTenantID.
+type TenantPrincipalReader interface {
+	ExecutionTenantID(ctx context.Context) (tenantID string, ok bool)
+}
+
+// ExecutionOwnerKey is an opaque, immutable and comparable identity used for
+// async admission, quota and completion ownership. Product adapters
+// canonicalize their realm/issuer, platform tenant, customer organisation,
+// principal kind, stable subject and visibility boundary into one string;
+// Loom retains only its SHA-256 digest and cannot reinterpret product
+// identity fields.
+type ExecutionOwnerKey struct {
+	digest [sha256.Size]byte
+}
+
+// NewExecutionOwnerKey seals a product-canonical owner identity. The input is
+// authority material: callers must build it from server-established identity,
+// never a task body, trigger spec, correlation handle or other mutable claim.
+func NewExecutionOwnerKey(canonical string) (ExecutionOwnerKey, error) {
+	if strings.TrimSpace(canonical) == "" {
+		return ExecutionOwnerKey{}, fmt.Errorf("execution owner canonical identity is empty")
+	}
+	return ExecutionOwnerKey{digest: sha256.Sum256([]byte(canonical))}, nil
+}
+
+// Valid reports whether the key was constructed from a nonempty canonical
+// identity.
+func (k ExecutionOwnerKey) Valid() bool {
+	return k != ExecutionOwnerKey{}
+}
+
+// Fingerprint returns the non-reversible digest used for diagnostics and
+// durable map keys. It does not reveal the product's canonical identity.
+func (k ExecutionOwnerKey) Fingerprint() string {
+	if !k.Valid() {
+		return ""
+	}
+	return hex.EncodeToString(k.digest[:])
+}
+
+// ExecutionPrincipal is the product-owned authority retained by an
+// asynchronous admission. OwnerKey is immutable identity; AuthorizeExecution
+// must re-establish product-private context and re-check any current,
+// revocable policy before execution. The returned release function holds that
+// exact authorization generation through the caller's complete dispatch
+// boundary. Callers MUST invoke it exactly once on every successful
+// authorization. Loom never derives identity or authority from task payload
+// fields.
+type ExecutionPrincipal interface {
+	OwnerKey() ExecutionOwnerKey
+	AuthorizeExecution(
+		ctx context.Context,
+	) (authorized context.Context, release func(), err error)
+}
+
+// ExecutionPrincipalReader is the read-only product seam used at admission
+// and after AuthorizeExecution. Implementations read a private context key
+// populated by authenticated transport/session or a product-owned service
+// root; they cannot derive a principal from mutable task data.
+type ExecutionPrincipalReader interface {
+	ExecutionPrincipal(ctx context.Context) (ExecutionPrincipal, bool)
+}
+
+// AuthenticatedPrincipalStamper is the preferred receive-side identity seam.
+// The RPC server calls it only after the typed wire principal's platform
+// tenant has matched the server-resolved transport ScopeID. Implementations
+// project that one immutable snapshot onto their private product context keys;
+// they must not consult RPCRequest.Context or merge caller fragments.
+//
+// It remains optional so products that have not adopted customer-organisation
+// authority fail closed at org/user scope rather than gaining authority from
+// the legacy mutable context map.
+type AuthenticatedPrincipalStamper interface {
+	WithAuthenticatedPrincipal(
+		ctx context.Context,
+		principal scope.AuthenticatedPrincipal,
+	) context.Context
 }
 
 // ScopeStamper is an OPTIONAL interface an injected AuthValidator MAY also
