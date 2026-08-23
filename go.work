@@ -1,0 +1,9 @@
+go 1.25.0
+
+// Local dev bridge: loom/go.mod pins swarm v0.0.8, but the Phase-0.5
+// swarm hardening (TrustCheck, RequireNodeKeyBinding, inbound gate) it needs
+// is unpublished in the ../swarm working tree. Resolve swarm locally until that
+// hardening is published and loom bumps its pin. Consumers replace both in
+// their own go.work (see io/go.work).
+use .
+use ../swarm
