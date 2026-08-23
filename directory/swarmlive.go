@@ -11,12 +11,12 @@ package directory
 import (
 	"context"
 	"crypto/ed25519"
-	"crypto/sha256"
-	"encoding/binary"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
+	"net"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -45,6 +45,15 @@ func LatencyTopic(from ports.NodeID) ports.Topic {
 	return ports.Topic(LatencyTopicPrefix + string(from))
 }
 
+// recordSlot is the raw-slot identity within a topic: (NodeID, Key), matching
+// swarm's own store keying. Key == "" is the classical single-slot-per-node
+// form. Keying these views by NodeID alone would silently drop every keyed
+// record a node holds beyond the first — see ports.Record.Key.
+type recordSlot struct {
+	NodeID ports.NodeID
+	Key    string
+}
+
 // SwarmDirectory is the Swarm-backed ports.LiveDirectory: immutable typed
 // projections fed by ONE accepted-record stream (Ingest), with every
 // accepted record journaled first — restart replays the journal through
@@ -62,13 +71,22 @@ type SwarmDirectory struct {
 	mu       sync.RWMutex
 	members  map[ports.NodeID]ports.Member
 	reach    map[ports.NodeID][]ports.ReachAddress
-	handlers map[string][]ports.HandlerAdvert            // FQN → adverts
+	handlers map[string][]ports.HandlerAdvert                      // FQN → adverts
 	latency  map[ports.NodeID]map[ports.NodeID]ports.LatencySample // from → to → sample
-	records  map[ports.Topic]map[ports.NodeID]ports.Record         // raw accepted slots
+	records  map[ports.Topic]map[recordSlot]ports.Record           // raw accepted slots
 	// liveness overrides (live-session signal wins over gossip staleness)
 	overrides map[ports.NodeID]livenessOverride
 
-	rejected uint64 // records refused by the pre-projection policy gate
+	// observe makes the policy gate count failures without dropping the
+	// record: Ingest still journals and projects it. This is the staged
+	// step before an enforcing gate — deploy with observe, watch Rejected()
+	// against Checked() for legitimate traffic, and only construct the
+	// enforcing directory once the ratio is zero. With no policy wired the
+	// flag is irrelevant (the gate is skipped entirely).
+	observe bool
+
+	checked  uint64 // records that reached the policy gate (0 when no policy)
+	rejected uint64 // gate failures: refused when enforcing, would-refuse when observing
 }
 
 type livenessOverride struct {
@@ -77,16 +95,34 @@ type livenessOverride struct {
 }
 
 // NewSwarmDirectory builds the projection over a journal and rebuilds state
-// by replaying it (crash/restart reproduces the live projection).
+// by replaying it (crash/restart reproduces the live projection). When policy
+// is non-nil the gate ENFORCES: a record that fails is dropped, never journaled
+// or projected. Pass nil to skip the gate entirely.
 func NewSwarmDirectory(ctx context.Context, j ports.DurableJournal, policy ports.TrustPolicy) (*SwarmDirectory, error) {
+	return newSwarmDirectory(ctx, j, policy, false)
+}
+
+// NewSwarmDirectoryObserving builds the projection with the policy gate in
+// OBSERVE mode: every record is checked and gate failures are counted + logged
+// (see Rejected / Checked), but the record is STILL journaled and projected.
+// This is the staged step that de-risks turning the fail-closed gate on across a
+// live fleet — a seeded-but-imperfect PolicyConfig would otherwise drop every
+// record whose topic it forgot to allow. Deploy this, confirm Rejected() stays
+// zero for legitimate traffic, then cut to the enforcing NewSwarmDirectory.
+func NewSwarmDirectoryObserving(ctx context.Context, j ports.DurableJournal, policy ports.TrustPolicy) (*SwarmDirectory, error) {
+	return newSwarmDirectory(ctx, j, policy, true)
+}
+
+func newSwarmDirectory(ctx context.Context, j ports.DurableJournal, policy ports.TrustPolicy, observe bool) (*SwarmDirectory, error) {
 	d := &SwarmDirectory{
 		journal:   j,
 		policy:    policy,
+		observe:   observe,
 		members:   map[ports.NodeID]ports.Member{},
 		reach:     map[ports.NodeID][]ports.ReachAddress{},
 		handlers:  map[string][]ports.HandlerAdvert{},
 		latency:   map[ports.NodeID]map[ports.NodeID]ports.LatencySample{},
-		records:   map[ports.Topic]map[ports.NodeID]ports.Record{},
+		records:   map[ports.Topic]map[recordSlot]ports.Record{},
 		overrides: map[ports.NodeID]livenessOverride{},
 	}
 	head, err := j.Head(ctx)
@@ -114,18 +150,23 @@ func (d *SwarmDirectory) Ingest(ctx context.Context, r ports.Record) error {
 	if d.policy != nil {
 		pr := ports.Principal{NodeID: r.NodeID, PubKey: ed25519.PublicKey(r.AuthorPubKey)}
 		if r.Observer != nil {
-			// Observer attestations are authored by the observer; the
-			// record's NodeID is the SUBJECT. Bind the author key to the
-			// observer identity carried in the Observer segment.
-			pr.NodeID = ports.NodeID(hex.EncodeToString(r.AuthorPubKey))
+			// Observer attestations are authored by the observer; the record's
+			// NodeID is the SUBJECT. Bind the author key to the observer's own
+			// NodeID under the SAME scheme VerifyNodeKey checks (canonicalNodeID
+			// = aether). Encoding it any other way makes VerifyNodeKey reject
+			// every legitimately-signed attestation, which under an enforcing
+			// gate silently drops death-tombstone and liveness observations. A
+			// wrong-length key leaves the subject NodeID in place, which the same
+			// VerifyNodeKey call then refuses on the key-size check.
+			if id, ok := canonicalNodeID(ed25519.PublicKey(r.AuthorPubKey)); ok {
+				pr.NodeID = ports.NodeID(id)
+			}
 		}
-		if err := d.policy.VerifyNodeKey(pr.NodeID, pr.PubKey); err != nil {
-			d.bumpRejected()
-			return fmt.Errorf("directory: ingest refused: %w", err)
-		}
-		if err := d.policy.AuthorizePublish(ctx, pr, r.Topic); err != nil {
-			d.bumpRejected()
-			return fmt.Errorf("directory: ingest refused: %w", err)
+		if refused := d.gate(ctx, pr, r.Topic); refused != nil {
+			// Enforcing: drop the record before it is journaled or projected.
+			// Observing: gate() has already counted + logged and returns nil,
+			// so the record falls through to journal + project below.
+			return refused
 		}
 	}
 	if _, err := d.journal.Append(ctx, r); err != nil {
@@ -135,17 +176,64 @@ func (d *SwarmDirectory) Ingest(ctx context.Context, r ports.Record) error {
 	return nil
 }
 
+// gate runs the pre-projection trust checks for principal pr publishing topic.
+// It counts every checked record and, on a check failure, counts a rejection.
+// When enforcing it returns the wrapped error so Ingest drops the record; when
+// observing it logs the would-reject and returns nil so the record still
+// projects — the mode difference lives ONLY here.
+func (d *SwarmDirectory) gate(ctx context.Context, pr ports.Principal, topic ports.Topic) error {
+	d.mu.Lock()
+	d.checked++
+	d.mu.Unlock()
+	if err := d.policy.VerifyNodeKey(pr.NodeID, pr.PubKey); err != nil {
+		return d.refuse("verify", topic, pr.NodeID, err)
+	}
+	if err := d.policy.AuthorizePublish(ctx, pr, topic); err != nil {
+		return d.refuse("publish", topic, pr.NodeID, err)
+	}
+	return nil
+}
+
+// refuse records a gate failure. In enforce mode it returns the wrapped error;
+// in observe mode it logs the would-reject (rate-limited) and returns nil so the
+// caller keeps the record. The rejected counter advances in BOTH modes so the
+// observe-mode ratio is the evidence for whether an enforcing cut is safe.
+func (d *SwarmDirectory) refuse(stage string, topic ports.Topic, id ports.NodeID, err error) error {
+	d.mu.Lock()
+	n := d.rejected + 1
+	d.rejected = n
+	d.mu.Unlock()
+	if !d.observe {
+		return fmt.Errorf("directory: ingest refused (%s): %w", stage, err)
+	}
+	if n <= 10 || n%100 == 0 {
+		log.Printf("[DIR-TRUST-observe] %s topic=%q node=%s: %v (would-reject #%d)",
+			stage, topic, short(id), err, n)
+	}
+	return nil
+}
+
+// bumpRejected advances the gate-failure counter without a policy check — used
+// by projection paths that reject a record for a non-policy reason.
 func (d *SwarmDirectory) bumpRejected() {
 	d.mu.Lock()
 	d.rejected++
 	d.mu.Unlock()
 }
 
-// Rejected reports how many records the pre-projection gate refused.
+// Rejected reports gate failures: records refused (enforce) or would-refuse
+// (observe). Read against Checked to judge whether an enforcing cut is safe.
 func (d *SwarmDirectory) Rejected() uint64 {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	return d.rejected
+}
+
+// Checked reports how many records reached the policy gate (0 with no policy).
+func (d *SwarmDirectory) Checked() uint64 {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	return d.checked
 }
 
 // project applies one accepted record to the typed views. Tombstones remove.
@@ -153,13 +241,16 @@ func (d *SwarmDirectory) project(r ports.Record) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	// Raw slot view (KeyOps/Quorum/secrets consumers).
+	// Raw slot view (KeyOps/Quorum/secrets consumers). Keyed by
+	// (NodeID, Key): a node may hold many records on one topic, and keying
+	// by NodeID alone would let its keyed records overwrite each other with
+	// last-writer-wins.
 	slots := d.records[r.Topic]
 	if slots == nil {
-		slots = map[ports.NodeID]ports.Record{}
+		slots = map[recordSlot]ports.Record{}
 		d.records[r.Topic] = slots
 	}
-	slots[r.NodeID] = r
+	slots[recordSlot{NodeID: r.NodeID, Key: r.Key}] = r
 
 	switch {
 	case r.Topic == FleetPeerTopic:
@@ -204,6 +295,13 @@ func (d *SwarmDirectory) projectPeerLocked(r ports.Record) {
 	}
 	if pr.Capabilities != nil {
 		m.Roles = append([]string(nil), pr.Capabilities.Roles...)
+		// ports.Member.Roles is contractually lexicographic (#R-1607 ④).
+		// Sorted HERE, at the write, rather than in Member()/Members() — the
+		// same idiom this file already uses for reach addresses (sorted by
+		// Priority immediately before the only store below), so the verbatim
+		// returns on the read side are correct rather than accidental, and
+		// the cost is paid once per projection instead of once per read.
+		sort.Strings(m.Roles)
 		for _, tag := range pr.Capabilities.Tags {
 			if i := strings.IndexByte(tag, '='); i > 0 {
 				k, v := tag[:i], tag[i+1:]
@@ -224,9 +322,23 @@ func (d *SwarmDirectory) projectPeerLocked(r ports.Record) {
 	for _, a := range pr.Addresses {
 		addrs = append(addrs, ports.ReachAddress{
 			Protocol: transportString(a.Transport),
-			Address:  fmt.Sprintf("%s:%d", a.Host, a.Port),
+			// net.JoinHostPort, NOT "%s:%d". An IPv6 literal must be
+			// bracketed or the result is not a dial string — and the fleet's
+			// private addresses are IPv6 (Fly 6PN, fdaa::/48), so the naive
+			// form produced "fdaa::7:41641" for exactly the addresses mesh
+			// peers use to reach each other. Found by comparing this
+			// projection against the independent LAD adapter, which had used
+			// JoinHostPort all along (ladlive.go Reach).
+			Address:  net.JoinHostPort(a.Host, strconv.Itoa(int(a.Port))),
 			Scope:    a.Scope,
 			Priority: transportPriority(a.Transport),
+			// Raw tier. Swarm's producer vocabulary IS the normalised one —
+			// the transport is an enum, so RawProtocol == Protocol here. That
+			// equality is correct and not a missing projection: only the LAD
+			// side has a second spelling to preserve.
+			RawProtocol: transportString(a.Transport),
+			Host:        a.Host,
+			Port:        int(a.Port),
 		})
 	}
 	sort.SliceStable(addrs, func(i, j int) bool { return addrs[i].Priority < addrs[j].Priority })
@@ -293,29 +405,69 @@ func transportPriority(t swarmpb.Address_Transport) int {
 
 // ---------- ports.LiveDirectory ----------
 
-func (d *SwarmDirectory) Members(_ context.Context) ([]ports.Member, error) {
+// Members filters by tenant. Before #R-1455 this returned EVERY tenant's
+// members regardless of the caller, which the tenant-implicit port could not
+// express — a cross-tenant leak the signature made invisible.
+func (d *SwarmDirectory) Members(_ context.Context, tenant ports.Tenant) ([]ports.Member, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	out := make([]ports.Member, 0, len(d.members))
 	for _, m := range d.members {
+		if ports.Tenant(m.Tenant) != tenant {
+			continue
+		}
 		out = append(out, cloneMember(m))
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
 	return out, nil
 }
 
-func (d *SwarmDirectory) Member(_ context.Context, id ports.NodeID) (ports.Member, bool, error) {
+func (d *SwarmDirectory) Member(_ context.Context, tenant ports.Tenant, id ports.NodeID) (ports.Member, bool, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	m, ok := d.members[id]
-	return cloneMember(m), ok, nil
+	if !ok || ports.Tenant(m.Tenant) != tenant {
+		return ports.Member{}, false, nil
+	}
+	return cloneMember(m), true, nil
 }
 
-func (d *SwarmDirectory) NodesByRole(_ context.Context, role string) ([]ports.NodeID, error) {
+// RoleAdverts implements ports.RoleEnumerator: every node advertising any
+// role, one entry per node.
+//
+// Swarm carries roles inside the peer record, so unlike the LAD side there is
+// no separate role record that could exist without a member — the projection
+// is the only source. Roles are already sorted at projection (#R-1607 ④); the
+// clone below preserves that and the result is ordered by NodeID so the two
+// implementations are comparable.
+func (d *SwarmDirectory) RoleAdverts(_ context.Context, tenant ports.Tenant) ([]ports.RoleAdvert, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]ports.RoleAdvert, 0, len(d.members))
+	for id, m := range d.members {
+		if ports.Tenant(m.Tenant) != tenant {
+			continue
+		}
+		if len(m.Roles) == 0 {
+			continue
+		}
+		out = append(out, ports.RoleAdvert{
+			NodeID: id,
+			Roles:  append([]string(nil), m.Roles...),
+		})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
+	return out, nil
+}
+
+func (d *SwarmDirectory) NodesByRole(_ context.Context, tenant ports.Tenant, role string) ([]ports.NodeID, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	var out []ports.NodeID
 	for id, m := range d.members {
+		if ports.Tenant(m.Tenant) != tenant {
+			continue
+		}
 		for _, r := range m.Roles {
 			if r == role {
 				out = append(out, id)
@@ -327,9 +479,12 @@ func (d *SwarmDirectory) NodesByRole(_ context.Context, role string) ([]ports.No
 	return out, nil
 }
 
-func (d *SwarmDirectory) Reach(_ context.Context, id ports.NodeID) ([]ports.ReachAddress, error) {
+func (d *SwarmDirectory) Reach(_ context.Context, tenant ports.Tenant, id ports.NodeID) ([]ports.ReachAddress, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
+	if m, ok := d.members[id]; ok && ports.Tenant(m.Tenant) != tenant {
+		return nil, nil
+	}
 	return append([]ports.ReachAddress(nil), d.reach[id]...), nil
 }
 
@@ -340,10 +495,30 @@ func (d *SwarmDirectory) Latency(_ context.Context, from, to ports.NodeID) (port
 	return s, ok, nil
 }
 
-func (d *SwarmDirectory) HandlersByName(_ context.Context, name string) ([]ports.HandlerAdvert, error) {
+func (d *SwarmDirectory) HandlersByName(_ context.Context, tenant ports.Tenant, name string) ([]ports.HandlerAdvert, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	return append([]ports.HandlerAdvert(nil), d.handlers[name]...), nil
+	var out []ports.HandlerAdvert
+	for _, a := range d.handlers[name] {
+		if m, ok := d.members[a.NodeID]; ok && ports.Tenant(m.Tenant) != tenant {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
+// HandlerFQNs implements HandlerEnumerator: the set of handler names this
+// directory currently indexes, for shadow-parity comparison-set building.
+func (d *SwarmDirectory) HandlerFQNs(_ context.Context, _ ports.Tenant) ([]string, error) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]string, 0, len(d.handlers))
+	for fqn := range d.handlers {
+		out = append(out, fqn)
+	}
+	sort.Strings(out)
+	return out, nil
 }
 
 func (d *SwarmDirectory) RecordsByTopic(_ context.Context, topic ports.Topic) ([]ports.Record, error) {
@@ -354,7 +529,7 @@ func (d *SwarmDirectory) RecordsByTopic(_ context.Context, topic ports.Topic) ([
 	for _, r := range slots {
 		out = append(out, r)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
+	sort.Slice(out, func(i, j int) bool { return lessSlot(out[i], out[j]) })
 	return out, nil
 }
 
@@ -399,7 +574,7 @@ func (d *SwarmDirectory) Snapshot(ctx context.Context) (ports.DirectorySnapshot,
 		if recs[i].Topic != recs[j].Topic {
 			return recs[i].Topic < recs[j].Topic
 		}
-		return recs[i].NodeID < recs[j].NodeID
+		return lessSlot(recs[i], recs[j])
 	})
 	return ports.DirectorySnapshot{
 		Watermark:   head,
@@ -421,7 +596,7 @@ func (d *SwarmDirectory) Fingerprint(_ context.Context) ([32]byte, error) {
 		if recs[i].Topic != recs[j].Topic {
 			return recs[i].Topic < recs[j].Topic
 		}
-		return recs[i].NodeID < recs[j].NodeID
+		return lessSlot(recs[i], recs[j])
 	})
 	return fingerprintRecords(recs), nil
 }
@@ -433,30 +608,27 @@ func (d *SwarmDirectory) Subscribe(ctx context.Context, topics []ports.Topic, fr
 	return d.journal.Replay(ctx, from, topics)
 }
 
-// fingerprintRecords hashes sorted (topic, nodeID, hlc, sha256(sig)) tuples
-// — the same shape as the swarm Merkle leaf, so two directories with the
-// same accepted set agree byte-for-byte.
-func fingerprintRecords(recs []ports.Record) [32]byte {
-	h := sha256.New()
-	for _, r := range recs {
-		th := sha256.Sum256([]byte(r.Topic))
-		h.Write(th[:])
-		nh := sha256.Sum256([]byte(r.NodeID))
-		h.Write(nh[:])
-		var hlcb [8]byte
-		binary.BigEndian.PutUint64(hlcb[:], uint64(r.HLC))
-		h.Write(hlcb[:])
-		sh := sha256.Sum256(r.Signature)
-		h.Write(sh[:])
-	}
-	var out [32]byte
-	copy(out[:], h.Sum(nil))
-	return out
-}
-
 func cloneMember(m ports.Member) ports.Member {
 	m.Roles = append([]string(nil), m.Roles...)
 	return m
 }
 
 var _ ports.LiveDirectory = (*SwarmDirectory)(nil)
+
+// lessSlot is the canonical record order within a topic: NodeID, then Key.
+//
+// 🛑 Key IS PART OF THE ORDER, not a nicety. With composite keys one node
+// holds several records on a topic, so ordering by NodeID alone leaves their
+// relative order to Go's map iteration — and Fingerprint() hashes this exact
+// sequence. A fingerprint that reorders run-to-run makes shadow parity
+// (§0.5.3 stage 3) fail at random, or worse, mask a real divergence behind
+// noise everyone learns to ignore.
+//
+// Members() deliberately does NOT use this: a member is per-node, so NodeID
+// alone is its full identity.
+func lessSlot(a, b ports.Record) bool {
+	if a.NodeID != b.NodeID {
+		return a.NodeID < b.NodeID
+	}
+	return a.Key < b.Key
+}

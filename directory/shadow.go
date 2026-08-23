@@ -9,6 +9,7 @@ import (
 	"context"
 	"fmt"
 	"sort"
+	"strconv"
 
 	"github.com/bbmumford/loom/ports"
 )
@@ -26,10 +27,28 @@ type ShadowReport struct {
 	ComparedRoles    int
 	ComparedReach    int
 	ComparedHandlers int
+	// Degraded names comparison axes that could not be performed at all —
+	// as opposed to axes that were performed and agreed. An axis lands here
+	// when a side cannot supply the input the axis needs (today: handler-FQN
+	// enumeration). Keeping it separate from Mismatches preserves the
+	// distinction between "the two sides disagree" and "this was never
+	// checked"; both fail the gate, for different reasons.
+	Degraded []string
 }
 
-// InParity reports whether the comparison found zero mismatches.
-func (r *ShadowReport) InParity() bool { return len(r.Mismatches) == 0 }
+// InParity reports whether the comparison found zero mismatches AND performed
+// every axis it set out to perform.
+//
+// A degraded axis fails the gate deliberately. The shadow phase compares the
+// Swarm directory against a DIFFERENT implementation, so "the other side
+// could not answer" is the expected shape of an unperformed check, not a rare
+// edge — and an unperformed check reporting parity is precisely the silent
+// pass §0.5.3 stage 3 forbids ("shadow mismatches are observable and fail the
+// phase gate; do not silently prefer one side"). An unlisted item is
+// unmeasured, not negative.
+func (r *ShadowReport) InParity() bool {
+	return len(r.Mismatches) == 0 && len(r.Degraded) == 0
+}
 
 func (r *ShadowReport) add(format string, args ...any) {
 	r.Mismatches = append(r.Mismatches, fmt.Sprintf(format, args...))
@@ -40,14 +59,14 @@ func (r *ShadowReport) add(format string, args ...any) {
 // tenant), per-node reach sets, and handler adverts for every FQN either
 // side knows. Ordering differences are normalized away; content differences
 // are mismatches.
-func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDirectory, roles []string) (*ShadowReport, error) {
+func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDirectory, tenant ports.Tenant, roles []string) (*ShadowReport, error) {
 	rep := &ShadowReport{}
 
-	aMembers, err := authoritative.Members(ctx)
+	aMembers, err := authoritative.Members(ctx, tenant)
 	if err != nil {
 		return nil, fmt.Errorf("shadow: authoritative members: %w", err)
 	}
-	sMembers, err := shadow.Members(ctx)
+	sMembers, err := shadow.Members(ctx, tenant)
 	if err != nil {
 		return nil, fmt.Errorf("shadow: shadow members: %w", err)
 	}
@@ -79,11 +98,11 @@ func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDir
 	// Role index parity.
 	for _, role := range roles {
 		rep.ComparedRoles++
-		aNodes, err := authoritative.NodesByRole(ctx, role)
+		aNodes, err := authoritative.NodesByRole(ctx, tenant, role)
 		if err != nil {
 			return nil, err
 		}
-		sNodes, err := shadow.NodesByRole(ctx, role)
+		sNodes, err := shadow.NodesByRole(ctx, tenant, role)
 		if err != nil {
 			return nil, err
 		}
@@ -95,11 +114,11 @@ func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDir
 	// Reach parity per member.
 	for id := range aByID {
 		rep.ComparedReach++
-		aReach, err := authoritative.Reach(ctx, id)
+		aReach, err := authoritative.Reach(ctx, tenant, id)
 		if err != nil {
 			return nil, err
 		}
-		sReach, err := shadow.Reach(ctx, id)
+		sReach, err := shadow.Reach(ctx, tenant, id)
 		if err != nil {
 			return nil, err
 		}
@@ -108,17 +127,20 @@ func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDir
 		}
 	}
 
-	// Handler-advert parity over the union of FQNs either side indexes.
-	// (The port has no FQN enumeration; SwarmDirectory sides expose their
-	// index, opaque sides contribute nothing and are covered by the
-	// member/role/fingerprint comparisons.)
-	for _, fqn := range collectHandlerFQNs(ctx, authoritative, shadow) {
+	// Handler-advert parity over the union of FQNs either side indexes. The
+	// port itself has no FQN enumeration — HandlersByName answers about a
+	// name you already hold — so the comparison set comes from the sides via
+	// the optional HandlerEnumerator capability. A side that cannot enumerate
+	// degrades the axis rather than shrinking it silently.
+	fqns, degraded := collectHandlerFQNs(ctx, tenant, authoritative, shadow)
+	rep.Degraded = append(rep.Degraded, degraded...)
+	for _, fqn := range fqns {
 		rep.ComparedHandlers++
-		aH, err := authoritative.HandlersByName(ctx, fqn)
+		aH, err := authoritative.HandlersByName(ctx, tenant, fqn)
 		if err != nil {
 			return nil, err
 		}
-		sH, err := shadow.HandlersByName(ctx, fqn)
+		sH, err := shadow.HandlersByName(ctx, tenant, fqn)
 		if err != nil {
 			return nil, err
 		}
@@ -131,9 +153,52 @@ func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDir
 	return rep, nil
 }
 
-// CompareFingerprints is the cheap continuous check between full parity
-// runs: two directories over the same accepted set must agree.
+// Record models. Two directories can only be compared record-for-record when
+// they represent the same facts with the same records.
+const (
+	// RecordModelSwarm: one signed record per (topic, node, key) slot, as
+	// published and gossiped by swarm.
+	RecordModelSwarm = "swarm"
+	// RecordModelLAD: LAD's typed records — a node's identity, roles and
+	// reachability are THREE records, projected onto one loom topic under
+	// distinct composite keys.
+	RecordModelLAD = "lad"
+)
+
+// RecordModeler is the optional capability declaring which raw-record model a
+// directory exposes. Implementations that do not declare one are treated as
+// RecordModelSwarm, which is the model ports.Record was written for.
+type RecordModeler interface {
+	RecordModel() string
+}
+
+// ErrRecordModelMismatch is returned when a record-level comparison is asked
+// of two directories that do not share a record model.
+var ErrRecordModelMismatch = fmt.Errorf("directory: record models differ — record-level comparison is not meaningful")
+
+// RecordModelOf reports a directory's declared record model.
+func RecordModelOf(d ports.LiveDirectory) string {
+	if m, ok := d.(RecordModeler); ok {
+		return m.RecordModel()
+	}
+	return RecordModelSwarm
+}
+
+// CompareFingerprints is the cheap continuous check between full parity runs:
+// two directories over the same accepted set must agree.
+//
+// 🛑 IT REFUSES A CROSS-MODEL PAIRING INSTEAD OF RETURNING false. The
+// fingerprint hashes raw records, so a LAD directory and a Swarm directory
+// holding IDENTICAL facts still disagree — LAD carries a node as three typed
+// records where swarm carries one. Returning a plain false there would hand a
+// lane a permanent, unfixable "divergence" during shadow mode, and the two
+// available responses to it are both wrong: chase a divergence that does not
+// exist, or weaken the comparator until it passes. Cross-implementation
+// parity is asserted on the TYPED projections via CompareDirectories.
 func CompareFingerprints(ctx context.Context, a, b ports.LiveDirectory) (bool, error) {
+	if ma, mb := RecordModelOf(a), RecordModelOf(b); ma != mb {
+		return false, fmt.Errorf("%w: %q vs %q — use CompareDirectories for typed parity", ErrRecordModelMismatch, ma, mb)
+	}
 	af, err := a.Fingerprint(ctx)
 	if err != nil {
 		return false, err
@@ -145,19 +210,45 @@ func CompareFingerprints(ctx context.Context, a, b ports.LiveDirectory) (bool, e
 	return af == bf, nil
 }
 
-// collectHandlerFQNs derives the FQN comparison set from both sides'
-// SwarmDirectory-style handler indices when available; falls back to
-// nothing for opaque implementations (callers then rely on member/role
-// parity + fingerprints).
-func collectHandlerFQNs(_ context.Context, sides ...ports.LiveDirectory) []string {
+// HandlerEnumerator is the optional capability a LiveDirectory implements so
+// the shadow comparator can build the handler-FQN comparison set. It is
+// deliberately NOT part of ports.LiveDirectory: enumerating every advertised
+// FQN is a parity-tooling need, not something Mesh consumers ask for, and
+// widening the port would oblige every future implementation to answer it.
+//
+// An implementation that cannot enumerate is legitimate; what is not
+// legitimate is letting its silence read as agreement. CompareDirectories
+// degrades the axis instead.
+type HandlerEnumerator interface {
+	HandlerFQNs(ctx context.Context, tenant ports.Tenant) ([]string, error)
+}
+
+// collectHandlerFQNs derives the FQN comparison set from the sides that can
+// enumerate, and names the sides that cannot. The second return value lists
+// degraded axes; a non-empty list fails InParity, because the alternative is
+// a handler comparison over an empty set reporting agreement.
+func collectHandlerFQNs(ctx context.Context, tenant ports.Tenant, sides ...ports.LiveDirectory) ([]string, []string) {
 	set := map[string]bool{}
-	for _, side := range sides {
-		if sd, ok := side.(*SwarmDirectory); ok {
-			sd.mu.RLock()
-			for fqn := range sd.handlers {
-				set[fqn] = true
-			}
-			sd.mu.RUnlock()
+	var degraded []string
+	for i, side := range sides {
+		name := "authoritative"
+		if i > 0 {
+			name = "shadow"
+		}
+		enum, ok := side.(HandlerEnumerator)
+		if !ok {
+			degraded = append(degraded, fmt.Sprintf(
+				"handlers: %s side (%T) cannot enumerate handler FQNs — axis not compared", name, side))
+			continue
+		}
+		fqns, err := enum.HandlerFQNs(ctx, tenant)
+		if err != nil {
+			degraded = append(degraded, fmt.Sprintf(
+				"handlers: %s side failed to enumerate handler FQNs: %v", name, err))
+			continue
+		}
+		for _, fqn := range fqns {
+			set[fqn] = true
 		}
 	}
 	out := make([]string, 0, len(set))
@@ -165,7 +256,7 @@ func collectHandlerFQNs(_ context.Context, sides ...ports.LiveDirectory) []strin
 		out = append(out, fqn)
 	}
 	sort.Strings(out)
-	return out
+	return out, degraded
 }
 
 func memberIndex(ms []ports.Member) map[ports.NodeID]ports.Member {
@@ -216,12 +307,37 @@ func nodeSetEqual(a, b []ports.NodeID) bool {
 	return true
 }
 
+// reachSetEqual compares the NORMALISED form only.
+//
+// 🛑 DO NOT ADD RawProtocol/Host/Port TO THIS KEY. The raw tier is the
+// PRODUCER's vocabulary by definition, and the two sides have different
+// producers: the reach layer says "udp" where swarm's enum says "noise-udp"
+// for the same logical address. Including it would make cross-implementation
+// parity permanently unachievable — the same category error as comparing
+// fingerprints across record models (see CompareFingerprints), and it would
+// fail in the direction that looks like a real divergence.
+//
+// Normalisation is exactly what makes the two comparable; that is its job
+// here, and carrying the raw form alongside is what keeps consumers from
+// having to bypass the port.
 func reachSetEqual(a, b []ports.ReachAddress) bool {
 	if len(a) != len(b) {
 		return false
 	}
+	// 🛑 Priority IS PART OF THE KEY, and its absence was a measured blind
+	// spot (#M-547). The two implementations derive the rank by different
+	// routes — SwarmDirectory from the Address_Transport enum, LADDirectory
+	// by normalising the reach layer's string — so they can disagree on the
+	// rank of an address they otherwise describe identically. Both then sort
+	// ascending on it, which means a disagreement here reorders the dial
+	// candidates while every other field matches.
+	//
+	// A set comparison cannot see order, so ranking is only observable if the
+	// rank itself is compared. Leaving it out let two directories that would
+	// dial a peer over DIFFERENT transports report full parity.
 	key := func(r ports.ReachAddress) string {
-		return r.Protocol + "|" + r.Address + "|" + r.Scope
+		return r.Protocol + "|" + r.Address + "|" + r.Scope + "|" +
+			strconv.Itoa(r.Priority)
 	}
 	as := make([]string, len(a))
 	bs := make([]string, len(b))
