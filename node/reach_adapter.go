@@ -40,6 +40,23 @@ func (rt *Runtime) SetRoles(roles []string) {
 	}
 }
 
+// SetCapabilityMetadata publishes a free-form k=v capability bag to peers.
+//
+// The bag rides the signed PeerRecord's `Capabilities.extras`, so it reaches
+// peers through the same authenticated channel as roles and addresses. Callers
+// use it to advertise measured node properties — chip inventory, resident
+// models, lane topology — that peers route on but that are not roles.
+//
+// 🔑 **Not roles.** A role is a promise to serve an RPC and `SelectPeer` acts
+// on it; encoding capability values as roles would make every advertised
+// number look like a servable endpoint. That distinction is why this is a
+// separate channel rather than more entries in the role list.
+func (rt *Runtime) SetCapabilityMetadata(metadata map[string]string) {
+	if rt.swarm != nil && rt.swarm.Publisher != nil {
+		rt.swarm.Publisher.SetCapabilityExtras(metadata)
+	}
+}
+
 // SetServiceName atomically updates the runtime's service name and
 // triggers an immediate signed re-publish. Rare — service name is
 // usually fixed at boot — but useful for A/B blue-green rename.

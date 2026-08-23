@@ -8,8 +8,20 @@ package node
 import (
 	"log"
 	"net"
+	"sort"
 
 	swarmpb "github.com/bbmumford/swarm/proto/pb"
+)
+
+// netInterfaces and interfaceAddrs are seams over net.Interfaces and
+// net.Interface.Addrs. Production always uses the real implementations;
+// they exist because every filter in enumerateLocalInterfaces is otherwise
+// verifiable only against whichever NICs the host running the tests happens
+// to have — which is to say, not verifiable at all. Overridden only by tests,
+// which restore them immediately.
+var (
+	netInterfaces  = net.Interfaces
+	interfaceAddrs = func(ifc net.Interface) ([]net.Addr, error) { return ifc.Addrs() }
 )
 
 // swarmpbAddressNoiseUDP isolates the proto enum value at one site so
@@ -24,10 +36,10 @@ func swarmpbAddressNoiseUDP() swarmpb.Address_Transport {
 // the host so a multi-homed node advertises every plausible private dial
 // target instead of just the one Platform.PrivateIP() reports.
 //
-// A node with multiple NICs (multiple 6PN families post-migration, dual
-// VPNs, a private LAN plus a Fly 6PN ULA, etc.) was previously reduced
-// to a single private address by the single Platform.PrivateIP() call.
-// Same-org peers that happened to share a different prefix saw no
+// A node with multiple NICs (several 6PN families, dual VPNs, a private LAN
+// plus a Fly 6PN ULA) is reduced to a single private address by a lone
+// Platform.PrivateIP() call. Same-org peers that happen to share a different
+// prefix then see no
 // reachable private candidate and degraded to the public anycast path
 // — which then hits the cross-region UDP unreliability the connection
 // log shows.
@@ -47,9 +59,14 @@ func swarmpbAddressNoiseUDP() swarmpb.Address_Transport {
 // Returns (host string, scope string) pairs. Scope is inferred via
 // scopeForHost so the same rules apply as the swarm-merge fallback:
 // 6PN ULA / RFC1918 / IPv6 ULA → "private"; everything else
-// → "public". Includes the platform-reported PrivateIP as a defensive
-// fallback when interface enumeration is unavailable (containerised
-// runtimes that hide the host's NICs).
+// → "public".
+//
+// This enumeration does NOT include the platform-reported PrivateIP. That
+// defensive fallback — for containerised runtimes that hide the host's
+// NICs — is emitted by the caller at swarm_integration.go:528-531, two
+// statements before it calls advertiseLocalInterfaces. Stated here because
+// the previous wording read as if this function supplied it, which would
+// make an enumeration failure look survivable from inside this file alone.
 type localInterfaceAddress struct {
 	Host  string
 	Scope string
@@ -63,7 +80,7 @@ type localInterfaceAddress struct {
 // On error (interface enumeration failed) returns nil; caller must fall
 // back to the platform-reported PrivateIP.
 func enumerateLocalInterfaces() []localInterfaceAddress {
-	ifaces, err := net.Interfaces()
+	ifaces, err := netInterfaces()
 	if err != nil {
 		return nil
 	}
@@ -76,7 +93,7 @@ func enumerateLocalInterfaces() []localInterfaceAddress {
 		if ifc.Flags&net.FlagLoopback != 0 {
 			continue
 		}
-		addrs, err := ifc.Addrs()
+		addrs, err := interfaceAddrs(ifc)
 		if err != nil {
 			continue
 		}
@@ -110,13 +127,27 @@ func enumerateLocalInterfaces() []localInterfaceAddress {
 			})
 		}
 	}
+	// The (scope, host) ordering this function's doc promises. Without it the
+	// slice carries whatever order the OS reported its interfaces in, which is
+	// not stable across calls — and since the advertised address list becomes
+	// the published PeerRecord, a reordering alone republishes the record and
+	// gossips a "change" that changed nothing. "private" sorts before "public",
+	// which also puts the same-fabric candidates first.
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Scope != out[j].Scope {
+			return out[i].Scope < out[j].Scope
+		}
+		return out[i].Host < out[j].Host
+	})
 	return out
 }
 
 // advertiseLocalInterfaces emits a noise-UDP candidate per interface
-// address discovered, plus the platform-reported PrivateIP as a defence
-// against enumeration failure (e.g. containerised runtimes that hide
-// host NICs). Idempotent — AdvertiseLocalAddress dedups by
+// address discovered. The platform-reported PrivateIP is advertised by the
+// caller (swarm_integration.go:528-531), not here — so if enumeration
+// returns nothing this function advertises nothing and logs nothing, and
+// the private candidate a peer needs comes from that separate call.
+// Idempotent — AdvertiseLocalAddress dedups by
 // {transport, host, port}, so calling this on every
 // advertiseSwarmListeners tick is safe. Skips when udpPort is zero
 // (no listener bound).

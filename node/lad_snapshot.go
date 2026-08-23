@@ -25,21 +25,21 @@
 // O(1), lock-free. The request path never touches the directory.
 //
 // Design properties:
-//   - Lock-free reads via atomic.Pointer[LADSnapshot]. Snapshots are
-//     immutable after publish.
-//   - Per-LAD-call timeout so one slow method (Reach, typically) doesn't
-//     drag down the others. Each method runs in parallel.
-//   - Warming state: the initial snapshot is published immediately with
-//     Warm=false so first-request handlers can distinguish "still loading"
-//     from "directory empty". After the first successful refresh,
-//     Warm=true.
-//   - Sticky-on-error semantics: if a refresh fails for a method, that
-//     method's slot retains the PREVIOUS snapshot's value rather than
-//     reverting to nil. This keeps observability working through transient
-//     directory blips. Errors per method are surfaced via Errors slice.
-//   - Self-reporting health: Snapshot() includes BuildDuration and a Warm
-//     flag, plus per-method age tracking so handlers can show staleness
-//     in the UI.
+// - Lock-free reads via atomic.Pointer[LADSnapshot]. Snapshots are
+// immutable after publish.
+// - Per-LAD-call timeout so one slow method (Reach, typically) doesn't
+// drag down the others. Each method runs in parallel.
+// - Warming state: the initial snapshot is published immediately with
+// Warm=false so first-request handlers can distinguish "still loading"
+// from "directory empty". After the first successful refresh,
+// Warm=true.
+// - Sticky-on-error semantics: if a refresh fails for a method, that
+// method's slot retains the PREVIOUS snapshot's value rather than
+// reverting to nil. This keeps observability working through transient
+// directory blips. Errors per method are surfaced via Errors slice.
+// - Self-reporting health: Snapshot() includes BuildDuration and a Warm
+// flag, plus per-method age tracking so handlers can show staleness
+// in the UI.
 package node
 
 import (
@@ -103,11 +103,11 @@ type LADSnapshotCacheConfig struct {
 
 // DefaultLADSnapshotCacheConfig returns sensible defaults: refresh every
 // 10s with a 3s per-method timeout. Tuning rationale:
-//   - 10s refresh is faster than the previous 30s evaluator tick — gives
-//     observability handlers fresher data without hammering the directory.
-//   - 3s per-method timeout is well above the typical p99 of these calls
-//     when the directory is warm (~50–200ms), but short enough that a
-//     stuck call doesn't delay the next refresh past one tick.
+// - 10s refresh is faster than the previous 30s evaluator tick — gives
+// observability handlers fresher data without hammering the directory.
+// - 3s per-method timeout is well above the typical p99 of these calls
+// when the directory is warm (~50–200ms), but short enough that a
+// stuck call doesn't delay the next refresh past one tick.
 func DefaultLADSnapshotCacheConfig() LADSnapshotCacheConfig {
 	return LADSnapshotCacheConfig{
 		RefreshInterval: 10 * time.Second,
@@ -356,7 +356,7 @@ func (c *LADSnapshotCache) refresh() {
 	}()
 
 	// Latency + GossipLiveness — the directory methods take no context, so we
-	// bound them ourselves (MESH-F09). Without a timeout, an internal-mutex stall
+	// bound them ourselves. Without a timeout, an internal-mutex stall
 	// here hangs wg.Wait() and stops ALL snapshot refreshes; and a transient
 	// empty return blanked the previous Latency/Liveness instead of staying
 	// sticky like the context-aware readers above.

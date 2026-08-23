@@ -9,9 +9,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/ORBTR/aether"
 	lad "github.com/bbmumford/ledger"
 	ladcache "github.com/bbmumford/ledger/cache"
-	"github.com/ORBTR/aether"
 	"github.com/bbmumford/loom/ports"
 )
 
@@ -32,10 +32,10 @@ type runtimeAdapter struct {
 	serviceName string
 }
 
-func (a *runtimeAdapter) NodeID() aether.NodeID                { return a.nodeID }
-func (a *runtimeAdapter) MeshMetrics() map[string]interface{}      { return a.vl1Metrics() }
-func (a *runtimeAdapter) Directory() DirectoryProvider             { return a.directory }
-func (a *runtimeAdapter) ServiceName() string                      { return a.serviceName }
+func (a *runtimeAdapter) NodeID() aether.NodeID               { return a.nodeID }
+func (a *runtimeAdapter) MeshMetrics() map[string]interface{} { return a.vl1Metrics() }
+func (a *runtimeAdapter) Directory() DirectoryProvider        { return a.directory }
+func (a *runtimeAdapter) ServiceName() string                 { return a.serviceName }
 
 // directoryCacheAdapter wraps *ladcache.DirectoryCache to satisfy DirectoryProvider.
 type directoryCacheAdapter struct {
