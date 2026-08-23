@@ -16,23 +16,23 @@ import (
 // "meshSessions has the entry" against "multipath manager exists" to
 // debug dispatch-failure paradoxes.
 type ConnMgrDiagnostics struct {
-	SelfNodeID         string                `json:"selfNodeId"`
-	SelfRegion         string                `json:"selfRegion"`
-	PeersCount         int                   `json:"peersCount"`
-	Peers              []DiagPeerInfo        `json:"peers"`
-	MeshSessionsCount  int                   `json:"meshSessionsCount"`
-	MeshSessions       []DiagSessionInfo     `json:"meshSessions"`
-	MultipathCount     int                   `json:"multipathCount"`
-	MultipathManagers  []DiagMultipathInfo   `json:"multipathManagers"`
-	BidiRPCsCount      int                   `json:"bidiRpcsCount"`
-	BidiRPCs           []string              `json:"bidiRpcs"`
-	ProvingSessions    int                   `json:"provingSessions"`
-	BudgetCurrent      int                   `json:"budgetCurrentTotal"`
-	BudgetMax          int                   `json:"budgetMaxTotal"`
-	GossipActiveCount  int                   `json:"gossipActiveCount"`
-	HasAddressTracker  bool                  `json:"hasAddressTracker"`
-	HasPeerStore       bool                  `json:"hasPeerStore"`
-	HasResumeStore     bool                  `json:"hasResumeStore"`
+	SelfNodeID        string              `json:"selfNodeId"`
+	SelfRegion        string              `json:"selfRegion"`
+	PeersCount        int                 `json:"peersCount"`
+	Peers             []DiagPeerInfo      `json:"peers"`
+	MeshSessionsCount int                 `json:"meshSessionsCount"`
+	MeshSessions      []DiagSessionInfo   `json:"meshSessions"`
+	MultipathCount    int                 `json:"multipathCount"`
+	MultipathManagers []DiagMultipathInfo `json:"multipathManagers"`
+	BidiRPCsCount     int                 `json:"bidiRpcsCount"`
+	BidiRPCs          []string            `json:"bidiRpcs"`
+	ProvingSessions   int                 `json:"provingSessions"`
+	BudgetCurrent     int                 `json:"budgetCurrentTotal"`
+	BudgetMax         int                 `json:"budgetMaxTotal"`
+	GossipActiveCount int                 `json:"gossipActiveCount"`
+	HasAddressTracker bool                `json:"hasAddressTracker"`
+	HasPeerStore      bool                `json:"hasPeerStore"`
+	HasResumeStore    bool                `json:"hasResumeStore"`
 }
 
 // DiagPeerInfo summarises one entry of the peers map.
@@ -138,11 +138,11 @@ func (m *ConnectionManager) Diagnostics() ConnMgrDiagnostics {
 	}
 	now := time.Now()
 	d := ConnMgrDiagnostics{
-		SelfNodeID:     m.selfID,
-		SelfRegion:     m.selfRegion,
+		SelfNodeID:        m.selfID,
+		SelfRegion:        m.selfRegion,
 		HasAddressTracker: m.addressTracker != nil,
-		HasPeerStore:   m.peerStore != nil,
-		HasResumeStore: m.resumeStore != nil,
+		HasPeerStore:      m.peerStore != nil,
+		HasResumeStore:    m.resumeStore != nil,
 	}
 
 	// Snapshot peers under m.mu (brief).

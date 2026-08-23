@@ -6,6 +6,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"time"
@@ -14,6 +15,48 @@ import (
 	"github.com/ORBTR/aether/multipath"
 	"github.com/ORBTR/aether/quality"
 )
+
+// errLocalDialState marks a dialWithProtocol failure that is evidence about
+// THIS NODE rather than about the peer: a transport that was never constructed,
+// an address table with no candidate, an unknown protocol. dialWithProtocol
+// wraps it into those returns so the recording sites can tell them apart from a
+// real reachability failure.
+//
+// The rule it enforces: a cooldown may be recorded only on evidence about the
+// PATH, never on this node's own state. Treating a local precondition such as
+// "QUIC transport not initialized" as a dial failure climbs the PEER's back-off
+// ladder and suppresses a reachable peer over a fact about us.
+var errLocalDialState = errors.New("dial precondition unmet on this node")
+
+// recordDialOutcome applies the correct back-off for a failed dial.
+//
+// A COOLDOWN MAY BE RECORDED ONLY ON EVIDENCE ABOUT THE PATH: repetition-gated,
+// or derived from an established session's behaviour. Never on one
+// undifferentiated error, and never on this node's own state.
+//
+// So there are three outcomes, not two:
+//
+// - local state -> record NOTHING. Not evidence about the peer at all.
+// - first errors -> flat stall cooldown. One dial error cannot distinguish a
+// dead path from transient loss, a cert rotation, or one bad resolver
+// answer; back off briefly and let the next scan re-probe.
+// - repeated -> the exponential dial-failure ladder, once the failure has
+// repeated stallTransientThreshold times on this (peer, proto).
+//
+// The repetition gate reuses walkerStalls via bumpConsecutiveStalls, which is
+// per-(peer, proto) and is cleared on success — see recordDialSuccess.
+func (m *ConnectionManager) recordDialOutcome(peerID string, proto Protocol, err error) {
+	if errors.Is(err, errLocalDialState) {
+		dbgPeers.Printf("%s: %s dial failed on a LOCAL precondition (%v) — no cooldown recorded, "+
+			"the peer is not implicated", truncID(peerID), proto, err)
+		return
+	}
+	if stalls := m.bumpConsecutiveStalls(peerID, proto); stalls >= stallTransientThreshold {
+		m.recordDialFailure(peerID, proto)
+		return
+	}
+	m.recordStallCooldown(peerID, proto)
+}
 
 // installEnsureKDialFn wires the per-peer multipath manager's EnsureK
 // reconnect loop with a DialFunc that adds an additional path to the
@@ -59,10 +102,9 @@ func (m *ConnectionManager) installEnsureKDialFn(mgr *multipath.Manager, nodeID 
 		Weights:     defaultQualityWeights(),
 	}
 	m.attachDialFn(mgr, nodeID, &cfg)
-	// L4 #8 fix: pass the runtime context (cancelled on shutdown) so
-	// EnsureK's internal goroutine exits cleanly. Previously
-	// context.Background() was used, leaving goroutines outliving the
-	// ConnectionManager teardown — risk of use-after-free on the half-
+	// Pass the runtime context (cancelled on shutdown) so EnsureK's internal
+	// goroutine exits cleanly. context.Background() here leaves goroutines
+	// outliving ConnectionManager teardown — a use-after-free risk on the half-
 	// torn-down map state, plus a benign goroutine leak.
 	ctx := m.rt.ctx
 	if ctx == nil {
@@ -79,14 +121,14 @@ func (m *ConnectionManager) installEnsureKDialFn(mgr *multipath.Manager, nodeID 
 // re-dialing a protocol that already has a session — instead it picks
 // the next protocol in protocolOrder that's missing.
 //
-// L4 #12 fix: the previous implementation used AllSessions() which
-// excludes PathDead. A transiently dead path's proto was missing from
-// the "already represented" set, so EnsureK would repeatedly re-dial
-// the same broken transport — racing the still-extant Dead-state Path
+// Built from every path INCLUDING PathDead. AllSessions() excludes dead paths,
+// so a transiently dead path's proto goes missing from the "already
+// represented" set and EnsureK re-dials the same broken transport, racing the
+// still-extant Dead-state Path
 // on the other side and producing fresh dedup races. Using
 // AllProtocolsRepresented lets EnsureK skip that protocol and pick
 // the next one instead. The dead path itself will be resurrected by
-// the manager's probe loop (Cascade A.3) when its session-level Ping
+// the manager's probe loop when its session-level Ping
 // confirms recovery.
 func pathProtos(mgr *multipath.Manager) map[Protocol]struct{} {
 	out := make(map[Protocol]struct{})
@@ -223,10 +265,8 @@ func (m *ConnectionManager) dialAdditionalPath(ctx context.Context, mgr *multipa
 	}
 	activeProtos := pathProtos(mgr)
 	// Snapshot dispatch grade so the proto-selection loop can require
-	// strict upgrades from the start (L1 #7 fix). Previously the loop
-	// picked the first missing+unsuppressed proto then bailed AFTER
-	// the dialWithProtocol call if the chosen proto wasn't a grade
-	// upgrade — a wasted iteration. Now we filter in the loop.
+	// strict upgrades from the start. Filtering after the dialWithProtocol call
+	// instead would spend a dial on a proto that is not a grade upgrade.
 	m.dispatchMu.RLock()
 	dispSnap, hasDispSnap := m.meshSessions[nodeID]
 	m.dispatchMu.RUnlock()
@@ -243,7 +283,7 @@ func (m *ConnectionManager) dialAdditionalPath(ctx context.Context, mgr *multipa
 		}
 		// tryDial consumes a probe slot — call only at the actual
 		// dial gate so probe allowances aren't wasted on observability
-		// peeks. Audit M12.
+		// peeks.
 		if !m.tryDial(peerNodeID, proto) {
 			continue
 		}
@@ -276,9 +316,9 @@ func (m *ConnectionManager) dialAdditionalPath(ctx context.Context, mgr *multipa
 	// that's the multipath value; same-grade duplication is not.
 	m.dispatchMu.RLock()
 	disp, hasDisp := m.meshSessions[nodeID]
-	// L3 #11: consult dedup-reject ONLY for the proto we're about to
-	// dial. The previous nodeID-keyed lookup blanket-blocked all
-	// protocols for 3 minutes when ANY proto had a recent reject.
+	// Consult dedup-reject ONLY for the proto about to be dialled. A
+	// nodeID-keyed lookup blanket-blocks every protocol for the cooldown window
+	// when any single proto has a recent reject.
 	dedupRejectedAt := m.dedupRejectAtFor(nodeID, mapProtocol(chosen).String())
 	m.dispatchMu.RUnlock()
 
@@ -308,7 +348,7 @@ func (m *ConnectionManager) dialAdditionalPath(ctx context.Context, mgr *multipa
 
 	dialedConn, err := m.dialWithProtocol(ctx, peer, chosen)
 	if err != nil {
-		m.recordDialFailure(peerNodeID, chosen)
+		m.recordDialOutcome(peerNodeID, chosen, err)
 		// A direct noise-UDP dial failed but the peer has a working
 		// (lower-grade) dispatch session we can signal over — attempt a
 		// coordinated hole-punch before giving up on noise-UDP. On
@@ -335,14 +375,14 @@ func (m *ConnectionManager) dialAdditionalPath(ctx context.Context, mgr *multipa
 		return nil, 0, "", fmt.Errorf("dialWithProtocol returned unexpected conn type")
 	}
 	serviceName := m.peerServiceName(nodeID)
-	// MESH-E01: bind the session lifecycle to the long-lived runtime ctx, NOT
+	// Bind the session lifecycle to the long-lived runtime ctx, NOT
 	// the DialFunc's `ctx`. `ctx` here is runEnsure's per-dial dialCtx, which is
 	// cancelled the instant this function returns — so the async
 	// DialAndAcceptMesh (which derives connCtx from it and opens every stream on
 	// it) got a dead context after registerMeshSession had already demoted the
 	// working primary, producing a ~15s install-then-teardown churn loop. The
 	// connectPeer/probeUpgrade dial sites already pass the long-lived ctx.
-	go m.rt.DialAndAcceptMesh(m.rt.ctx, baseConn.Conn, nodeID, peerRegion, chosen, bootstrapHost, serviceName, "")
+	go m.rt.DialAndAcceptMesh(m.rt.ctx, baseConn.Conn, nodeID, peerRegion, chosen, bootstrapHost, serviceName, "", dialBorrowsConnectingState)
 	log.Printf("[multipath-dial] %s: EnsureK dialed %s alive=%d (target watch)",
 		truncID(nodeID), chosen, mgr.PathCount())
 	return nil, 0, peerRegion, nil
@@ -398,17 +438,28 @@ func adaptiveKeepaliveInterval(s aether.Session) time.Duration {
 	return interval
 }
 
-// dialKeyFor returns the tracker key for a (peer, transport) tuple.
-// Centralised so every caller uses the exact same string format.
+// dialKeyFor derives the per-(peer, transport) key for the dial cooldown
+// ladder. Every cooldown read and write routes through here — dialIsSuppressed,
+// tryDial, recordDialFailure, recordStallCooldown and recordDialSuccess — so
+// the key space is symmetric by construction.
+//
+// 🔴 KEYED ON THE NODE PROTOCOL, NOT THE ADAPTER IT SELECTS. mapProtocol exists
+// to pick a transport adapter and deliberately folds ProtoTLS onto
+// aether.ProtoWebSocket because both ride the same reliable-stream adapter.
+// That is right for choosing an adapter and wrong for identity: keyed on the
+// adapter, a TLS bootstrap failure put WebSocket into cooldown for the same
+// peer and vice versa, so one broken transport suppressed dials on a transport
+// that had not failed. Protocol.String() is injective, so each dial path
+// carries its own back-off.
 func dialKeyFor(peerID string, proto Protocol) string {
-	return quality.Key(peerID, mapProtocol(proto).String())
+	return quality.Key(peerID, proto.String())
 }
 
 // dialIsSuppressed reports whether the (peer, transport) pair is in
 // dial cooldown right now. PURE PREDICATE — for observability,
 // dashboards, and dual-checks. Sites that are about to actually
 // attempt a dial must call tryDial instead, which consumes an
-// opportunistic-probe slot. Audit M12.
+// opportunistic-probe slot.
 func (m *ConnectionManager) dialIsSuppressed(peerID string, proto Protocol) bool {
 	if m.qualityTracker == nil {
 		return false
@@ -419,7 +470,7 @@ func (m *ConnectionManager) dialIsSuppressed(peerID string, proto Protocol) bool
 
 // tryDial returns true if the dialer should be allowed to attempt a
 // dial RIGHT NOW for (peerID, proto). Stamps the opportunistic-probe
-// timestamp when allowing through during a cooldown (L1 #6) — call
+// timestamp when allowing through during a cooldown — call
 // this exactly once at the start of a dial attempt; otherwise the
 // probe slot is wasted on a non-dialing check. Companion to
 // dialIsSuppressed (which is the pure predicate form).
@@ -477,6 +528,14 @@ func (m *ConnectionManager) recordStallCooldown(peerID string, proto Protocol) {
 // recordDialSuccess clears the failure counter and cooldown for the
 // (peer, transport) pair after a successful handshake.
 func (m *ConnectionManager) recordDialSuccess(peerID string, proto Protocol) {
+	// The repetition gate in recordDialOutcome counts CONSECUTIVE failures, so
+	// a success has to clear it or the gate latches: after enough cumulative
+	// failures over a peer's lifetime every subsequent single error would jump
+	// straight to the exponential ladder. Cleared here rather than only on a
+	// successful walker probe (upgrade_walker.go:423) because a completed dial
+	// is the same class of evidence — this transport reached this peer.
+	m.clearConsecutiveStalls(peerID, proto)
+
 	if m.qualityTracker == nil {
 		return
 	}
@@ -533,9 +592,9 @@ func adaptiveRPCTimeout(s aether.Session) time.Duration {
 // before declaring a probe dead — an honest path under transient loss
 // completes within that, a genuinely-broken path doesn't. The 15 s cap
 // gives jittery cross-region paths plenty of headroom before a single
-// ping is declared lost — a 1–2 s transient spike on a 250 ms-RTT path
-// with high jitter previously turned into a "ping failed" event, which
-// chained into the death policy. Documented CPU-steal events on
+// ping is declared lost. Without that headroom a 1–2 s transient spike on a
+// 250 ms-RTT path with high jitter turns into a "ping failed" event, which
+// chains into the death policy. Documented CPU-steal events on
 // shared-cpu fly machines can blackhole inbound packet processing for
 // 400 ms–1.2 s windows; the 15 s cap means a single such window will
 // not consume a strike. Paired with the path-aware death policy in
@@ -561,10 +620,9 @@ func adaptiveRPCTimeout(s aether.Session) time.Duration {
 // Health() has not yet been assigned is by definition uninitialised —
 // the keepalive loop in mesh_connection.go reads Health() once per
 // retry, and there is a tiny race window between session construction
-// and SetHealthMonitor. Treating that window as steady-state previously
-// used a 1 s timeout that killed every fresh noise-UDP session that
-// hit any transient jitter — exactly the failure mode the warmup
-// floor was added to prevent.
+// and SetHealthMonitor. Treating that window as steady-state applies a 1 s
+// timeout to it, which kills every fresh noise-UDP session that hits any
+// transient jitter — the failure mode the warmup floor exists to prevent.
 func adaptiveKeepaliveTimeout(s aether.Session, rto time.Duration) time.Duration {
 	const (
 		steadyFloor = 1 * time.Second

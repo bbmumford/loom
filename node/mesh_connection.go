@@ -11,15 +11,15 @@ import (
 	"log"
 	"time"
 
-	lad "github.com/bbmumford/ledger"
-	"github.com/bbmumford/loom/core/directory/gossip"
-	"github.com/bbmumford/loom/core/streams"
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/adapter"
 	aethercrypto "github.com/ORBTR/aether/crypto"
 	"github.com/ORBTR/aether/multipath"
 	"github.com/ORBTR/aether/quality"
 	"github.com/ORBTR/aether/resume"
+	lad "github.com/bbmumford/ledger"
+	"github.com/bbmumford/loom/core/directory/gossip"
+	"github.com/bbmumford/loom/core/streams"
 )
 
 // AcceptMeshConnectionOpts holds parameters for accepting an Aether connection.
@@ -74,6 +74,8 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 	// the entire connection table. Audit critical fix #4.
 	preComputedCrossOrigin := m.computeCrossOriginForNode(nodeID)
 
+	lifecycleMu := m.sessionLifecycleLock(nodeID)
+	lifecycleMu.Lock()
 	m.mu.Lock()
 	peer, peerExisted := m.peers[nodeID]
 	// previousProtocol must be snapshotted BEFORE either branch
@@ -93,11 +95,11 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 	}
 	if !peerExisted {
 		peer = &peerConn{
-			nodeID:        nodeID,
-			state:         PeerConnected,
-			protocol:     opts.Proto,
-			isMuxed:      true,
-			peerRegion:   opts.Region,
+			nodeID:     nodeID,
+			state:      PeerConnected,
+			protocol:   opts.Proto,
+			isMuxed:    true,
+			peerRegion: opts.Region,
 			// Use the precomputed result. If an entry was created
 			// between the Lock in computeCrossOriginForNode and
 			// this Lock (PEX populated the peer), the stored
@@ -140,10 +142,10 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 	peer.promoteGrade(tc.grade, now)
 	m.mu.Unlock()
 
-	// MESH-C07: honor Acquire's result. When over MaxTotal (a race past the
+	// Honour Acquire's result. When over MaxTotal (a race past the
 	// scanAndConnect CanConnect gate) Acquire returns false WITHOUT incrementing
-	// currentTotal. The old code ignored the return, yet every teardown path
-	// still called Release() — decrementing a slot that was never acquired, so
+	// currentTotal, while every teardown path still calls Release() — so
+	// ignoring the return decrements a slot that was never acquired, and
 	// currentTotal drifted below the true count until MaxTotal stopped being
 	// enforced. Keep the established session but gate every Release on this flag.
 	budgetAcquired := m.budget.Acquire()
@@ -207,11 +209,13 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 		if budgetAcquired { // MESH-C07: only release a slot we actually acquired
 			m.budget.Release()
 		}
+		lifecycleMu.Unlock()
 		return nil // session rejected — equal or lower grade than existing
 	}
 
 	// Register with multipath manager for failover tracking
 	m.addMultipathSession(nodeID, opts.Session, opts.Proto)
+	lifecycleMu.Unlock()
 
 	// Publish a Member record for the accepted peer so its service name +
 	// region reach our local LAD immediately. Without this, peers accepted
@@ -368,7 +372,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 		}
 		controlStream, err = opts.Session.OpenStream(connCtx, aether.StreamConfig{
 			StreamID: streams.StreamControl, Reliability: aether.ReliableOrdered, Priority: 240,
-			LatencyClass: aether.ClassREALTIME,
+			LatencyClass:  aether.ClassREALTIME,
 			InitialCredit: 64 * 1024, // 64 KB — control frames are small but can batch
 		})
 		if err != nil {
@@ -439,9 +443,9 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 	// Send 0-RTT resume token on the now-open control stream
 	if len(resumePayload) > 0 {
 		if err := controlStream.Send(connCtx, resumePayload); err != nil {
-			// MESH-C10: surface the failure instead of only logging success. A
-			// failed resume-token push is best-effort but was previously
-			// invisible, hiding a real control-stream send fault.
+			// Surface the failure, not only the success. A failed resume-token
+			// push is best-effort, but logging only the success hides a real
+			// control-stream send fault.
 			log.Printf("[AETHER] %s: failed to send 0-RTT resume token on control stream: %v", truncID(nodeID), err)
 		} else {
 			log.Printf("[AETHER] %s: sent 0-RTT resume token on control stream", truncID(nodeID))
@@ -945,18 +949,18 @@ cleanup:
 
 	// Track lifetime
 	m.mu.Lock()
-	// MESH-C05: measure THIS transport's lifetime from tc.connectedAt, not the
-	// peer-level lastConnectedAt (overwritten on every accept — so an older
-	// transport closing after a newer one was accepted read ~0 and got
-	// misclassified as a dedup race / chronic failure, corrupting the counters).
+	// Measure THIS transport's lifetime from tc.connectedAt, not the peer-level
+	// lastConnectedAt: that field is overwritten on every accept, so an older
+	// transport closing after a newer one was accepted reads ~0 and is
+	// misclassified as a dedup race or chronic failure, corrupting the counters.
 	lifetime := time.Since(peer.lastConnectedAt)
 	if tc != nil && !tc.connectedAt.IsZero() {
 		lifetime = time.Since(tc.connectedAt)
 	}
 	peer.lastConnLifetime = lifetime
-	// MESH-C06: a drain-initiated close is a voluntary scale-down, not a failure.
-	// Counting it as chronic / path failure inflated the peer's cooldown and
-	// drove exactly the reconnect churn the drain was meant to reduce.
+	// A drain-initiated close is a voluntary scale-down, not a failure. Counting
+	// it as a chronic path failure inflates the peer's cooldown and drives the
+	// reconnect churn the drain exists to reduce.
 	draining := tc != nil && tc.draining
 	// Sessions that die in under dedupRejectWindow are almost always the
 	// loser of a dedup race — both sides dialed simultaneously, each
@@ -1045,7 +1049,9 @@ cleanup:
 		// regression this rule prevents. Cap at the flat stall
 		// cooldown so retries stay frequent. AddressTracker history
 		// still penalises bad paths; the cap just keeps us trying.
-		sameRegionSameOrigin := m.isSameRegionSameOrigin(peer)
+		// *Locked: this block already holds m.mu, and sync.Mutex is not
+		// reentrant — the unlocked variant would self-deadlock.
+		sameRegionSameOrigin := m.isSameRegionSameOriginLocked(peer)
 		if stuckCt >= stallTransientThreshold && !(sameRegionSameOrigin && opts.Proto == ProtoNoiseUDP) {
 			m.recordDialFailure(nodeID, opts.Proto)
 			log.Printf("[AETHER] %s: session stuck on %s (grade %s, stuckCount=%d ≥ %d) — escalated to exponential dial-failure cooldown",
@@ -1099,7 +1105,7 @@ cleanup:
 	m.multipathMu.Lock()
 	if mgr, ok := m.multipathManagers[nodeID]; ok && mgr.PathCount() > 1 {
 		mgr.OnPrimaryFailure()
-		// OBS-18: count every primary-failure → promotion event regardless
+		// Count every primary-failure → promotion event regardless
 		// of whether a live standby was actually found (the manager still
 		// attempted a takeover and changed its internal primary index).
 		m.multipathFailoverTotal.Add(1)
@@ -1137,11 +1143,11 @@ cleanup:
 				// from GetMeshSession, so the next dispatch automatically
 				// uses the standby's bidi without an extra round-trip.
 				//
-				// The earlier `delete(m.bidiRPCs, nodeID)` here was a bug:
-				// with the old nodeID-keyed scheme it ALSO deleted the
-				// surviving session's bidi (whichever session registered
-				// last), so every RPC after failover paid one dynamic-
-				// stream-open RTT (~100 ms cross-region). Removing that
+				// A `delete(m.bidiRPCs, nodeID)` here would break failover:
+				// under a nodeID-keyed scheme it ALSO deletes the surviving
+				// session's bidi (whichever session registered last), making
+				// every RPC after failover pay one dynamic-stream-open RTT
+				// (~100 ms cross-region). Omitting it
 				// delete restores the bidi-fast-path through failover.
 				log.Printf("[AETHER] %s: multipath failover — promoted standby %s (grade %d) as primary",
 					truncID(nodeID), standby.Protocol(), SessionGrade(standby))
@@ -1178,10 +1184,10 @@ cleanup:
 	// and must not remove the live higher-grade session.
 	m.unregisterMeshSession(nodeID, opts.Session)
 
-	// MESH-E05: close our own session. cleanup cancels connCtx and unregisters
-	// dispatch/multipath/bidi but never closed opts.Session, so a session whose
-	// connCtx was cancelled while it was still healthy (e.g. a premature ctx
-	// cancel) was orphaned until aether's idle timeout reaped it — holding the
+	// Close our own session. cleanup cancels connCtx and unregisters
+	// dispatch/multipath/bidi but does not close opts.Session, so a session whose
+	// connCtx is cancelled while it is still healthy is orphaned until aether's
+	// idle timeout reaps it — holding the
 	// peer-side half open too. The failed-over path returned above (the standby
 	// owns liveness), so this only closes a session that is genuinely done.
 	if !opts.Session.IsClosed() {
@@ -1278,10 +1284,51 @@ type provingSession struct {
 	fromWalker bool
 }
 
+// completeProving is the body of the 60-second proving timer installed by
+// registerMeshSession's upgrade-promote branch: the new session survived its
+// window, so the old fallback can be closed and a walker-initiated upgrade
+// billed as durably successful.
+//
+// A named function rather than an inline time.AfterFunc closure, so it is
+// reachable from a test without waiting 60 seconds. Inlined, the
+// walkerProbesProvingSucceeded billing — half of the pair answering "did
+// walker probes produce DURABLE upgrades?" — cannot be exercised at all.
+//
+// Before closing the old session it re-checks that the new one is STILL the
+// dispatch entry. If a third upgrade has replaced it, the old may have been
+// reinstalled as a transient fallback by unregisterMeshSession's revert
+// branch, and closing it would clobber whichever session currently answers
+// RPC dispatch. The identity check `p == ps` does the same for the proving
+// entry itself.
+func (m *ConnectionManager) completeProving(nodeID string, ps *provingSession, old, session aether.Session) {
+	m.dispatchMu.Lock()
+	defer m.dispatchMu.Unlock()
+	p, ok := m.proving[nodeID]
+	if !ok || p != ps {
+		return
+	}
+	delete(m.proving, nodeID)
+	newStillCurrent := m.meshSessions[nodeID] == session
+	log.Printf("[AETHER] Proving complete for %s: %s → %s upgrade confirmed (newStillCurrent=%v)",
+		truncID(nodeID), old.Protocol(), session.Protocol(), newStillCurrent)
+	log.Printf("[DISPATCH-TRACE] proving complete: peer=%s oldProto=%s newProto=%s closingOld=%v newStillCurrent=%v",
+		truncID(nodeID), old.Protocol(), session.Protocol(), !old.IsClosed() && newStillCurrent, newStillCurrent)
+	if newStillCurrent && !old.IsClosed() {
+		go old.Close()
+	}
+	// Bill walker-initiated proving success only when the new session was
+	// still the dispatch entry at the moment proving completed. Anything else
+	// means a later upgrade already replaced this one and the outcome is owned
+	// by that later proving cycle.
+	if ps.fromWalker && newStillCurrent {
+		m.walkerProbesProvingSucceeded.Add(1)
+	}
+}
+
 // resetReconnectDelay collapses a peer's escalated reconnect backoff back to
 // the boot default. Called from observed-good signal sites (addTransport on
-// the peer side, registerMeshSession's success branches here) so a peer that
-// previously flapped up to maxCooldown returns to the small initial delay
+// the peer side, registerMeshSession's success branches here) so a peer whose
+// backoff has escalated to maxCooldown returns to the small initial delay
 // once a fresh session lands. Caller MUST NOT hold m.mu.
 func (m *ConnectionManager) resetReconnectDelay(nodeID string) {
 	m.mu.Lock()
@@ -1347,24 +1394,18 @@ func (m *ConnectionManager) registerMeshSession(ctx context.Context, nodeID stri
 			// FIN (eventually surfaced via keepalive), unregister-
 			// MeshSession runs and clears the slot. The dormant
 			// session is then promoted on the next reconnect.
-			if newGrade.CanCoexistWith(oldGrade) {
-				log.Printf("[AETHER] Accepting %s as dormant fallback for %s (existing %s, grade %d > %d)",
-					session.Protocol(), truncID(nodeID), old.Protocol(), oldGrade, newGrade)
-				log.Printf("[DISPATCH-TRACE] register exit: peer=%s decision=dormant-fallback newProto=%s oldProto=%s newGrade=%d oldGrade=%d meshSessions[peer]=%s",
-					truncID(nodeID), session.Protocol(), old.Protocol(), newGrade, oldGrade, "unchanged")
-				m.dispatchMu.Unlock()
-				m.resetReconnectDelay(nodeID)
-				return true
-			}
-			// Same grade types can't coexist — reject
-			log.Printf("[AETHER] Rejecting %s session for %s (existing %s, grade %d > %d)",
+			// A strictly lower grade ALWAYS coexists as a dormant
+			// fallback — there is no reject case here. The removed
+			// `CanCoexistWith` check was a tautology at this point
+			// (`newGrade < oldGrade` already implies they differ), so
+			// the rejection it guarded could never fire.
+			log.Printf("[AETHER] Accepting %s as dormant fallback for %s (existing %s, grade %d > %d)",
 				session.Protocol(), truncID(nodeID), old.Protocol(), oldGrade, newGrade)
-			log.Printf("[DISPATCH-TRACE] register exit: peer=%s decision=reject-cant-coexist newProto=%s oldProto=%s newGrade=%d oldGrade=%d closed=%v",
-				truncID(nodeID), session.Protocol(), old.Protocol(), newGrade, oldGrade, old.IsClosed())
-			m.recordDedupRejectLocked(nodeID, session.Protocol().String())
+			log.Printf("[DISPATCH-TRACE] register exit: peer=%s decision=dormant-fallback newProto=%s oldProto=%s newGrade=%d oldGrade=%d meshSessions[peer]=%s",
+				truncID(nodeID), session.Protocol(), old.Protocol(), newGrade, oldGrade, "unchanged")
 			m.dispatchMu.Unlock()
-			go session.Close()
-			return false
+			m.resetReconnectDelay(nodeID)
+			return true
 		}
 
 		if newGrade == oldGrade {
@@ -1551,35 +1592,7 @@ func (m *ConnectionManager) registerMeshSession(ctx context.Context, nodeID stri
 			fromWalker: fromWalker,
 		}
 		ps.timer = time.AfterFunc(60*time.Second, func() {
-			// Proving complete — new session survived 60s, close old.
-			// Before closing the old we verify the new is still the
-			// dispatch session. If the new has already been replaced
-			// by a third (newer) upgrade, the old may have been
-			// reinstalled as a transient fallback under the proving-
-			// revert branch of unregisterMeshSession; closing it
-			// then would clobber whichever live session currently
-			// answers RPC dispatch.
-			m.dispatchMu.Lock()
-			defer m.dispatchMu.Unlock()
-			if p, ok := m.proving[nodeID]; ok && p == ps {
-				delete(m.proving, nodeID)
-				newStillCurrent := m.meshSessions[nodeID] == session
-				log.Printf("[AETHER] Proving complete for %s: %s → %s upgrade confirmed (newStillCurrent=%v)",
-					truncID(nodeID), old.Protocol(), session.Protocol(), newStillCurrent)
-				log.Printf("[DISPATCH-TRACE] proving complete: peer=%s oldProto=%s newProto=%s closingOld=%v newStillCurrent=%v",
-					truncID(nodeID), old.Protocol(), session.Protocol(), !old.IsClosed() && newStillCurrent, newStillCurrent)
-				if newStillCurrent && !old.IsClosed() {
-					go old.Close()
-				}
-				// Bill walker-initiated proving success only when the
-				// new session was still the dispatch entry at the
-				// moment proving completed. Anything else means a
-				// later upgrade already replaced this one and the
-				// outcome is owned by that later proving cycle.
-				if ps.fromWalker && newStillCurrent {
-					m.walkerProbesProvingSucceeded.Add(1)
-				}
-			}
+			m.completeProving(nodeID, ps, old, session)
 		})
 		m.proving[nodeID] = ps
 	}
@@ -1610,23 +1623,6 @@ func (m *ConnectionManager) registerMeshSession(ctx context.Context, nodeID stri
 		truncID(nodeID), session.Protocol(), newGrade, isInitiator, len(m.meshSessions))
 	m.resetReconnectDelay(nodeID)
 	return true
-}
-
-// probeSessionAlive sends a short-timeout Ping to test whether an existing
-// session is still actually alive. Used to disambiguate the half-close case
-// where our keepalive hasn't fired yet. Returns true if the ping completes
-// within the deadline, false otherwise.
-//
-// Must be called with m.dispatchMu NOT held — Ping blocks on the session's
-// own scheduling which may need locks we'd otherwise conflict with.
-func (m *ConnectionManager) probeSessionAlive(ctx context.Context, s aether.Session) bool {
-	if s == nil || s.IsClosed() {
-		return false
-	}
-	probeCtx, cancel := context.WithTimeout(ctx, 1*time.Second)
-	defer cancel()
-	_, err := s.Ping(probeCtx)
-	return err == nil
 }
 
 // registerBidiRPC stores a BidiRPC channel for a session's Stream 1.
@@ -1671,24 +1667,28 @@ func (m *ConnectionManager) unregisterBidiForSession(sess aether.Session) {
 // the OLD WS session's deferred cleanup later called this function,
 // found the dispatch entry pointing at noise-UDP, and deleted it.
 //
-// Callers that genuinely intend to remove whatever is in the dispatch
-// entry (zombie sweep finding a closed session, test fixtures) pass
-// nil for expected and get the pre-guard behaviour.
-func (m *ConnectionManager) unregisterMeshSession(nodeID string, expected aether.Session) {
-	// MESH-C02: fire the session hook AFTER releasing dispatchMu. The installed
-	// hook runs UnregisterPeer / Router.Withdraw, which can re-enter
-	// GetMeshSession / GetBidiRPC (dispatchMu.RLock) and self-deadlock; even
-	// without re-entry, running it under the lock blocks every dispatch lookup
-	// mesh-wide behind the external callback. This defer is registered before
-	// the Unlock defer, so LIFO runs it after the lock is released — mirroring
-	// the register path, which already defers its hook outside the lock.
-	fireHook := false
-	defer func() {
-		if fireHook {
-			m.fireSessionHook(nodeID, nil, false)
-		}
-	}()
+// A nil expected value is still an identity: the zombie sweep can
+// snapshot an explicitly nil map slot. If registration replaces that
+// slot before cleanup runs, the replacement must survive just as it
+// would for any other stale session pointer.
+// unregisterMeshSession reports whether it removed the dispatch entry owned by
+// expected. Callers that perform peer-wide cleanup must honor the result:
+// false means a newer session owns the peer and none of that cleanup belongs to
+// this stale caller.
+func (m *ConnectionManager) unregisterMeshSession(nodeID string, expected aether.Session) bool {
+	removed := m.unregisterMeshSessionWithoutHook(nodeID, expected)
+	if removed {
+		// Fire after dispatchMu is released. The hook may re-enter dispatch.
+		m.fireSessionHook(nodeID, nil, false)
+	}
+	return removed
+}
 
+// unregisterMeshSessionWithoutHook performs only the dispatch mutation. The
+// zombie sweeper uses it while holding the per-peer lifecycle transaction and
+// fires the external hook after every downstream peer-wide cleanup completes.
+// Other callers should use unregisterMeshSession.
+func (m *ConnectionManager) unregisterMeshSessionWithoutHook(nodeID string, expected aether.Session) bool {
 	m.dispatchMu.Lock()
 	defer m.dispatchMu.Unlock()
 
@@ -1700,6 +1700,25 @@ func (m *ConnectionManager) unregisterMeshSession(nodeID string, expected aether
 	}
 	log.Printf("[DISPATCH-TRACE] unregister entry: peer=%s hadSession=%v hadProto=%s meshSessionsLen=%d proving=%v expected=%p",
 		truncID(nodeID), hadSession, hadProto, len(m.meshSessions), m.proving != nil && m.proving[nodeID] != nil, expected)
+
+	// Nil is the value captured from a present-but-empty zombie slot, not a
+	// wildcard. Registration may replace that slot after the sweep releases
+	// dispatchMu; refuse to delete either an absent entry or its live
+	// replacement. Non-nil ownership keeps the established proving semantics
+	// below unchanged.
+	if expected == nil {
+		current, present := m.meshSessions[nodeID]
+		if !present || current != nil {
+			m.unregisterSkippedNotOwner.Add(1)
+			currentProto := ""
+			if current != nil {
+				currentProto = current.Protocol().String()
+			}
+			log.Printf("[DISPATCH-TRACE] unregister exit: peer=%s decision=skipped-nil-not-owner currentProto=%s meshSessionsLen=%d",
+				truncID(nodeID), currentProto, len(m.meshSessions))
+			return false
+		}
+	}
 
 	// If the dying session is the proving new session, revert to the old
 	// session instead of removing the peer entry entirely. The proving
@@ -1716,7 +1735,7 @@ func (m *ConnectionManager) unregisterMeshSession(nodeID string, expected aether
 				m.unregisterSkippedNotOwner.Add(1)
 				log.Printf("[DISPATCH-TRACE] unregister exit: peer=%s decision=skipped-proving-mismatch expectedProto=%s",
 					truncID(nodeID), expected.Protocol())
-				return
+				return false
 			}
 			if current == ps.newSession && !ps.oldSession.IsClosed() {
 				// New session died during proving — revert to old
@@ -1746,7 +1765,7 @@ func (m *ConnectionManager) unregisterMeshSession(nodeID string, expected aether
 					truncID(nodeID), ps.oldSession.Protocol(), SessionGrade(ps.oldSession))
 				log.Printf("[DISPATCH-TRACE] unregister exit: peer=%s decision=reverted-to-proving-old oldProto=%s",
 					truncID(nodeID), ps.oldSession.Protocol())
-				return
+				return false
 			}
 			// Old session died during proving — that's fine, just clean up
 			ps.timer.Stop()
@@ -1759,12 +1778,30 @@ func (m *ConnectionManager) unregisterMeshSession(nodeID string, expected aether
 	// dispatch if the current entry IS that session. Otherwise a newer
 	// session has installed itself and this cleanup is obsolete.
 	if expected != nil {
-		current := m.meshSessions[nodeID]
-		if current != nil && current != expected {
+		current, present := m.meshSessions[nodeID]
+		// Presence is checked here for the same reason the nil-expected guard
+		// above checks it. Without it an ABSENT entry yields current == nil, the
+		// ownership comparison is skipped, and the teardown below runs anyway:
+		// the delete is a no-op but unregisterDeleted counts a removal that did
+		// not happen, clearDedupRejectAllForPeer drops the peer's dial back-off,
+		// and the true return makes unregisterMeshSession fire a disconnect hook
+		// for a session that was not there. Two concurrent teardowns for one peer
+		// reach exactly this state — the second finds the entry already gone.
+		//
+		// A present-but-nil slot is still deletable: that is the zombie slot the
+		// sweeper is meant to clear, and only a genuinely missing key is refused.
+		if !present || (current != nil && current != expected) {
 			m.unregisterSkippedNotOwner.Add(1)
+			// current is nil on the absent-entry refusal, so its protocol is
+			// read conditionally — the same shape the nil-expected guard above
+			// uses for the same reason.
+			currentProto := ""
+			if current != nil {
+				currentProto = current.Protocol().String()
+			}
 			log.Printf("[DISPATCH-TRACE] unregister exit: peer=%s decision=skipped-not-owner expectedProto=%s currentProto=%s meshSessionsLen=%d",
-				truncID(nodeID), expected.Protocol(), current.Protocol(), len(m.meshSessions))
-			return
+				truncID(nodeID), expected.Protocol(), currentProto, len(m.meshSessions))
+			return false
 		}
 	}
 
@@ -1774,7 +1811,6 @@ func (m *ConnectionManager) unregisterMeshSession(nodeID string, expected aether
 		delete(m.meshSessions, nodeID)
 	}
 	m.unregisterDeleted.Add(1)
-	fireHook = true // MESH-C02: fired by the deferred closure after dispatchMu unlocks
 	if m.meshSessionInitiators != nil {
 		delete(m.meshSessionInitiators, nodeID)
 	}
@@ -1793,6 +1829,7 @@ func (m *ConnectionManager) unregisterMeshSession(nodeID string, expected aether
 	// from the dying session's own cleanup path (see AcceptMeshConnection
 	// cleanup label). No nodeID-keyed bidi to delete here.
 	log.Printf("[DISPATCH-TRACE] unregister exit: peer=%s decision=removed meshSessionsLen=%d", truncID(nodeID), len(m.meshSessions))
+	return true
 }
 
 // GetBidiRPC returns the bidirectional RPC channel for the currently
@@ -1963,11 +2000,10 @@ func (m *ConnectionManager) GetAllMeshSessions(nodeID string) []aether.Session {
 // for mesh forwarding. Used by AetherCaller for forwarding dispatch
 // (Path 3).
 //
-// Cascade F fix (L3 #14): the previous implementation iterated
-// m.meshSessions (a Go map) and returned the first non-closed entry.
-// Go's map iteration is non-deterministic, so a cross-region anchor
-// Grade-C session could win over a same-region peer Grade-A session
-// on one call and lose on the next — chronic high-latency forwarding
+// Deterministic by construction. Iterating m.meshSessions and returning the
+// first non-closed entry is not: Go randomises map order, so a cross-region
+// anchor Grade-C session wins over a same-region peer Grade-A session on one
+// call and loses on the next — chronic high-latency forwarding
 // hops for blind-relay traffic. Now we scan all sessions and prefer
 // the highest grade.
 func (m *ConnectionManager) GetAnyMeshSession() (aether.Session, bool) {
@@ -2149,14 +2185,14 @@ func (m *ConnectionManager) MeshSessionCount() int {
 
 // MeshSessionMetrics holds per-session monitoring data for the mesh-debug endpoint.
 type MeshSessionMetrics struct {
-	NodeID       string                `json:"nodeID"`
-	Protocol     string                `json:"protocol"`
-	RTT          time.Duration         `json:"rtt"`
-	CWND         int64                 `json:"cwnd"`
-	ActiveStreams int                   `json:"activeStreams"`
-	BytesSent    uint64                `json:"bytesSent"`
-	BytesRecv    uint64                `json:"bytesRecv"`
-	IsAether        bool                  `json:"isAether"`
+	NodeID        string        `json:"nodeID"`
+	Protocol      string        `json:"protocol"`
+	RTT           time.Duration `json:"rtt"`
+	CWND          int64         `json:"cwnd"`
+	ActiveStreams int           `json:"activeStreams"`
+	BytesSent     uint64        `json:"bytesSent"`
+	BytesRecv     uint64        `json:"bytesRecv"`
+	IsAether      bool          `json:"isAether"`
 }
 
 // MeshMetrics returns monitoring data for all active Aether sessions.
@@ -2175,14 +2211,14 @@ func (m *ConnectionManager) SessionMetrics() []MeshSessionMetrics {
 		}
 		sm := session.Metrics()
 		metrics = append(metrics, MeshSessionMetrics{
-			NodeID:       nodeID,
-			Protocol:     session.Protocol().String(),
-			RTT:          sm.RTT,
-			CWND:         sm.CWND,
+			NodeID:        nodeID,
+			Protocol:      session.Protocol().String(),
+			RTT:           sm.RTT,
+			CWND:          sm.CWND,
 			ActiveStreams: sm.ActiveStreams,
-			BytesSent:    sm.BytesSent,
-			BytesRecv:    sm.BytesRecv,
-			IsAether:        true,
+			BytesSent:     sm.BytesSent,
+			BytesRecv:     sm.BytesRecv,
+			IsAether:      true,
 		})
 	}
 	return metrics

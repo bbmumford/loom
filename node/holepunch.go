@@ -3,7 +3,7 @@
  * Queries: licensing@hstles.com
  */
 
-// Coordinated NAT hole-punch signaling (Phase 2, fleet NAT traversal).
+// Coordinated NAT hole-punch signaling for fleet NAT traversal.
 //
 // punchCoordinator is the signaling core: an initiator builds a signed
 // PunchRequest, the target validates it and replies with a signed
@@ -207,13 +207,15 @@ type holepunchRPCHandler struct {
 	probe nat.ProbeFunc
 }
 
-func (h *holepunchRPCHandler) Name() string                      { return holepunchRPCHandlerName }
-func (h *holepunchRPCHandler) Role() string                      { return "system" }
-func (h *holepunchRPCHandler) RequiresAuth() bool                { return false }
-func (h *holepunchRPCHandler) AllowedAuthTypes() []string        { return nil }
-func (h *holepunchRPCHandler) Scopes() []string                  { return nil }
-func (h *holepunchRPCHandler) TenantScope() handlers.TenantScope { return "" }
-func (h *holepunchRPCHandler) AllowedTenants() []string          { return nil }
+func (h *holepunchRPCHandler) Name() string               { return holepunchRPCHandlerName }
+func (h *holepunchRPCHandler) Role() string               { return "system" }
+func (h *holepunchRPCHandler) RequiresAuth() bool         { return false }
+func (h *holepunchRPCHandler) AllowedAuthTypes() []string { return nil }
+func (h *holepunchRPCHandler) Scopes() []string           { return nil }
+func (h *holepunchRPCHandler) TenantScope() handlers.TenantScope {
+	return handlers.TenantScopeNone
+}
+func (h *holepunchRPCHandler) AllowedTenants() []string { return nil }
 
 // punchProbeWindow bounds the responder-side probe goroutine: it must
 // outlast the wait-until-T0 plus the probe burst, but not linger.
@@ -310,11 +312,11 @@ func (m *ConnectionManager) attemptHolePunch(ctx context.Context, nodeID, peerRe
 	m.mu.Unlock()
 
 	serviceName := m.peerServiceName(nodeID)
-	// MESH-E02: bind the session to the long-lived runtime ctx, not the
+	// Bind the session to the long-lived runtime ctx, not the
 	// ephemeral dial ctx (which runEnsure cancels the instant attemptHolePunch
 	// returns) — otherwise the freshly hole-punched path is torn down at its
 	// first OpenStream, silently defeating coordinated NAT traversal. See E01.
-	go m.rt.DialAndAcceptMesh(m.rt.ctx, baseConn.Conn, nodeID, peerRegion, ProtoNoiseUDP, bootstrapHost, serviceName, "")
+	go m.rt.DialAndAcceptMesh(m.rt.ctx, baseConn.Conn, nodeID, peerRegion, ProtoNoiseUDP, bootstrapHost, serviceName, "", dialBorrowsConnectingState)
 	log.Printf("[multipath-dial] %s: hole-punch established noise-UDP path", truncID(nodeID))
 	return true
 }

@@ -47,29 +47,43 @@ type DrainEntry struct {
 // it hands the connection to DrainManager instead of abruptly closing it.
 type DrainManager struct {
 	mu       sync.Mutex
-	entries  map[string]*DrainEntry             // key: peerNodeID+transport
-	timeout  time.Duration                      // max time to wait for in-flight to finish
-	onClosed func(peerNodeID, transport string) // callback when drain completes
+	entries  map[string]*DrainEntry                                  // key: peerNodeID+transport
+	timeout  time.Duration                                           // max time to wait for in-flight to finish
+	onClosed func(peerNodeID, transport string, startedAt time.Time) // callback when drain completes
+
+	// stopCh is closed by Stop. monitorDrain selects on it so a drain in its
+	// grace window abandons the close instead of firing onClosed after the
+	// owning ConnectionManager has torn down. wg tracks the monitors so Stop
+	// can wait for them rather than leaving the callback racing shutdown.
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 }
 
 // DrainTimeout is the maximum time to wait for in-flight operations during drain.
 const DrainTimeout = 30 * time.Second
 
 // drainGracePeriod is how long a drained connection stays open before the force
-// close, giving in-flight gossip exchanges and RPCs a window to finish. MESH-C04:
-// DrainEntry.InFlightOps was never incremented anywhere (DecrementInFlight has
-// zero callers), so the old 1s poll saw 0 on its first tick and force-closed
-// almost immediately — aborting in-flight work and never engaging DrainTimeout.
-// Per-op in-flight accounting is not wired through the gossip/RPC paths, so this
-// is honestly a best-effort fixed grace window, not true quiescence tracking.
+// close, giving in-flight gossip exchanges and RPCs a window to finish.
+// DrainEntry.InFlightOps is never incremented anywhere and DecrementInFlight
+// has zero callers, so a poll that waits on it reads 0 on its first tick and
+// force-closes almost immediately, aborting in-flight work and never engaging
+// DrainTimeout. Per-op in-flight accounting is not wired through the
+// gossip/RPC paths, so this is a best-effort fixed grace window rather than
+// true quiescence tracking.
 const drainGracePeriod = 5 * time.Second
 
 // NewDrainManager creates a drain manager.
-func NewDrainManager(onClosed func(peerNodeID, transport string)) *DrainManager {
+// NewDrainManager creates a drain manager. onClosed receives the moment the
+// drain began so it can tell the transport it was asked to close from a
+// replacement that arrived during the grace window — the two are otherwise
+// indistinguishable, since both are keyed only by (peer, transport).
+func NewDrainManager(onClosed func(peerNodeID, transport string, startedAt time.Time)) *DrainManager {
 	return &DrainManager{
 		entries:  make(map[string]*DrainEntry),
 		timeout:  DrainTimeout,
 		onClosed: onClosed,
+		stopCh:   make(chan struct{}),
 	}
 }
 
@@ -78,9 +92,20 @@ func drainKey(peerNodeID, transport string) string {
 	return peerNodeID + "::" + transport
 }
 
-// StartDrain initiates graceful draining of a connection.
-// The connection stops accepting new gossip exchanges and waits for in-flight
-// operations to complete (up to DrainTimeout).
+// StartDrain initiates graceful draining of a connection: the connection is
+// held open for a fixed best-effort grace window and then force-closed via the
+// onClosed callback.
+//
+// It does NOT wait for in-flight operations, and it does not use DrainTimeout.
+// drainGracePeriod replaces an in-flight poll because
+// InFlightOps is never incremented anywhere, so the poll saw 0 on its first
+// tick and closed almost immediately; monitorDrain now waits
+// min(dm.timeout, drainGracePeriod), which is 5s for every manager built by
+// NewDrainManager. DrainTimeout survives as the field's initial value and has
+// no effect while it exceeds drainGracePeriod.
+//
+// This does not provide in-flight quiescence up to DrainTimeout. The accurate
+// account of what it does provide lives on drainGracePeriod.
 func (dm *DrainManager) StartDrain(peerNodeID, transport, reason string) {
 	dm.mu.Lock()
 	defer dm.mu.Unlock()
@@ -102,22 +127,34 @@ func (dm *DrainManager) StartDrain(peerNodeID, transport, reason string) {
 	log.Printf("[DRAIN] Started draining %s connection to %s (reason: %s)",
 		transport, truncID(peerNodeID), reason)
 
-	// Monitor the drain in a goroutine
+	// Monitor the drain in a goroutine, tracked so Stop can drain it.
+	dm.wg.Add(1)
 	go dm.monitorDrain(key, entry)
 }
 
 // monitorDrain keeps the connection open for a best-effort grace period so
-// in-flight gossip/RPC can finish, then force-closes it. MESH-C04: see
+// in-flight gossip/RPC can finish, then force-closes it. See
 // drainGracePeriod — the previous in-flight poll was inert and closed in ~1s.
 func (dm *DrainManager) monitorDrain(key string, entry *DrainEntry) {
 	grace := dm.timeout
 	if drainGracePeriod < grace {
 		grace = drainGracePeriod
 	}
+	defer dm.wg.Done()
 	timer := time.NewTimer(grace)
 	defer timer.Stop()
 
-	<-timer.C
+	select {
+	case <-timer.C:
+	case <-dm.stopCh:
+		// Shutdown beat the grace window. onClosed reaches back into the
+		// ConnectionManager to release a budget slot and cancel peer gossip;
+		// invoking it now would touch state shutdown is already tearing down,
+		// up to a full grace period after Shutdown returned.
+		log.Printf("[DRAIN] Stopped before grace elapsed for %s to %s",
+			entry.Transport, truncID(entry.PeerNodeID))
+		return
+	}
 	// If a concurrent completeDrain already fired, this is a no-op.
 	log.Printf("[DRAIN] Grace period (%v) elapsed for %s to %s, closing",
 		grace, entry.Transport, truncID(entry.PeerNodeID))
@@ -137,12 +174,34 @@ func (dm *DrainManager) completeDrain(key string) {
 	dm.mu.Unlock()
 
 	if dm.onClosed != nil {
-		dm.onClosed(entry.PeerNodeID, entry.Transport)
+		dm.onClosed(entry.PeerNodeID, entry.Transport, entry.StartedAt)
 	}
 }
 
+// Stop abandons every in-flight drain and waits for their monitors to exit.
+// Idempotent.
+//
+// Consumed by Runtime shutdown. Without it each StartDrain leaves an untracked
+// goroutine that fires onClosed up to a grace period later — and onClosed is
+// ConnectionManager.closeDrainedConnection, which releases a budget slot and
+// cancels peer gossip on a manager that shutdown has already finished with.
+func (dm *DrainManager) Stop() {
+	dm.stopOnce.Do(func() {
+		close(dm.stopCh)
+		dm.wg.Wait()
+
+		// Drop the abandoned entries. IsDraining and DrainCount read this map,
+		// and a drain whose monitor has been abandoned is not draining — leaving
+		// the entries behind reports every peer as permanently mid-drain, which
+		// also makes StartDrain's already-draining guard reject them forever.
+		dm.mu.Lock()
+		clear(dm.entries)
+		dm.mu.Unlock()
+	})
+}
+
 // DecrementInFlight decreases the in-flight count for a draining connection.
-// MESH-C04: reserved for future per-op quiescence tracking. It has no callers
+// Reserved for future per-op quiescence tracking. It has no callers
 // today, and monitorDrain uses a fixed drainGracePeriod rather than polling
 // InFlightOps, so this is currently inert.
 func (dm *DrainManager) DecrementInFlight(peerNodeID, transport string) {

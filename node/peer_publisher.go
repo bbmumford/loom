@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bbmumford/loom/pkg/rpc"
 	"github.com/bbmumford/swarm"
 	swarmpb "github.com/bbmumford/swarm/proto/pb"
-	"github.com/bbmumford/loom/pkg/rpc"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -25,19 +25,24 @@ import (
 // RPC handlers + capabilities + grade — all atomic per publish.
 //
 // Receivers index the records via role_table.go (role -> nodes) and
-// address_table.go (NodeID -> dial candidates). A single PeerPublisher
-// subsumes what separate reach and role publishers previously emitted.
+// address_table.go (NodeID -> dial candidates). One PeerPublisher carries
+// both the reach and the role content in a single record.
 type PeerPublisher struct {
 	node swarm.Node
 	rt   *Runtime
 	reg  *rpc.Registry
 
 	mu          sync.Mutex
+	stopOnce    sync.Once // Stop is exported; concurrent callers must not double-close
 	roles       []string
 	addresses   []*swarmpb.Address
 	maxGrade    swarmpb.Grade
 	serviceName string
 	region      string
+	// extras is the free-form capability bag published in
+	// Capabilities.extras. Copied on set and on read so a caller cannot
+	// mutate what a concurrent publish is marshalling.
+	extras      map[string]string
 	republishCh chan struct{}
 	// lastSatEmitted is the saturation boolean carried in the most recent
 	// publish. The pressure poll compares it against the live state to
@@ -70,6 +75,38 @@ func (p *PeerPublisher) SetServiceName(name string) {
 // Same Capabilities.tags carrier as service_name. Used by the topology
 // builder when the local connection-reporter can't fill in region for a
 // distant peer.
+// SetCapabilityExtras replaces the free-form capability bag and republishes.
+//
+// The bag rides in the signed PeerRecord's `Capabilities.extras`, so peers
+// receive it through the same authenticated channel as roles and addresses —
+// a consumer that trusts the record's roles can trust these to the same degree.
+//
+// ⚠ Records are capped at 16 KB. An oversized bag makes the whole record
+// unpublishable, which would take roles and addresses down with it — so this
+// drops the bag and keeps the node advertising rather than failing the publish.
+// Silence about capabilities is recoverable; disappearing from the mesh is not.
+func (p *PeerPublisher) SetCapabilityExtras(extras map[string]string) {
+	copied := make(map[string]string, len(extras))
+	size := 0
+	for key, value := range extras {
+		size += len(key) + len(value) + 2
+		copied[key] = value
+	}
+	if size > maxCapabilityExtrasBytes {
+		log.Printf("[SWARM] capability extras %d B exceeds the %d B budget; "+
+			"dropping them so the record still publishes", size, maxCapabilityExtrasBytes)
+		copied = nil
+	}
+	p.mu.Lock()
+	p.extras = copied
+	p.mu.Unlock()
+	p.PublishNow()
+}
+
+// maxCapabilityExtrasBytes bounds the free-form bag well inside the 16 KB
+// Record ceiling, leaving room for addresses, handlers and the signature.
+const maxCapabilityExtrasBytes = 4096
+
 func (p *PeerPublisher) SetRegion(region string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -105,14 +142,14 @@ func (p *PeerPublisher) SetRegistry(reg *rpc.Registry) {
 }
 
 // Start begins the publisher loop. Republishes are triggered by:
-//   - input changes (roles, addresses, grade) via PublishNow signals
-//   - periodic refresh every 5 minutes (TTL refresh)
-//   - explicit calls to PublishNow
+// - input changes (roles, addresses, grade) via PublishNow signals
+// - periodic refresh every 5 minutes (TTL refresh)
+// - explicit calls to PublishNow
 //
 // The run-loop is spawned via Runtime.Go so it is enrolled in rt.wg
 // (drained by Shutdown), wrapped in a panic recover, and named in any
-// crash log. Falls back to a bare `go` only when no Runtime is wired —
-// the legacy code path that pre-dated PeerPublisher's rt field.
+// crash log. Falls back to a bare `go` only when p.rt is nil, which no
+// production construction produces.
 func (p *PeerPublisher) Start(ctx context.Context) {
 	if p.rt != nil {
 		p.rt.Go("swarm.peer_publisher.run", func() { p.run(ctx) })
@@ -122,13 +159,18 @@ func (p *PeerPublisher) Start(ctx context.Context) {
 	p.PublishNow() // initial publish
 }
 
-// Stop halts the publisher loop.
+// Stop halts the publisher loop. Idempotent and safe under concurrent callers.
+//
+// 🔴 THE sync.Once REPLACES A CHECK-THEN-ACT GUARD THAT DID NOT HOLD. The
+// previous select/default read p.stopCh and closed it only if the read did not
+// succeed. Sequentially that is correct; concurrently two callers can both take
+// the default branch before either close lands, and the second close panics
+// with "close of closed channel". Stop is exported, so the number of concurrent
+// callers is not this file's to bound.
 func (p *PeerPublisher) Stop() {
-	select {
-	case <-p.stopCh:
-	default:
+	p.stopOnce.Do(func() {
 		close(p.stopCh)
-	}
+	})
 }
 
 // PublishNow signals an immediate republish on the next loop iteration.
@@ -317,6 +359,16 @@ func (p *PeerPublisher) publishOnce() {
 	serviceName := p.serviceName
 	region := p.region
 	rtts := p.rtts
+	// Copied under the lock like every other field here: the marshal below
+	// runs outside it, and proto.Marshal over a map another goroutine is
+	// writing is a data race, not merely a stale read.
+	var extras map[string]string
+	if len(p.extras) > 0 {
+		extras = make(map[string]string, len(p.extras))
+		for key, value := range p.extras {
+			extras[key] = value
+		}
+	}
 	// Snapshot reg under the lock so SetRegistry (called from
 	// PublishRPCHandlersToLAD after Runtime.Initialize wired the
 	// publisher with reg=nil) doesn't race the publishOnce reader.
@@ -372,7 +424,11 @@ func (p *PeerPublisher) publishOnce() {
 	// before any handler registry was published).
 	var handlers []string
 	if reg != nil {
-		handlers = reg.Roles() // returns namespaced role names already
+		registered := reg.All() // sorted by FQN
+		handlers = make([]string, 0, len(registered))
+		for _, handler := range registered {
+			handlers = append(handlers, handler.FQN())
+		}
 	}
 
 	// Operator-facing metadata (service name + region) rides Capabilities.tags.
@@ -385,6 +441,23 @@ func (p *PeerPublisher) publishOnce() {
 	}
 	if region != "" {
 		tags = append(tags, "region="+region)
+	}
+
+	// conn_count: how many peers this node currently holds an open session
+	// with. Receivers feed it into ConnectionMap via the fleet.peer ingest,
+	// and ConnectionMap.IsHotspot is what adjustForGlobalBalance consults to
+	// steer new connections away from a node already carrying more than twice
+	// the mesh average. With no writer the map stays empty, MeshAverage()
+	// answers 0, IsHotspot answers false for every peer, and the damping
+	// branch never reduces a target.
+	//
+	// Computed here, on the periodic republish, rather than pushed through a
+	// setter: a setter would republish on every connect and disconnect, and
+	// SetCapabilityExtras replaces the whole extras bag that reach_adapter
+	// owns. ActivePeers takes m.mu and this runs after p.mu is released, so
+	// the two locks are never held together.
+	if p.rt != nil && p.rt.connMgr != nil {
+		tags = append(tags, connCountMetaKey+"="+strconv.Itoa(len(p.rt.connMgr.ActivePeers())))
 	}
 
 	// nat_class: peers consume this via DecodeNATBehaviour to decide
@@ -424,13 +497,20 @@ func (p *PeerPublisher) publishOnce() {
 		}
 	}
 
-	// MESH-G07: guard the p.rt deref. run/Start explicitly support p.rt == nil
+	// Guard the p.rt deref. run/Start explicitly support p.rt == nil
 	// (bare-goroutine fallback) and publishOnce nil-checks p.rt in three places,
 	// but this NodeId read did not — so a publisher constructed with rt==nil
 	// panicked on its first publish. Production always passes a Runtime, so this
 	// only affects that fallback / test paths.
+	// The identity nil-check is the second half of . The original fix
+	// guarded p.rt and stopped there, so a publisher holding a HALF-BUILT
+	// Runtime — non-nil but with identity not yet assigned — still panicked on
+	// its first publish, which is exactly the fallback/test shape the comment
+	// above says the guard exists to protect. Production assigns identity
+	// during Initialize before swarm_integration.go:100 constructs the
+	// publisher, so this changes no live behaviour.
 	var nodeIDBytes []byte
-	if p.rt != nil {
+	if p.rt != nil && p.rt.identity != nil {
 		nodeIDBytes = []byte(p.rt.identity.NodeID)
 	}
 	// Build the PeerRecord
@@ -443,8 +523,9 @@ func (p *PeerPublisher) publishOnce() {
 		Grade:       maxGrade,
 		MaxGrade:    maxGrade,
 		Capabilities: &swarmpb.Capabilities{
-			Roles: roles,
-			Tags:  tags,
+			Roles:  roles,
+			Tags:   tags,
+			Extras: extras,
 		},
 	}
 

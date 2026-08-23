@@ -12,7 +12,7 @@ import (
 type ConnectionPurpose string
 
 const (
-	PurposeGossip    ConnectionPurpose = "gossip"           // LAD gossip stream
+	PurposeGossip         ConnectionPurpose = "gossip"          // LAD gossip stream
 	PurposeGossipDispatch ConnectionPurpose = "gossip+dispatch" // Aether: gossip + RPC on same session
 )
 
@@ -220,11 +220,13 @@ func (r *peerConnectionReporter) SelfNodeID() string {
 // NilConnectionReporter is a no-op implementation for nodes without ConnectionManager.
 type NilConnectionReporter struct{}
 
-func (NilConnectionReporter) ActiveConnections() []ConnectionInfo          { return nil }
-func (NilConnectionReporter) ConnectionTo(string) (ConnectionInfo, bool)   { return ConnectionInfo{}, false }
-func (NilConnectionReporter) ConnectedPeerCount() int                      { return 0 }
-func (NilConnectionReporter) SelfRegion() string                           { return "" }
-func (NilConnectionReporter) SelfNodeID() string                           { return "" }
+func (NilConnectionReporter) ActiveConnections() []ConnectionInfo { return nil }
+func (NilConnectionReporter) ConnectionTo(string) (ConnectionInfo, bool) {
+	return ConnectionInfo{}, false
+}
+func (NilConnectionReporter) ConnectedPeerCount() int { return 0 }
+func (NilConnectionReporter) SelfRegion() string      { return "" }
+func (NilConnectionReporter) SelfNodeID() string      { return "" }
 
 // Compile-time interface checks.
 var _ ConnectionReporter = (*peerConnectionReporter)(nil)

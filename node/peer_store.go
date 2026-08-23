@@ -56,7 +56,7 @@ type persistedPeerList struct {
 type FilePeerStore struct {
 	mu     sync.Mutex
 	config PeerStoreConfig
-	nodeID string            // our own NodeID (excluded from saved list)
+	nodeID string                   // our own NodeID (excluded from saved list)
 	peers  map[string]PersistedPeer // in-memory state keyed by NodeID
 }
 
@@ -204,25 +204,38 @@ func (s *FilePeerStore) All() []PersistedPeer {
 	return result
 }
 
-// StartPeriodicSave begins a background goroutine that saves the peer list
-// at the configured interval. Performs a final save on context cancellation.
+// StartPeriodicSave spawns runPeriodicSave on its own goroutine.
+//
+// ⚠ THE GOROUTINE IT SPAWNS IS NOT ENROLLED IN ANY WaitGroup, so a caller
+// that cancels ctx and exits does not wait for the final save. Runtime.Go's
+// own doc (runtime.go:1470-1475) states the rule this breaks: "bare `go
+// fn()` callers are invisible to wg.Wait and may outlive Close". Prefer
+// runPeriodicSave under a tracked goroutine — Runtime does exactly that at
+// its call site, so the final save is drained by `rt.cancel(); rt.wg.Wait()`.
+// This wrapper is kept for callers outside Runtime that have no waitgroup to
+// enrol in; for them the final save remains best-effort.
 func (s *FilePeerStore) StartPeriodicSave(ctx context.Context) {
-	go func() {
-		ticker := time.NewTicker(s.config.SaveInterval)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				// Final save on shutdown
-				if err := s.Save(); err != nil {
-					log.Printf("[PEER-STORE] Final save failed: %v", err)
-				}
-				return
-			case <-ticker.C:
-				if err := s.Save(); err != nil {
-					log.Printf("[PEER-STORE] Periodic save failed: %v", err)
-				}
+	go s.runPeriodicSave(ctx)
+}
+
+// runPeriodicSave saves the peer list at the configured interval and performs
+// a final save when ctx is cancelled. Runs synchronously: the caller owns the
+// goroutine, and therefore owns whether the final save is waited for.
+func (s *FilePeerStore) runPeriodicSave(ctx context.Context) {
+	ticker := time.NewTicker(s.config.SaveInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			// Final save on shutdown.
+			if err := s.Save(); err != nil {
+				log.Printf("[PEER-STORE] Final save failed: %v", err)
+			}
+			return
+		case <-ticker.C:
+			if err := s.Save(); err != nil {
+				log.Printf("[PEER-STORE] Periodic save failed: %v", err)
 			}
 		}
-	}()
+	}
 }

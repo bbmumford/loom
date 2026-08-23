@@ -13,11 +13,11 @@ import (
 type ConnectionEventType string
 
 const (
-	EventConnected    ConnectionEventType = "connected"
-	EventDisconnected ConnectionEventType = "disconnected"
-	EventUpgraded     ConnectionEventType = "upgraded"
-	EventDowngraded   ConnectionEventType = "downgraded"
-	EventDrainStarted ConnectionEventType = "drain_started"
+	EventConnected     ConnectionEventType = "connected"
+	EventDisconnected  ConnectionEventType = "disconnected"
+	EventUpgraded      ConnectionEventType = "upgraded"
+	EventDowngraded    ConnectionEventType = "downgraded"
+	EventDrainStarted  ConnectionEventType = "drain_started"
 	EventDrainComplete ConnectionEventType = "drain_complete"
 )
 
@@ -49,7 +49,7 @@ func (l *ConnectionEventLog) Append(event ConnectionEvent) {
 	if event.Timestamp.IsZero() {
 		event.Timestamp = time.Now()
 	}
-	// MESH-C09: keep events sorted by Timestamp. EventsSince's front-scan cutoff
+	// Keep events sorted by Timestamp. EventsSince's front-scan cutoff
 	// and prune both assume sorted order, but callers pass their own timestamps
 	// (e.g. "connected" is stamped at accept-start yet appended much later than
 	// newer "disconnected"/"drained" events), so a bare append could leave the
@@ -96,6 +96,13 @@ func (l *ConnectionEventLog) EventsSince(t time.Time) []ConnectionEvent {
 }
 
 // Recent returns the last n events.
+//
+// UNWIRED: zero non-test callers across all three workspace roots, measured
+// with a non-ignoring grep. Retained rather than removed
+// because it is exported on a published module — an in-tree caller count
+// cannot bound external users — and because it is harmless: a pure
+// read helper with no side effects that cannot lead a caller onto an unsafe
+// path.
 func (l *ConnectionEventLog) Recent(n int) []ConnectionEvent {
 	l.mu.RLock()
 	defer l.mu.RUnlock()
@@ -120,6 +127,13 @@ func (l *ConnectionEventLog) Count() int {
 }
 
 // Summary returns event counts grouped by reason for events after the given time.
+//
+// WIRED — one non-test caller: metrics_export.go's writeConnectionEventMetrics
+// builds the mesh_connection_events_recent{type=...} series from it, so this
+// function's output is published on /metrics at every endpoint that mounts the
+// exporter.
+//
+// Called from metrics_export.go, so this is not an unwired surface.
 func (l *ConnectionEventLog) Summary(since time.Time) map[string]int {
 	events := l.EventsSince(since)
 	counts := make(map[string]int)
