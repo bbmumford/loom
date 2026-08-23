@@ -6,12 +6,14 @@ package handlers
 
 import (
 	"context"
-	"sync"
 	"fmt"
+	"sync"
 	"time"
 
-	"github.com/bbmumford/loom/pkg/trace"
+	"github.com/bbmumford/loom/internal/securityctx"
 	"github.com/bbmumford/loom/pkg/rpc/scope"
+	"github.com/bbmumford/loom/pkg/trace"
+	"github.com/bbmumford/loom/ports"
 )
 
 // ---------------------------------------------------------------------------
@@ -42,7 +44,7 @@ type TenantScope = scope.TenantScope
 // for new code. These symbols remain to avoid a big-bang rename in ~434
 // legacy call sites, but will be deleted once migration completes.
 const (
-	TenantScopeNone     = scope.None     // No tenant restriction (default, backward-compat). Mirrors rpc.ScopeNone.
+	TenantScopeNone     = scope.None     // Explicitly opts out of tenant restriction. Mirrors rpc.ScopeNone.
 	TenantScopePlatform = scope.Platform // HSTLES internal only. Mirrors rpc.ScopePlatform.
 	TenantScopeTenant   = scope.Tenant   // Requires valid tenant_id. Mirrors rpc.ScopeTenant.
 	TenantScopeOrg      = scope.Org      // Requires tenant + org membership. Mirrors rpc.ScopeOrg.
@@ -76,7 +78,8 @@ type HandlerMeta interface {
 	Scopes() []string
 
 	// TenantScope returns the required tenant isolation level.
-	// Returns TenantScopeNone (empty) for unrestricted handlers.
+	// Returns TenantScopeNone for deliberately unrestricted handlers. The zero
+	// value is invalid and registration rejects it.
 	TenantScope() TenantScope
 
 	// AllowedTenants returns an optional tenant whitelist.
@@ -136,11 +139,11 @@ type DualHandler interface {
 
 // RPCRequest represents a direct RPC call
 type RPCRequest struct {
-	ID        string                 `json:"id"`         // Request ID (idempotency)
-	Handler   string                 `json:"handler"`    // "auth.login", "identity.getUser"
-	Payload   []byte                 `json:"payload"`    // Proto-encoded operation data
-	Context   map[string]interface{} `json:"context"`    // Session, trace IDs
-	Timeout   time.Duration          `json:"timeout"`    // Max execution time
+	ID        string                 `json:"id"`        // Request ID (idempotency)
+	Handler   string                 `json:"handler"`   // "auth.login", "identity.getUser"
+	Payload   []byte                 `json:"payload"`   // Proto-encoded operation data
+	Context   map[string]interface{} `json:"context"`   // Session, trace IDs
+	Timeout   time.Duration          `json:"timeout"`   // Max execution time
 	SessionID string                 `json:"sessionId"` // Optional session identifier
 	TraceID   string                 `json:"traceId"`   // Optional trace identifier
 }
@@ -164,9 +167,9 @@ type Task struct {
 	Deadline    time.Time              `json:"deadline"`    // Must complete by
 	Idempotency string                 `json:"idempotency"` // Dedup key
 	Metadata    map[string]interface{} `json:"metadata"`    // Extra context
-	CreatedAt   time.Time              `json:"createdAt"`  // When task was created
-	SessionID   string                 `json:"sessionId"`  // Optional session identifier
-	TraceID     string                 `json:"traceId"`    // Optional trace identifier
+	CreatedAt   time.Time              `json:"createdAt"`   // When task was created
+	SessionID   string                 `json:"sessionId"`   // Optional session identifier
+	TraceID     string                 `json:"traceId"`     // Optional trace identifier
 }
 
 // TaskStatus represents task execution state
@@ -184,13 +187,13 @@ const (
 // TaskResult represents the outcome of task execution
 type TaskResult struct {
 	TaskID      string                 `json:"taskId"`
-	Status      TaskStatus             `json:"status"`       // Completed, Failed, Timeout
-	Payload     []byte                 `json:"payload"`      // Proto-encoded result data
-	Error       string                 `json:"error"`        // Error if failed
-	Duration    time.Duration          `json:"duration"`     // Actual execution time
+	Status      TaskStatus             `json:"status"`      // Completed, Failed, Timeout
+	Payload     []byte                 `json:"payload"`     // Proto-encoded result data
+	Error       string                 `json:"error"`       // Error if failed
+	Duration    time.Duration          `json:"duration"`    // Actual execution time
 	CompletedAt time.Time              `json:"completedAt"` // When task completed
 	NodeID      string                 `json:"nodeId"`      // Which node executed
-	Metadata    map[string]interface{} `json:"metadata"`     // Extra context
+	Metadata    map[string]interface{} `json:"metadata"`    // Extra context
 }
 
 // ---------------------------------------------------------------------------
@@ -236,26 +239,76 @@ var (
 // the registry is now properly synchronized (reads take RLock — negligible
 // against the network cost of any dispatch).
 type HandlerRegistry struct {
-	mu               sync.RWMutex
-	handlers         map[string]HandlerMeta
-	enabledRoles     map[string]bool
-	roleMiddleware   map[string][]Middleware // per-role middleware
-	globalMiddleware []Middleware            // runs for all handlers
-	platformTenants  []string                // e.g., ["hstles", "orbtr"]
+	mu                 sync.RWMutex
+	handlers           map[string]*registrationEntry
+	enabledRoles       map[string]bool
+	roleMiddleware     map[string][]Middleware // per-role middleware
+	globalMiddleware   []Middleware            // runs for all handlers
+	platformTenants    scope.PlatformTenants   // exact, fail-closed platform allowlist
+	registrationScopes map[*registrationScopeToken]*registrationScopeState
+	pendingHandlers    map[string]*registrationEntry
+	nextScopeID        uint64
+	scopeIDsExhausted  bool
+}
 
-	// regObserver, when non-nil, is invoked (outside the lock) with each
-	// successfully registered handler name — the compose scope tracker
-	// hooks this so role activation captures exactly the FQNs it
-	// registered and teardown can remove precisely those.
-	regObserver func(name string)
+type registrationEntry struct {
+	name      string
+	meta      HandlerMeta
+	admission TaskAdmission
+}
+
+// registrationScopeToken must remain non-zero-sized. Go permits pointers to
+// distinct zero-sized allocations to compare equal (and currently lowers
+// them to runtime.zerobase), which would collapse simultaneous activation
+// scopes into one map key. issuer + id also make issuance identity explicit
+// and reject a token presented to a different registry before map lookup.
+type registrationScopeToken struct {
+	issuer *HandlerRegistry
+	id     uint64
+}
+
+type registrationScopeState struct {
+	role       string
+	admission  TaskAdmission
+	open       bool
+	published  bool
+	registered []RegistrationHandle
+}
+
+// RegistrationHandle is an immutable identity for one exact successful
+// registration. Its fields are deliberately private: only the issuing
+// registry can compare and remove the represented entry.
+type RegistrationHandle struct {
+	registry *HandlerRegistry
+	entry    *registrationEntry
+}
+
+// Valid reports whether the handle names an issued registration.
+func (h RegistrationHandle) Valid() bool {
+	return h.registry != nil && h.entry != nil
+}
+
+// TaskAdmission is a generation-bound execution lease captured with a
+// [ResolvedHandler]. Acquire returns a release function when the exact
+// generation is still accepting work. A closed generation returns ok=false,
+// even if a replacement handler with the same name has since been registered.
+//
+// Runtime role activation installs this seam so role resources cannot be
+// released while a task admitted against that activation generation is still
+// executing. Registries without a capture hook preserve their standalone
+// behaviour.
+type TaskAdmission interface {
+	Acquire() (release func(), ok bool)
 }
 
 // NewHandlerRegistry creates a new handler registry
 func NewHandlerRegistry() *HandlerRegistry {
 	return &HandlerRegistry{
-		handlers:       make(map[string]HandlerMeta),
-		enabledRoles:   make(map[string]bool),
-		roleMiddleware: make(map[string][]Middleware),
+		handlers:           make(map[string]*registrationEntry),
+		enabledRoles:       make(map[string]bool),
+		roleMiddleware:     make(map[string][]Middleware),
+		registrationScopes: make(map[*registrationScopeToken]*registrationScopeState),
+		pendingHandlers:    make(map[string]*registrationEntry),
 	}
 }
 
@@ -279,25 +332,15 @@ func (r *HandlerRegistry) Use(mw Middleware) {
 func (r *HandlerRegistry) SetPlatformTenants(tenants []string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.platformTenants = append([]string(nil), tenants...)
+	r.platformTenants = scope.NewPlatformTenants(tenants...)
 }
 
-// isPlatformTenant checks if the given tenant ID is in the configured platform tenants list.
-// Returns true if tenantID matches any configured platform tenant, or if tenantID is "hstles"
-// (hardcoded fallback for backward compatibility when no platform tenants are configured).
+// isPlatformTenant delegates to the same canonical fail-closed evaluator used
+// by rpc.EnforceScope. An unset or empty allowlist authorizes nobody.
 func (r *HandlerRegistry) isPlatformTenant(tenantID string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	if len(r.platformTenants) > 0 {
-		for _, pt := range r.platformTenants {
-			if pt == tenantID {
-				return true
-			}
-		}
-		return false
-	}
-	// Fallback: if no platform tenants configured, default to "hstles" for backward compat
-	return tenantID == "hstles"
+	return r.platformTenants.IsPlatform(tenantID)
 }
 
 // GetMiddleware returns global middleware followed by role-specific middleware.
@@ -337,47 +380,128 @@ func (r *HandlerRegistry) IsRoleEnabled(role string) bool {
 
 // RegisterRPC registers a synchronous RPC handler.
 func (r *HandlerRegistry) RegisterRPC(h RPCHandler) error {
-	return r.registerMeta(h)
+	_, err := r.registerMeta(ports.RegistrationScope{}, h)
+	return err
 }
 
 // RegisterTask registers an asynchronous task handler.
 func (r *HandlerRegistry) RegisterTask(h TaskHandler) error {
-	return r.registerMeta(h)
+	_, err := r.registerMeta(ports.RegistrationScope{}, h)
+	return err
 }
 
 // RegisterStream registers a streaming handler.
 func (r *HandlerRegistry) RegisterStream(h StreamHandler) error {
-	return r.registerMeta(h)
+	_, err := r.registerMeta(ports.RegistrationScope{}, h)
+	return err
 }
 
 // RegisterHandler registers any handler that implements HandlerMeta.
 // The handler must also implement RPCHandler, TaskHandler, or both.
 func (r *HandlerRegistry) RegisterHandler(h HandlerMeta) error {
-	return r.registerMeta(h)
+	_, err := r.registerMeta(ports.RegistrationScope{}, h)
+	return err
 }
 
-func (r *HandlerRegistry) registerMeta(h HandlerMeta) error {
+// RegisterRPCScoped registers an RPC handler as causally owned by scope.
+func (r *HandlerRegistry) RegisterRPCScoped(
+	registrationScope ports.RegistrationScope,
+	h RPCHandler,
+) (RegistrationHandle, error) {
+	return r.registerMeta(registrationScope, h)
+}
+
+// RegisterTaskScoped registers a task handler as causally owned by scope.
+func (r *HandlerRegistry) RegisterTaskScoped(
+	registrationScope ports.RegistrationScope,
+	h TaskHandler,
+) (RegistrationHandle, error) {
+	return r.registerMeta(registrationScope, h)
+}
+
+// RegisterStreamScoped registers a stream handler as causally owned by scope.
+func (r *HandlerRegistry) RegisterStreamScoped(
+	registrationScope ports.RegistrationScope,
+	h StreamHandler,
+) (RegistrationHandle, error) {
+	return r.registerMeta(registrationScope, h)
+}
+
+// RegisterHandlerScoped registers generic handler metadata as causally owned
+// by scope.
+func (r *HandlerRegistry) RegisterHandlerScoped(
+	registrationScope ports.RegistrationScope,
+	h HandlerMeta,
+) (RegistrationHandle, error) {
+	return r.registerMeta(registrationScope, h)
+}
+
+func (r *HandlerRegistry) registerMeta(
+	registrationScope ports.RegistrationScope,
+	h HandlerMeta,
+) (RegistrationHandle, error) {
 	if h == nil {
-		return fmt.Errorf("handler cannot be nil")
+		return RegistrationHandle{}, fmt.Errorf("handler cannot be nil")
 	}
 
 	name := h.Name()
 	if name == "" {
-		return fmt.Errorf("handler name cannot be empty")
+		return RegistrationHandle{}, fmt.Errorf("handler name cannot be empty")
+	}
+	if declared := h.TenantScope(); !scope.IsDeclared(declared) {
+		return RegistrationHandle{}, fmt.Errorf("handler %s has invalid tenant scope %q: declare one of the TenantScope* tiers explicitly", name, declared)
 	}
 
 	r.mu.Lock()
+	defer r.mu.Unlock()
+	var admission TaskAdmission
+	var state *registrationScopeState
+	if token := registrationScopeTokenOf(registrationScope); token != nil {
+		state = r.registrationScopes[token]
+		if state == nil || !state.open {
+			return RegistrationHandle{}, fmt.Errorf("handler %s: registration scope is closed or invalid", name)
+		}
+		if h.Role() != state.role {
+			return RegistrationHandle{}, fmt.Errorf(
+				"handler %s role %q does not match registration scope role %q",
+				name,
+				h.Role(),
+				state.role,
+			)
+		}
+		admission = state.admission
+	} else if registrationScope.Token() != nil {
+		return RegistrationHandle{}, fmt.Errorf("handler %s: registration scope is invalid", name)
+	}
 	if _, exists := r.handlers[name]; exists {
-		r.mu.Unlock()
-		return fmt.Errorf("handler %s already registered", name)
+		return RegistrationHandle{}, fmt.Errorf("handler %s already registered", name)
 	}
-	r.handlers[name] = h
-	observer := r.regObserver
-	r.mu.Unlock()
-	if observer != nil {
-		observer(name)
+	if _, exists := r.pendingHandlers[name]; exists {
+		return RegistrationHandle{}, fmt.Errorf(
+			"handler %s is reserved by a pending role activation",
+			name,
+		)
 	}
-	return nil
+
+	entry := &registrationEntry{
+		name:      name,
+		meta:      h,
+		admission: admission,
+	}
+	handle := RegistrationHandle{registry: r, entry: entry}
+	if state != nil {
+		state.registered = append(state.registered, handle)
+	}
+	if state != nil && !state.published {
+		// Registration performed by an activator is causally owned immediately
+		// but is not a local-routing fact until that exact activation succeeds.
+		// Reserving the name prevents a concurrent registration from stealing
+		// the publication slot without exposing it through Resolve/GetMeta.
+		r.pendingHandlers[name] = entry
+	} else {
+		r.handlers[name] = entry
+	}
+	return handle, nil
 }
 
 // Unregister removes a handler by name, returning whether it existed. The
@@ -393,24 +517,237 @@ func (r *HandlerRegistry) Unregister(name string) bool {
 	return true
 }
 
-// SetRegistrationObserver installs (or clears, with nil) the registration
-// hook. The observer runs outside the registry lock.
-func (r *HandlerRegistry) SetRegistrationObserver(fn func(name string)) {
+// UnregisterExact removes only the exact entry represented by handle. A
+// same-name replacement or a handle issued by another registry is untouched.
+func (r *HandlerRegistry) UnregisterExact(handle RegistrationHandle) bool {
+	if handle.registry != r || handle.entry == nil {
+		return false
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.regObserver = fn
+	current := r.handlers[handle.entry.name]
+	if current == handle.entry {
+		delete(r.handlers, handle.entry.name)
+		return true
+	}
+	pending := r.pendingHandlers[handle.entry.name]
+	if pending == handle.entry {
+		delete(r.pendingHandlers, handle.entry.name)
+		return true
+	}
+	return false
+}
+
+// OpenRegistrationScope creates a causal ownership scope for one exact role
+// activation generation.
+func (r *HandlerRegistry) OpenRegistrationScope(
+	role string,
+	admission TaskAdmission,
+) (ports.RegistrationScope, error) {
+	if role == "" || admission == nil {
+		return ports.RegistrationScope{}, fmt.Errorf("registration scope requires role and admission")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.scopeIDsExhausted || r.nextScopeID == ^uint64(0) {
+		r.scopeIDsExhausted = true
+		return ports.RegistrationScope{}, fmt.Errorf("registration scope identity exhausted")
+	}
+	r.nextScopeID++
+	token := &registrationScopeToken{
+		issuer: r,
+		id:     r.nextScopeID,
+	}
+	r.registrationScopes[token] = &registrationScopeState{
+		role:      role,
+		admission: admission,
+		open:      true,
+	}
+	return ports.NewRegistrationScope(token), nil
+}
+
+// PublishRegistrationScope atomically makes every still-owned registration in
+// a pending activation scope visible to lookup and local dispatch. The scope's
+// names are reserved from registration time, so publication cannot overwrite a
+// live neighbour. Registrations added after publication are visible
+// immediately and remain owned by the same exact scope.
+func (r *HandlerRegistry) PublishRegistrationScope(
+	registrationScope ports.RegistrationScope,
+) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	token := registrationScopeTokenOf(registrationScope)
+	if token == nil || token.issuer != r {
+		return fmt.Errorf("registration scope is invalid")
+	}
+	state := r.registrationScopes[token]
+	if state == nil || !state.open {
+		return fmt.Errorf("registration scope is closed or invalid")
+	}
+	if state.published {
+		return nil
+	}
+
+	for _, handle := range state.registered {
+		entry := handle.entry
+		if entry == nil || r.pendingHandlers[entry.name] != entry {
+			// Exact unregister before publication is a valid withdrawal. Do
+			// not resurrect it from the ownership history.
+			continue
+		}
+		if _, exists := r.handlers[entry.name]; exists {
+			return fmt.Errorf(
+				"handler %s became registered before scope publication",
+				entry.name,
+			)
+		}
+	}
+	for _, handle := range state.registered {
+		entry := handle.entry
+		if entry == nil || r.pendingHandlers[entry.name] != entry {
+			continue
+		}
+		delete(r.pendingHandlers, entry.name)
+		r.handlers[entry.name] = entry
+	}
+	state.published = true
+	return nil
+}
+
+// SealRegistrationScope prevents further causal registrations and returns an
+// immutable snapshot of every exact registration already owned by it.
+func (r *HandlerRegistry) SealRegistrationScope(
+	registrationScope ports.RegistrationScope,
+) ([]RegistrationHandle, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	token := registrationScopeTokenOf(registrationScope)
+	if token == nil || token.issuer != r {
+		return nil, false
+	}
+	state := r.registrationScopes[token]
+	if state == nil {
+		return nil, false
+	}
+	state.open = false
+	return append([]RegistrationHandle(nil), state.registered...), true
+}
+
+// ReopenRegistrationScope re-enables a previously sealed live scope.
+func (r *HandlerRegistry) ReopenRegistrationScope(
+	registrationScope ports.RegistrationScope,
+) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	token := registrationScopeTokenOf(registrationScope)
+	if token == nil || token.issuer != r {
+		return false
+	}
+	state := r.registrationScopes[token]
+	if state == nil {
+		return false
+	}
+	state.open = true
+	return true
+}
+
+// CloseRegistrationScope atomically seals and retires a scope, returning the
+// exact registrations it owned. Later scoped registration fails closed.
+func (r *HandlerRegistry) CloseRegistrationScope(
+	registrationScope ports.RegistrationScope,
+) ([]RegistrationHandle, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	token := registrationScopeTokenOf(registrationScope)
+	if token == nil || token.issuer != r {
+		return nil, false
+	}
+	state := r.registrationScopes[token]
+	if state == nil {
+		return nil, false
+	}
+	state.open = false
+	if !state.published {
+		// An unpublished scope has no public registrations to preserve. Release
+		// all exact reservations atomically with retirement so a failed
+		// activation cannot strand names even if its caller ignores the
+		// returned ownership snapshot.
+		for _, handle := range state.registered {
+			entry := handle.entry
+			if entry != nil && r.pendingHandlers[entry.name] == entry {
+				delete(r.pendingHandlers, entry.name)
+			}
+		}
+	}
+	delete(r.registrationScopes, token)
+	return append([]RegistrationHandle(nil), state.registered...), true
+}
+
+func registrationScopeTokenOf(registrationScope ports.RegistrationScope) *registrationScopeToken {
+	token, _ := registrationScope.Token().(*registrationScopeToken)
+	return token
 }
 
 // ---------------------------------------------------------------------------
 // Lookup
 // ---------------------------------------------------------------------------
 
-// GetMeta retrieves a handler by name as HandlerMeta.
-func (r *HandlerRegistry) GetMeta(name string) (HandlerMeta, bool) {
+// ResolvedHandler is an immutable handler-registration snapshot. It keeps
+// asynchronous dispatch bound to the exact handler that was classified,
+// even if role teardown unregisters it and a replacement with the same name
+// is installed before the goroutine starts.
+//
+// The zero value is invalid. Obtain snapshots through
+// [HandlerRegistry.Resolve].
+type ResolvedHandler struct {
+	registry  *HandlerRegistry
+	name      string
+	meta      HandlerMeta
+	admission TaskAdmission
+}
+
+// Resolve captures the handler currently registered under name.
+func (r *HandlerRegistry) Resolve(name string) (ResolvedHandler, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	h, ok := r.handlers[name]
-	return h, ok
+	entry, ok := r.handlers[name]
+	if !ok {
+		return ResolvedHandler{}, false
+	}
+	return ResolvedHandler{
+		registry:  r,
+		name:      name,
+		meta:      entry.meta,
+		admission: entry.admission,
+	}, true
+}
+
+// Meta returns the exact handler metadata captured by Resolve.
+func (h ResolvedHandler) Meta() HandlerMeta {
+	return h.meta
+}
+
+func (h ResolvedHandler) acquireAdmission() (func(), bool) {
+	if h.admission == nil {
+		return func() {}, true
+	}
+	release, ok := h.admission.Acquire()
+	if !ok {
+		return nil, false
+	}
+	if release == nil {
+		release = func() {}
+	}
+	return release, true
+}
+
+// GetMeta retrieves a handler by name as HandlerMeta.
+func (r *HandlerRegistry) GetMeta(name string) (HandlerMeta, bool) {
+	resolved, ok := r.Resolve(name)
+	if !ok {
+		return nil, false
+	}
+	return resolved.Meta(), true
 }
 
 // GetByRoleMeta retrieves all handlers for a specific role as HandlerMeta.
@@ -418,9 +755,9 @@ func (r *HandlerRegistry) GetByRoleMeta(role string) []HandlerMeta {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	var result []HandlerMeta
-	for _, h := range r.handlers {
-		if h.Role() == role {
-			result = append(result, h)
+	for _, entry := range r.handlers {
+		if entry.meta.Role() == role {
+			result = append(result, entry.meta)
 		}
 	}
 	return result
@@ -431,8 +768,8 @@ func (r *HandlerRegistry) AllHandlers() []HandlerMeta {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	result := make([]HandlerMeta, 0, len(r.handlers))
-	for _, h := range r.handlers {
-		result = append(result, h)
+	for _, entry := range r.handlers {
+		result = append(result, entry.meta)
 	}
 	return result
 }
@@ -477,58 +814,36 @@ func getUserIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// validateTenantScope checks that the request context satisfies the handler's tenant scope.
-// Returns nil if validation passes. Used internally by Dispatch methods.
+// validateTenantScope checks that the trusted typed context satisfies the
+// handler's tenant scope. RPCRequest.Context and task Metadata are deliberately
+// ignored here: both are mutable request data and cannot establish platform,
+// organisation, or user identity.
 func (r *HandlerRegistry) validateTenantScope(ctx context.Context, h HandlerMeta) error {
-	scope := h.TenantScope()
-	if scope == "" {
-		return nil
+	declared := h.TenantScope()
+	identity := scope.AuthenticatedIdentityFromContext(ctx)
+	tenantID := identity.PlatformTenantID
+	switch scope.CheckPresence(declared, identity, r.isPlatformTenant(tenantID)) {
+	case scope.PresenceSatisfied:
+		// Continue through allowlist and transport reconciliation.
+	case scope.PresencePlatformRequired:
+		return fmt.Errorf("%w: handler %s requires authenticated platform access, got tenant: %q", scope.ErrDenied, h.Name(), tenantID)
+	case scope.PresenceTenantRequired:
+		return fmt.Errorf("%w: handler %s requires authenticated platform tenant context", scope.ErrDenied, h.Name())
+	case scope.PresenceOrganizationRequired:
+		return fmt.Errorf("%w: handler %s requires authenticated organisation context", scope.ErrDenied, h.Name())
+	case scope.PresenceUserRequired:
+		return fmt.Errorf("%w: handler %s requires authenticated user context", scope.ErrDenied, h.Name())
+	case scope.PresenceUnknownScope:
+		if declared == TenantScopeUnknown {
+			return fmt.Errorf("%w: handler %s has fail-closed TenantScopeUnknown — add an explicit scope declaration", scope.ErrDenied, h.Name())
+		}
+		return fmt.Errorf("%w: handler %s declares unknown tenant scope %q — reject to preserve isolation guarantee", scope.ErrDenied, h.Name(), declared)
+	default:
+		return fmt.Errorf("%w: handler %s declares unknown tenant scope %q — reject to preserve isolation guarantee", scope.ErrDenied, h.Name(), declared)
 	}
 
-	tenantID := GetTenantIDFromContext(extractContextMap(ctx))
-
-	switch scope {
-	case TenantScopePlatform:
-		if !r.isPlatformTenant(tenantID) {
-			return fmt.Errorf("handler %s requires platform access, got tenant: %q", h.Name(), tenantID)
-		}
-	case TenantScopeTenant:
-		if tenantID == "" {
-			return fmt.Errorf("handler %s requires tenant context", h.Name())
-		}
-	case TenantScopeOrg:
-		if tenantID == "" {
-			return fmt.Errorf("handler %s requires org context", h.Name())
-		}
-	case TenantScopeUser:
-		if tenantID == "" {
-			return fmt.Errorf("handler %s requires tenant context", h.Name())
-		}
-		userID := getUserIDFromContext(ctx)
-		if userID == "" {
-			return fmt.Errorf("handler %s requires authenticated user context", h.Name())
-		}
-	case TenantScopeProfile:
-		// Mirrors rpc.EnforceScope's ScopeProfile arm: profile membership is a
-		// scope-string check at the middleware tier (RequireScopesWithParam —
-		// Quorum ADR-0012). At the dispatch tier we only enforce that the
-		// tenant prerequisite is present; the middleware decides whether the
-		// caller belongs to the named billing profile.
-		if tenantID == "" {
-			return fmt.Errorf("handler %s requires tenant context (profile scope)", h.Name())
-		}
-	case TenantScopeUnknown:
-		// Fail-closed sentinel — a handler bound to TenantScopeUnknown is
-		// structurally invalid (e.g. an unrecognised proto enum decayed here).
-		// Refuse every dispatch with a clear diagnostic so the misconfiguration
-		// surfaces at the first call site rather than silently allowing traffic.
-		return fmt.Errorf("handler %s has fail-closed TenantScopeUnknown — add an explicit scope declaration", h.Name())
-	default:
-		// Any scope value that is not one of the known constants is treated as
-		// fail-closed. This prevents a typo (e.g. "tennant") or a partial migration
-		// from a future scope tier from silently accepting traffic that would
-		// have required tenant/org/user context under the intended scope.
-		return fmt.Errorf("handler %s declares unknown tenant scope %q — reject to preserve isolation guarantee", h.Name(), scope)
+	if declared == TenantScopeNone {
+		return nil
 	}
 
 	allowed := h.AllowedTenants()
@@ -541,7 +856,7 @@ func (r *HandlerRegistry) validateTenantScope(ctx context.Context, h HandlerMeta
 			}
 		}
 		if !found {
-			return fmt.Errorf("tenant %q not authorized for handler %s", tenantID, h.Name())
+			return fmt.Errorf("%w: tenant %q not authorized for handler %s", scope.ErrDenied, tenantID, h.Name())
 		}
 	}
 
@@ -551,7 +866,8 @@ func (r *HandlerRegistry) validateTenantScope(ctx context.Context, h HandlerMeta
 	transportTenant := TransportTenantFromContext(ctx)
 	if transportTenant != "" && transportTenant != "default" && tenantID != "" {
 		if transportTenant != tenantID {
-			return fmt.Errorf("transport/request tenant mismatch: transport=%q request=%q for handler %s",
+			return fmt.Errorf("%w: transport/authenticated tenant mismatch: transport=%q identity=%q for handler %s",
+				scope.ErrDenied,
 				transportTenant, tenantID, h.Name())
 		}
 	}
@@ -568,9 +884,9 @@ func extractContextMap(ctx context.Context) map[string]interface{} {
 	return nil
 }
 
-// injectRPCContext merges the RPCRequest.Context map into the Go context under
-// the "rpc_context" key so that extractContextMap, getUserIDFromContext, and
-// GetTenantIDFromContext can read values set by the transport layer or HTTP bridge.
+// injectRPCContext merges mutable request hints into the Go context for
+// middleware and application handlers. The tenant-scope gate deliberately
+// ignores this map and consumes only scope.AuthenticatedIdentity.
 // If reqCtx is nil or empty, returns ctx unchanged.
 func injectRPCContext(ctx context.Context, reqCtx map[string]interface{}) context.Context {
 	if len(reqCtx) == 0 {
@@ -592,15 +908,92 @@ func injectRPCContext(ctx context.Context, reqCtx map[string]interface{}) contex
 // the middleware chain (global + role-scoped) around the handler call.
 // Returns ErrHandlerNotFound if no handler is registered for the name.
 // Returns ErrUnsupportedMode if the handler doesn't implement RPCHandler.
+//
+// This legacy surface preserves its existing internal-call semantics and
+// does not add a second authorization decision. Product runtimes and other
+// authority-bearing entry points must use [HandlerRegistry.DispatchRPCWithAuth].
 func (r *HandlerRegistry) Dispatch(ctx context.Context, req *RPCRequest) (*RPCResponse, error) {
-	h, ok := r.GetMeta(req.Handler)
+	if req == nil {
+		return nil, fmt.Errorf("RPC request is nil")
+	}
+	resolved, ok := r.Resolve(req.Handler)
 	if !ok {
 		return nil, ErrHandlerNotFound
 	}
+	return resolved.dispatchRPC(ctx, req, nil, false)
+}
 
-	// Inject RPCRequest.Context into Go context so validateTenantScope and
-	// getUserIDFromContext can read tenant_id, userID, etc. from the RPC
-	// context map. Merges with any existing rpc_context already set.
+// DispatchRPCWithAuth resolves and executes an RPC through the authenticated
+// pipeline:
+//
+//	auth → tenant scope → middleware Before → RPCHandler → middleware After
+//
+// A nil validator uses the fail-closed Loom-local validator. Product runtimes
+// must pass the validator injected at composition so private product context
+// keys, allowed authentication types, and required scopes are interpreted by
+// the owning product rather than by Loom.
+func (r *HandlerRegistry) DispatchRPCWithAuth(
+	ctx context.Context,
+	req *RPCRequest,
+	auth ports.AuthValidator,
+) (*RPCResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("RPC request is nil")
+	}
+	resolved, ok := r.Resolve(req.Handler)
+	if !ok {
+		return nil, ErrHandlerNotFound
+	}
+	return resolved.DispatchRPCWithAuth(ctx, req, auth)
+}
+
+// DispatchRPCWithAuth executes an RPC against the exact registration captured
+// by Resolve. A same-name replacement cannot steal an already-classified
+// call, and the exact activation generation remains leased across
+// authorization, middleware, and handler execution.
+func (h ResolvedHandler) DispatchRPCWithAuth(
+	ctx context.Context,
+	req *RPCRequest,
+	auth ports.AuthValidator,
+) (*RPCResponse, error) {
+	return h.dispatchRPC(ctx, req, auth, true)
+}
+
+func (h ResolvedHandler) dispatchRPC(
+	ctx context.Context,
+	req *RPCRequest,
+	auth ports.AuthValidator,
+	validateAuth bool,
+) (*RPCResponse, error) {
+	if req == nil {
+		return nil, fmt.Errorf("RPC request is nil")
+	}
+	if h.registry == nil || h.meta == nil {
+		return nil, ErrHandlerNotFound
+	}
+	if req.Handler != h.name {
+		return nil, fmt.Errorf(
+			"resolved handler %q does not match RPC handler %q",
+			h.name,
+			req.Handler,
+		)
+	}
+	rpc, ok := h.meta.(RPCHandler)
+	if !ok {
+		return nil, ErrUnsupportedMode
+	}
+
+	releaseAdmission, admitted := h.acquireAdmission()
+	if !admitted {
+		return &RPCResponse{
+			Success: false,
+			Error:   "handler activation generation is not accepting RPC calls",
+		}, nil
+	}
+	defer releaseAdmission()
+
+	// Surface RPCRequest.Context to middleware and application handlers.
+	// validateTenantScope does not consume this mutable request map.
 	ctx = injectRPCContext(ctx, req.Context)
 
 	// Propagate e2e trace ID — the LocalCaller (in-process dispatch) and
@@ -611,8 +1004,20 @@ func (r *HandlerRegistry) Dispatch(ctx context.Context, req *RPCRequest) (*RPCRe
 		ctx = trace.WithID(ctx, req.TraceID)
 	}
 
+	if validateAuth {
+		if auth == nil {
+			auth = securityctx.Default()
+		}
+		if err := auth.ValidateExecutionAuth(ctx, h.meta); err != nil {
+			return &RPCResponse{
+				Success: false,
+				Error:   fmt.Sprintf("authorization failed: %v", err),
+			}, nil
+		}
+	}
+
 	// 🔒 TENANT SCOPE ENFORCEMENT
-	if err := r.validateTenantScope(ctx, h); err != nil {
+	if err := h.registry.validateTenantScope(ctx, h.meta); err != nil {
 		return &RPCResponse{
 			Success: false,
 			Error:   fmt.Sprintf("tenant restriction: %v", err),
@@ -620,19 +1025,19 @@ func (r *HandlerRegistry) Dispatch(ctx context.Context, req *RPCRequest) (*RPCRe
 	}
 
 	// Run middleware Before hooks
-	middleware := r.GetMiddleware(h.Role())
+	middleware := h.registry.GetMiddleware(h.meta.Role())
 	var err error
 	for idx, mw := range middleware {
-		ctx, err = mw.Before(ctx, h.Name(), req)
+		ctx, err = mw.Before(ctx, h.meta.Name(), req)
 		if err != nil {
-			// MESH-D06: a later Before rejected the request. Run After (reverse
+			// A later Before rejected the request. Run After (reverse
 			// order) for the middlewares whose Before already completed so any
 			// resource they acquired in Before (span, semaphore, tx, counter) is
 			// released — the previous code returned immediately and leaked them.
 			rejection := &RPCResponse{Success: false, Error: err.Error()}
 			rr, re := rejection, err
 			for i := idx - 1; i >= 0; i-- {
-				rr, re = middleware[i].After(ctx, h.Name(), rr, re)
+				rr, re = middleware[i].After(ctx, h.meta.Name(), rr, re)
 			}
 			if rr != nil {
 				rejection = rr
@@ -642,41 +1047,101 @@ func (r *HandlerRegistry) Dispatch(ctx context.Context, req *RPCRequest) (*RPCRe
 	}
 
 	// Dispatch based on interface
-	var resp *RPCResponse
-	switch rpc := h.(type) {
-	case RPCHandler:
-		resp, err = rpc.ExecuteRPC(ctx, req)
-	default:
-		return nil, ErrUnsupportedMode
-	}
+	resp, err := rpc.ExecuteRPC(ctx, req)
 
 	// Run middleware After hooks (reverse order)
 	for i := len(middleware) - 1; i >= 0; i-- {
-		resp, err = middleware[i].After(ctx, h.Name(), resp, err)
+		resp, err = middleware[i].After(ctx, h.meta.Name(), resp, err)
 	}
 
 	return resp, err
 }
 
-// DispatchTask looks up a handler by name and executes it as a Task.
-// Returns ErrHandlerNotFound if no handler is registered for the name.
-// Returns ErrUnsupportedMode if the handler doesn't implement TaskHandler.
+// DispatchTask looks up a handler by name and executes it through the complete
+// task pipeline. Pure-Loom callers use the fail-closed local auth validator;
+// platform runtimes should call [HandlerRegistry.DispatchTaskWithAuth] with
+// their injected validator so it reads the platform's private context keys.
 func (r *HandlerRegistry) DispatchTask(ctx context.Context, task *Task) (*TaskResult, error) {
-	h, ok := r.GetMeta(task.Handler)
+	return r.DispatchTaskWithAuth(ctx, task, securityctx.Default())
+}
+
+// DispatchTaskWithAuth is the canonical task execution pipeline shared by
+// compose dispatch and the asynchronous task executor:
+//
+//	auth → tenant scope → middleware Before → TaskHandler → middleware After
+//
+// After hooks always unwind in reverse order for every Before hook that
+// completed, including handler errors and later-Before rejection. A nil auth
+// validator falls back to the fail-closed Pure-Loom validator.
+func (r *HandlerRegistry) DispatchTaskWithAuth(
+	ctx context.Context,
+	task *Task,
+	auth ports.AuthValidator,
+) (*TaskResult, error) {
+	if task == nil {
+		return nil, fmt.Errorf("task is nil")
+	}
+	resolved, ok := r.Resolve(task.Handler)
 	if !ok {
 		return nil, ErrHandlerNotFound
 	}
+	return resolved.DispatchTaskWithAuth(ctx, task, auth)
+}
 
-	th, ok := h.(TaskHandler)
+// DispatchTaskWithAuth executes task through the canonical registry pipeline
+// using the exact handler captured by Resolve. A task cannot be relabelled
+// after resolution: its handler name must match the captured registration.
+func (h ResolvedHandler) DispatchTaskWithAuth(
+	ctx context.Context,
+	task *Task,
+	auth ports.AuthValidator,
+) (*TaskResult, error) {
+	if task == nil {
+		return nil, fmt.Errorf("task is nil")
+	}
+	if h.registry == nil || h.meta == nil {
+		return nil, ErrHandlerNotFound
+	}
+	if task.Handler != h.name {
+		return nil, fmt.Errorf(
+			"resolved handler %q does not match task handler %q",
+			h.name,
+			task.Handler,
+		)
+	}
+
+	th, ok := h.meta.(TaskHandler)
 	if !ok {
 		return nil, ErrUnsupportedMode
 	}
 
-	// Inject task metadata into Go context for tenant scope validation
+	releaseAdmission, admitted := h.acquireAdmission()
+	if !admitted {
+		return &TaskResult{
+			TaskID: task.ID,
+			Status: TaskStatusFailed,
+			Error:  "handler activation generation is not accepting tasks",
+		}, nil
+	}
+	defer releaseAdmission()
+
+	// Surface task metadata to middleware and application handlers.
+	// validateTenantScope does not consume this mutable task map.
 	ctx = injectRPCContext(ctx, task.Metadata)
 
+	if auth == nil {
+		auth = securityctx.Default()
+	}
+	if err := auth.ValidateExecutionAuth(ctx, h.meta); err != nil {
+		return &TaskResult{
+			TaskID: task.ID,
+			Status: TaskStatusFailed,
+			Error:  fmt.Sprintf("authorization failed: %v", err),
+		}, nil
+	}
+
 	// 🔒 TENANT SCOPE ENFORCEMENT
-	if err := r.validateTenantScope(ctx, h); err != nil {
+	if err := h.registry.validateTenantScope(ctx, h.meta); err != nil {
 		return &TaskResult{
 			TaskID: task.ID,
 			Status: TaskStatusFailed,
@@ -685,7 +1150,7 @@ func (r *HandlerRegistry) DispatchTask(ctx context.Context, task *Task) (*TaskRe
 	}
 
 	// Run middleware Before hooks (convert task to RPCRequest for middleware)
-	middleware := r.GetMiddleware(h.Role())
+	middleware := h.registry.GetMiddleware(h.meta.Role())
 	var err error
 	rpcReq := &RPCRequest{
 		ID:      task.ID,
@@ -693,18 +1158,71 @@ func (r *HandlerRegistry) DispatchTask(ctx context.Context, task *Task) (*TaskRe
 		Payload: task.Payload,
 		Context: task.Metadata,
 	}
-	for _, mw := range middleware {
-		ctx, err = mw.Before(ctx, h.Name(), rpcReq)
+	for idx, mw := range middleware {
+		ctx, err = mw.Before(ctx, h.name, rpcReq)
 		if err != nil {
-			return &TaskResult{
+			result := &TaskResult{
 				TaskID: task.ID,
 				Status: TaskStatusFailed,
 				Error:  err.Error(),
-			}, nil
+			}
+			result, _ = unwindTaskMiddleware(ctx, h.name, middleware[:idx], result, err)
+			return result, nil
 		}
 	}
 
-	return th.ExecuteTask(ctx, task)
+	result, err := th.ExecuteTask(ctx, task)
+	if result == nil {
+		result = &TaskResult{
+			TaskID: task.ID,
+			Status: TaskStatusFailed,
+		}
+	} else if result.TaskID == "" {
+		result.TaskID = task.ID
+	}
+	return unwindTaskMiddleware(ctx, h.name, middleware, result, err)
+}
+
+func unwindTaskMiddleware(
+	ctx context.Context,
+	handlerName string,
+	middleware []Middleware,
+	result *TaskResult,
+	handlerErr error,
+) (*TaskResult, error) {
+	if result == nil {
+		result = &TaskResult{Status: TaskStatusFailed}
+	}
+
+	resp := &RPCResponse{
+		ID:       result.TaskID,
+		Success:  handlerErr == nil && result.Status == TaskStatusCompleted,
+		Payload:  result.Payload,
+		Error:    result.Error,
+		Metadata: result.Metadata,
+	}
+	if handlerErr != nil && resp.Error == "" {
+		resp.Error = handlerErr.Error()
+	}
+
+	err := handlerErr
+	for i := len(middleware) - 1; i >= 0; i-- {
+		resp, err = middleware[i].After(ctx, handlerName, resp, err)
+	}
+
+	if resp != nil {
+		result.Payload = resp.Payload
+		result.Metadata = resp.Metadata
+		if !resp.Success {
+			result.Status = TaskStatusFailed
+			result.Error = resp.Error
+		}
+	}
+	if err != nil && result.Error == "" {
+		result.Status = TaskStatusFailed
+		result.Error = err.Error()
+	}
+	return result, err
 }
 
 // DispatchStream looks up a handler by name and opens a stream, running
@@ -713,15 +1231,21 @@ func (r *HandlerRegistry) DispatchTask(ctx context.Context, task *Task) (*TaskRe
 // Returns ErrHandlerNotFound if no handler is registered for the name.
 // Returns ErrUnsupportedMode if the handler doesn't implement StreamHandler.
 func (r *HandlerRegistry) DispatchStream(ctx context.Context, handlerName string, stream MessageStream) error {
-	h, ok := r.GetMeta(handlerName)
+	resolved, ok := r.Resolve(handlerName)
 	if !ok {
 		return ErrHandlerNotFound
 	}
+	h := resolved.meta
 
 	sh, ok := h.(StreamHandler)
 	if !ok {
 		return ErrUnsupportedMode
 	}
+	releaseAdmission, admitted := resolved.acquireAdmission()
+	if !admitted {
+		return fmt.Errorf("handler activation generation is not accepting streams")
+	}
+	defer releaseAdmission()
 
 	// 🔒 TENANT SCOPE ENFORCEMENT
 	if err := r.validateTenantScope(ctx, h); err != nil {
@@ -812,7 +1336,9 @@ func GetDomainFromContext(ctx map[string]interface{}, fallback string) string {
 	return domainStr
 }
 
-// GetTenantIDFromContext extracts tenant_id from RPCRequest.Context map
+// GetTenantIDFromContext is a legacy accessor for the snake_case
+// RPCRequest.Context hint. It is retained for application compatibility only;
+// validateTenantScope never treats this mutable map as identity authority.
 func GetTenantIDFromContext(ctx map[string]interface{}) string {
 	if ctx == nil {
 		return ""
@@ -832,17 +1358,19 @@ func GetTenantIDFromContext(ctx map[string]interface{}) string {
 }
 
 // ── Transport-level tenant context ──────────────────────────────────────────
-// These helpers propagate the tenant ID determined at the transport layer
-// (from preamble decode or dedicated-transport mapping) through the Go
-// context.Context so that validateTenantScope can verify transport/request
-// tenant agreement.
+// These helpers propagate the server-resolved tenant ID determined at the
+// transport layer through context.Context so validateTenantScope can reconcile
+// the transport binding with the canonical typed identity.
 
 type transportTenantCtxKey struct{}
 
-// WithTransportTenant injects the transport-level tenant ID into context.
-// Called by the RPC server when accepting a session from a tenant-aware listener.
+// WithTransportTenant injects the transport-level tenant ID into context and
+// establishes the platform-tenant component of the canonical typed scope
+// identity. Called by the RPC server after accepting a session from a
+// tenant-aware listener.
 func WithTransportTenant(ctx context.Context, tenantID string) context.Context {
-	return context.WithValue(ctx, transportTenantCtxKey{}, tenantID)
+	ctx = context.WithValue(ctx, transportTenantCtxKey{}, tenantID)
+	return scope.WithAuthenticatedPlatformTenant(ctx, tenantID)
 }
 
 // TransportTenantFromContext extracts the transport-level tenant ID from context.

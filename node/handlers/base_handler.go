@@ -16,6 +16,7 @@ type BaseHandler struct {
 	role            string
 	requiresAuth    bool
 	requiredScopes  []string
+	tenantScope     TenantScope
 	executeRPCFunc  func(ctx context.Context, req *RPCRequest) (*RPCResponse, error)
 	executeTaskFunc func(ctx context.Context, task *Task) (*TaskResult, error)
 	validateFunc    func(req interface{}) error
@@ -27,6 +28,7 @@ type BaseHandlerConfig struct {
 	Role           string
 	RequiresAuth   bool
 	RequiredScopes []string
+	TenantScope    TenantScope
 	ExecuteRPC     func(ctx context.Context, req *RPCRequest) (*RPCResponse, error)
 	ExecuteTask    func(ctx context.Context, task *Task) (*TaskResult, error)
 	Validate       func(req interface{}) error
@@ -39,6 +41,7 @@ func NewBaseHandler(cfg BaseHandlerConfig) *BaseHandler {
 		role:            cfg.Role,
 		requiresAuth:    cfg.RequiresAuth,
 		requiredScopes:  cfg.RequiredScopes,
+		tenantScope:     cfg.TenantScope,
 		executeRPCFunc:  cfg.ExecuteRPC,
 		executeTaskFunc: cfg.ExecuteTask,
 		validateFunc:    cfg.Validate,
@@ -73,8 +76,9 @@ func (h *BaseHandler) AllowedAuthTypes() []string {
 	return []string{} // Default: any auth type if RequiresAuth is true
 }
 
-// TenantScope returns the required tenant isolation level.
-// Default: TenantScopeNone (unrestricted).
+// TenantScope returns the required tenant isolation level. The zero value is
+// intentionally invalid: BaseHandler users must declare a tier in
+// BaseHandlerConfig, including TenantScopeNone for a deliberate public opt-out.
 //
 // handlers.TenantScope and rpc.TenantScope are now the SAME type identity —
 // both alias the canonical declaration in rpc/scope. A handler may override
@@ -83,7 +87,7 @@ func (h *BaseHandler) AllowedAuthTypes() []string {
 // two names during the migration. See rpc/scope/tenantscope.go for the
 // canonical enum and finding rev-069 for the rationale.
 func (h *BaseHandler) TenantScope() TenantScope {
-	return TenantScopeNone
+	return h.tenantScope
 }
 
 // AllowedTenants returns an optional tenant whitelist.

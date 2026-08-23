@@ -6,8 +6,11 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
+
+	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // stubMeta is a minimal HandlerMeta used solely to exercise validateTenantScope
@@ -60,9 +63,10 @@ func TestValidateTenantScope_Profile_WithTenantPasses(t *testing.T) {
 	r := NewHandlerRegistry()
 	h := &stubMeta{name: "billing.getProfile", scope: TenantScopeProfile}
 
-	err := r.validateTenantScope(ctxWithRPC(map[string]interface{}{
-		"tenant_id": "acme",
-	}), h)
+	ctx := tenantScope.WithAuthenticatedIdentity(context.Background(), tenantScope.AuthenticatedIdentity{
+		PlatformTenantID: "acme",
+	})
+	err := r.validateTenantScope(ctx, h)
 	if err != nil {
 		t.Fatalf("expected TenantScopeProfile with tenant to pass; got %v", err)
 	}
@@ -123,6 +127,45 @@ func TestValidateTenantScope_None_Passes(t *testing.T) {
 	}
 }
 
+func TestValidateTenantScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing.T) {
+	h := &stubMeta{name: "platform.op", scope: TenantScopePlatform}
+	identity := func(tenantID string) context.Context {
+		return tenantScope.WithAuthenticatedIdentity(
+			context.Background(),
+			tenantScope.AuthenticatedIdentity{PlatformTenantID: tenantID},
+		)
+	}
+	tests := []struct {
+		name    string
+		set     []string
+		tenant  string
+		wantErr bool
+	}{
+		{name: "unset", tenant: "hstles", wantErr: true},
+		{name: "empty", set: []string{}, tenant: "hstles", wantErr: true},
+		{name: "foreign", set: []string{"hstles"}, tenant: "hstles-dev", wantErr: true},
+		{name: "exact", set: []string{"hstles"}, tenant: "hstles"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			r := NewHandlerRegistry()
+			if test.set != nil {
+				r.SetPlatformTenants(test.set)
+			}
+			err := r.validateTenantScope(identity(test.tenant), h)
+			if test.wantErr {
+				if !errors.Is(err, tenantScope.ErrDenied) {
+					t.Fatalf("expected shared fail-closed denial, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("expected exact platform allowlist member to pass: %v", err)
+			}
+		})
+	}
+}
+
 // TestValidateTenantScope_LegacyScopes_StillEnforce guards against a
 // regression where the switch refactor drops enforcement of an existing tier.
 func TestValidateTenantScope_LegacyScopes_StillEnforce(t *testing.T) {
@@ -132,7 +175,7 @@ func TestValidateTenantScope_LegacyScopes_StillEnforce(t *testing.T) {
 		want  string // substring expected in error
 	}{
 		{name: "Tenant", scope: TenantScopeTenant, want: "tenant context"},
-		{name: "Org", scope: TenantScopeOrg, want: "org context"},
+		{name: "Org", scope: TenantScopeOrg, want: "tenant context"},
 		{name: "User", scope: TenantScopeUser, want: "tenant context"},
 	}
 	r := NewHandlerRegistry()
@@ -146,6 +189,9 @@ func TestValidateTenantScope_LegacyScopes_StillEnforce(t *testing.T) {
 			if !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("expected error to contain %q; got %v", c.want, err)
 			}
+			if !errors.Is(err, tenantScope.ErrDenied) {
+				t.Fatalf("expected shared scope denial sentinel; got %v", err)
+			}
 		})
 	}
 }
@@ -153,9 +199,8 @@ func TestValidateTenantScope_LegacyScopes_StillEnforce(t *testing.T) {
 // TestTenantScopeConstants_AgreeWithRPC pins the string values of the
 // handlers.TenantScope* constants so they cannot drift from rpc.Scope*.
 // If the two ever disagree, a value round-tripped between packages would
-// silently degrade to ScopeNone-equivalent (empty string) or an unknown
-// scope — both of which now fail closed, but the failure surface should
-// be the constant contract, not a runtime dispatch.
+// silently degrade to an unset or unknown scope. Both fail closed, but the
+// failure surface should be the constant contract, not runtime dispatch.
 func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 	// These literal expectations are intentionally hard-coded rather than
 	// imported from rpc — that would introduce a test-scope import of the
@@ -166,7 +211,7 @@ func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 		got  TenantScope
 		want string
 	}{
-		{"None", TenantScopeNone, ""},
+		{"None", TenantScopeNone, "none"},
 		{"Platform", TenantScopePlatform, "platform"},
 		{"Tenant", TenantScopeTenant, "tenant"},
 		{"Org", TenantScopeOrg, "org"},
@@ -184,16 +229,10 @@ func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 }
 
 // TestValidateTenantScope_TransportReconcile is a REGRESSION LOCK on the
-// transport/request tenant reconciliation (handler.go:548-557) — the mechanism
-// that makes a mesh ScopeTenant a real boundary rather than a self-asserted
-// envelope field. On a tenant-specific transport (dedicated port or shared
-// preamble) the aether session's authenticated tenant is stamped into the
-// context by WithTransportTenant; the reconcile then rejects any request whose
-// tenant_id disagrees — a caller cannot forge a cross-tenant envelope over a
-// transport it authenticated as a different tenant. On the single-tenant
-// fallback the transport tenant is "default" (or unset), so the reconcile is
-// deliberately SKIPPED and the envelope tenant is trusted — which is exactly
-// why an empty Config.Tenants deployment self-asserts (#M-10 / #O-284 / #P-114).
+// transport/authenticated-identity reconciliation. On a tenant-specific
+// transport the aether session's tenant is stamped by WithTransportTenant; a
+// later authenticated identity that disagrees is rejected. Mutable request
+// maps are never one side of this comparison.
 //
 // This is the load-bearing behaviour the endpoint-template Config.Tenants fix
 // (#R-697 Directive-1, "prove enforcement not config-presence") rests on, and
@@ -211,7 +250,7 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 		// Tenant-specific transport: authenticated tenant matches the envelope.
 		{name: "match_passes", transport: "acme", wantErr: ""},
 		// Tenant-specific transport: envelope lies about its tenant — REJECTED.
-		{name: "mismatch_rejects", transport: "evil", wantErr: "transport/request tenant mismatch"},
+		{name: "mismatch_rejects", transport: "evil", wantErr: "transport/authenticated tenant mismatch"},
 		// Single-tenant fallback: reconcile skipped, envelope self-asserted.
 		{name: "default_skips_selfassert", transport: "default", wantErr: ""},
 		// Shared transport with no resolved ScopeID: skipped (empty == unset).
@@ -222,10 +261,13 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			h := &stubMeta{name: "tenant.op", scope: TenantScopeTenant}
-			ctx := ctxWithRPC(map[string]interface{}{"tenant_id": reqTenant})
+			ctx := context.Background()
 			if !c.noStamp {
 				ctx = WithTransportTenant(ctx, c.transport)
 			}
+			ctx = tenantScope.WithAuthenticatedIdentity(ctx, tenantScope.AuthenticatedIdentity{
+				PlatformTenantID: reqTenant,
+			})
 			err := r.validateTenantScope(ctx, h)
 			if c.wantErr == "" {
 				if err != nil {
@@ -239,6 +281,38 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 			if !strings.Contains(err.Error(), c.wantErr) {
 				t.Fatalf("%s: expected error containing %q; got %v", c.name, c.wantErr, err)
 			}
+			if !errors.Is(err, tenantScope.ErrDenied) {
+				t.Fatalf("%s: denial must wrap shared scope sentinel; got %v", c.name, err)
+			}
 		})
+	}
+}
+
+func TestValidateTenantScope_OrganizationIgnoresMutableHints(t *testing.T) {
+	r := NewHandlerRegistry()
+	h := &stubMeta{name: "org.read", scope: TenantScopeOrg}
+
+	for _, body := range []map[string]interface{}{
+		{"tenant_id": "orbtr", "org_id": "forged"},
+		{"tenantId": "orbtr", "orgId": "forged"},
+		{"tenant_id": "orbtr", "organization": "forged"},
+	} {
+		ctx := WithTransportTenant(ctxWithRPC(body), "orbtr")
+		err := r.validateTenantScope(ctx, h)
+		if err == nil || !strings.Contains(err.Error(), "organisation") {
+			t.Fatalf("mutable org hint %#v must not satisfy ScopeOrg; got %v", body, err)
+		}
+	}
+
+	ctx := WithTransportTenant(ctxWithRPC(map[string]interface{}{
+		"tenant_id": "evil",
+		"orgId":     "evil",
+	}), "orbtr")
+	ctx = tenantScope.WithAuthenticatedIdentity(ctx, tenantScope.AuthenticatedIdentity{
+		PlatformTenantID: "orbtr",
+		OrganizationID:   "acme",
+	})
+	if err := r.validateTenantScope(ctx, h); err != nil {
+		t.Fatalf("exact authenticated organisation must satisfy ScopeOrg despite body hints: %v", err)
 	}
 }
