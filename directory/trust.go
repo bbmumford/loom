@@ -8,11 +8,11 @@ package directory
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
 
+	aether "github.com/ORBTR/aether"
 	"github.com/bbmumford/loom/ports"
 )
 
@@ -49,7 +49,7 @@ type Policy struct {
 	// (e.g. "fleet.peer" — every node publishes its own PeerRecord).
 	openPublish map[string]bool
 
-	// revoked keys, by hex encoding.
+	// revoked keys, by canonical aether NodeID.
 	revoked map[string]bool
 }
 
@@ -106,9 +106,13 @@ func NewPolicy(cfg PolicyConfig) *Policy {
 // RevokeKey marks a key revoked (rotation/compromise). Takes effect on the
 // next check — no caching layer to invalidate.
 func (p *Policy) RevokeKey(pub ed25519.PublicKey) {
+	id, ok := canonicalNodeID(pub)
+	if !ok {
+		return // a wrong-length key can never be a valid NodeID, so nothing to revoke
+	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.revoked[hex.EncodeToString(pub)] = true
+	p.revoked[id] = true
 }
 
 // EntitleRole grants role entitlement to a node at runtime (config reload,
@@ -122,20 +126,19 @@ func (p *Policy) EntitleRole(role string, id ports.NodeID) {
 	p.roleEntitlements[role][id] = true
 }
 
-// VerifyNodeKey implements ports.TrustPolicy: the NodeID must be the
-// canonical hex encoding of pub (the swarm nodeIDFromPub scheme) and the
-// key must not be revoked.
+// VerifyNodeKey implements ports.TrustPolicy: the NodeID must be the canonical
+// aether.NewNodeID value for pub, and the key must not be revoked.
 func (p *Policy) VerifyNodeKey(id ports.NodeID, pub ed25519.PublicKey) error {
 	if len(pub) != ed25519.PublicKeySize {
 		return fmt.Errorf("trust: key size %d", len(pub))
 	}
-	keyHex := hex.EncodeToString(pub)
-	if string(id) != keyHex {
+	derived, ok := canonicalNodeID(pub)
+	if !ok || string(id) != derived {
 		return fmt.Errorf("trust: node %s does not bind to presented key", short(id))
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	if p.revoked[keyHex] {
+	if p.revoked[derived] {
 		return fmt.Errorf("trust: key for node %s is revoked", short(id))
 	}
 	return nil
@@ -218,15 +221,29 @@ func (p *Policy) AuthorizeSecretRecipient(ctx context.Context, pr ports.Principa
 
 // KeyState implements ports.TrustPolicy.
 func (p *Policy) KeyState(pub ed25519.PublicKey) ports.KeyStatus {
-	if len(pub) != ed25519.PublicKeySize {
+	derived, ok := canonicalNodeID(pub)
+	if !ok {
 		return ports.KeyStatusUnknown
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	if p.revoked[hex.EncodeToString(pub)] {
+	if p.revoked[derived] {
 		return ports.KeyStatusRevoked
 	}
 	return ports.KeyStatusActive
+}
+
+// canonicalNodeID maps an Ed25519 key to its NodeID through the single scheme
+// aether.NewNodeID. VerifyNodeKey compares a claimed NodeID against this value
+// and the revoked set is keyed by it, so a key's wire identity and its
+// revocation entry derive from one authority and can never disagree. ok is
+// false for a wrong-length key, which can never be a valid NodeID.
+func canonicalNodeID(pub ed25519.PublicKey) (string, bool) {
+	id, err := aether.NewNodeID(pub)
+	if err != nil {
+		return "", false
+	}
+	return string(id), true
 }
 
 func (p *Policy) checkTenant(pr ports.Principal) error {

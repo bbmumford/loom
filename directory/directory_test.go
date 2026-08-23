@@ -56,6 +56,28 @@ func peerRecord(t *testing.T, id ports.NodeID, pub ed25519.PublicKey, hlc uint64
 	}
 }
 
+// peerBodyWithTenant builds a PeerRecord body on an explicit tenant, so tests
+// can construct multi-tenant state.
+func peerBodyWithTenant(t *testing.T, pub ed25519.PublicKey, roles []string, service, tenant string) []byte {
+	t.Helper()
+	pr := &swarmpb.PeerRecord{
+		NodeId: pub,
+		Capabilities: &swarmpb.Capabilities{
+			Roles: roles,
+			Tags:  []string{"service=" + service, "region=syd", "tenant=" + tenant},
+		},
+		RpcHandlers: []string{"hstles." + service + ".ping"},
+		Addresses: []*swarmpb.Address{
+			{Transport: swarmpb.Address_WEBSOCKET, Host: "203.0.113.8", Port: 443},
+		},
+	}
+	body, err := proto.Marshal(pr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
 func newTestDirectory(t *testing.T, policy ports.TrustPolicy) *SwarmDirectory {
 	t.Helper()
 	j, err := journal.Open(t.TempDir())
@@ -79,19 +101,19 @@ func TestSwarmDirectoryProjectionAndViews(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	members, _ := d.Members(ctx)
+	members, _ := d.Members(ctx, testTenantID)
 	if len(members) != 1 || members[0].ServiceName != "auth-svc" || members[0].Tenant != "hstles" {
 		t.Fatalf("members = %+v", members)
 	}
-	nodes, _ := d.NodesByRole(ctx, "auth")
+	nodes, _ := d.NodesByRole(ctx, testTenantID, "auth")
 	if len(nodes) != 1 || nodes[0] != idA {
 		t.Fatalf("auth nodes = %v", nodes)
 	}
-	reach, _ := d.Reach(ctx, idA)
+	reach, _ := d.Reach(ctx, testTenantID, idA)
 	if len(reach) != 2 || reach[0].Protocol != "noise-udp" || reach[1].Protocol != "ws" {
 		t.Fatalf("reach (priority order broken) = %+v", reach)
 	}
-	adverts, _ := d.HandlersByName(ctx, "hstles.auth-svc.ping")
+	adverts, _ := d.HandlersByName(ctx, testTenantID, "hstles.auth-svc.ping")
 	if len(adverts) != 1 || adverts[0].NodeID != idA {
 		t.Fatalf("handler adverts = %+v", adverts)
 	}
@@ -101,10 +123,10 @@ func TestSwarmDirectoryProjectionAndViews(t *testing.T) {
 	if err := d.Ingest(ctx, tomb); err != nil {
 		t.Fatal(err)
 	}
-	if members, _ := d.Members(ctx); len(members) != 0 {
+	if members, _ := d.Members(ctx, testTenantID); len(members) != 0 {
 		t.Fatalf("tombstoned member still present: %+v", members)
 	}
-	if adverts, _ := d.HandlersByName(ctx, "hstles.auth-svc.ping"); len(adverts) != 0 {
+	if adverts, _ := d.HandlersByName(ctx, testTenantID, "hstles.auth-svc.ping"); len(adverts) != 0 {
 		t.Fatalf("tombstoned handlers still present: %+v", adverts)
 	}
 }
@@ -142,7 +164,7 @@ func TestSwarmDirectoryRestartReproducesState(t *testing.T) {
 	if fp1 != fp2 {
 		t.Fatal("restart did not reproduce the projection fingerprint")
 	}
-	members, _ := d2.Members(ctx)
+	members, _ := d2.Members(ctx, testTenantID)
 	if len(members) != 1 || members[0].NodeID != idA {
 		t.Fatalf("restart members = %+v", members)
 	}
@@ -150,7 +172,7 @@ func TestSwarmDirectoryRestartReproducesState(t *testing.T) {
 
 func TestIngestPolicyGateFailClosed(t *testing.T) {
 	ctx := context.Background()
-	idA, pubA, _ := testIdentity(t)
+	idA, pubA, _ := canonicalIdentity(t) // NodeID must bind under the aether scheme to pass the gate
 	_, pubEvil, _ := testIdentity(t)
 
 	policy := NewPolicy(PolicyConfig{
@@ -181,8 +203,11 @@ func TestIngestPolicyGateFailClosed(t *testing.T) {
 
 func TestTrustPolicyChecks(t *testing.T) {
 	ctx := context.Background()
-	idA, pubA, _ := testIdentity(t)
-	idObs, pubObs, _ := testIdentity(t)
+	// Entitlement/observer checks run VerifyNodeKey first, so the entitled and
+	// observer identities must bind under the aether scheme; the "evil" one is
+	// only ever the negative case, so its scheme is irrelevant.
+	idA, pubA, _ := canonicalIdentity(t)
+	idObs, pubObs, _ := canonicalIdentity(t)
 	idEvil, pubEvil, _ := testIdentity(t)
 
 	p := NewPolicy(PolicyConfig{
@@ -223,6 +248,24 @@ func TestTrustPolicyChecks(t *testing.T) {
 	}
 }
 
+// 🛑 WHAT THIS TEST DOES AND DOES NOT ESTABLISH — read the name sceptically.
+//
+// Both sides are built by newTestDirectory, so this compares a SwarmDirectory
+// against ANOTHER SwarmDirectory. It therefore tests the COMPARATOR'S
+// MECHANICS — that it reports parity for identical inputs and SURFACES an
+// injected divergence rather than silently preferring a side — and that is a
+// legitimate thing to test.
+//
+// ⚠ IT IS NOT EVIDENCE THAT TWO INDEPENDENT IMPLEMENTATIONS AGREE. A defect
+// shared by both sides is invisible when both sides are the same code, and a
+// mutation applied to LADDirectory cannot move this test at all — measured at
+// #M-547 ⑤, where I mutated the LAD ranking, saw this stay green, and wrongly
+// concluded the second implementation was compared nowhere.
+//
+// ▶️ The genuine cross-implementation oracle is
+// TestLADAndSwarmAgreeOnTheTypedProjectionsOfTheSameNode in ladlive_test.go.
+// That is the one that catches a real divergence between the two; run the
+// WHOLE PACKAGE when mutating, never -run this test alone (#M-548 ④).
 func TestShadowParity(t *testing.T) {
 	ctx := context.Background()
 	idA, pubA, _ := testIdentity(t)
@@ -242,7 +285,7 @@ func TestShadowParity(t *testing.T) {
 		}
 	}
 
-	rep, err := CompareDirectories(ctx, auth, shadow, []string{"auth", "billing"})
+	rep, err := CompareDirectories(ctx, auth, shadow, testTenantID, []string{"auth", "billing"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -259,7 +302,7 @@ func TestShadowParity(t *testing.T) {
 	if err := shadow.Ingest(ctx, tomb); err != nil {
 		t.Fatal(err)
 	}
-	rep2, err := CompareDirectories(ctx, auth, shadow, []string{"auth", "billing"})
+	rep2, err := CompareDirectories(ctx, auth, shadow, testTenantID, []string{"auth", "billing"})
 	if err != nil {
 		t.Fatal(err)
 	}
