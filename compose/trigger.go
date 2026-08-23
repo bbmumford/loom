@@ -5,7 +5,10 @@
 
 package compose
 
-import "context"
+import (
+	"context"
+	"crypto/sha256"
+)
 
 // TriggerKind is the two-level trigger taxonomy's first level.
 type TriggerKind string
@@ -23,9 +26,27 @@ type Trigger struct {
 	ID       string
 	Kind     TriggerKind
 	Function FunctionID
+	// RegistrationRevision is the immutable authoritative revision supplied
+	// by the product registration store. It is evidence for a product-owned
+	// trigger-principal resolver, not authority by itself.
+	RegistrationRevision string
 	// Spec is the kind-specific configuration (route, cron expr, topic,
 	// state selector …), opaque to the registry.
 	Spec []byte
+}
+
+// TriggerInvocation is the immutable registration evidence captured when a
+// registry entry is armed. The registry remains principal-blind: a product
+// resolver must re-read its authoritative registration and exact-match this
+// ID/revision/generation/function/spec digest before establishing a current
+// execution principal.
+type TriggerInvocation struct {
+	ID                     string
+	Kind                   TriggerKind
+	Function               FunctionID
+	RegistrationRevision   string
+	RegistrationGeneration uint64
+	SpecDigest             [sha256.Size]byte
 }
 
 // KindHandler implements one TriggerKind: it arms instances and invokes
