@@ -8,6 +8,7 @@ package node
 import (
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"io"
 
@@ -41,6 +42,40 @@ func newSigningLedger(inner lad.Ledger, priv ed25519.PrivateKey) *signingLedger 
 	return &signingLedger{inner: inner, priv: priv}
 }
 
+// ErrTopicReserved is returned when a record is published to a topic the
+// receiving DirectoryCache does not retain.
+//
+// 🛑 `keyops` and `quorum` are ACCEPT-AND-DISCARD. They are registered on the
+// cache with merge/key funcs and a
+// signed-topic ACL, and this wrapper will sign them — but ladcache's applyCore
+// switch ends `default: // ignore other topics for directory view`, so a
+// record on either topic Applies WITH NO ERROR and is then invisible to every
+// read (measured: ChangesSinceHLC 0, Dump 0, HasRecord false, Fingerprint 0,
+// against a member-topic control of 1).
+//
+// Harmless today — a census over 2,741 .go files found zero producers — and it
+// fails OPEN the instant that changes: a key REVOCATION would be signed here,
+// accepted by every peer's ACL, gossiped, and silently dropped by every
+// receiver. A revocation that vanishes is worse than one that errors.
+//
+// ladcache is a published dependency and cannot be changed under the freeze;
+// this wrapper is the chokepoint we own. Every lad.Ledger in loom is
+// signingLedger-wrapped (all four rt.ledger assignments, including the one
+// handed to gossip.NewSynchronizer), so refusing here bounds the publish path.
+//
+// UNBLOCK CONDITION — this is a blocking precondition on FIRST USE, not a
+// permanent ban: whoever first needs either topic must land a consumer in the
+// same change (a cache that retains it, or a projection fed from swarm, which
+// does carry these records), then remove the topic from reservedTopics. Do not
+// relax this by deleting the check.
+var ErrTopicReserved = errors.New("ledger: topic is reserved — no receiver retains it")
+
+// reservedTopics are publishable-but-not-consumable. See ErrTopicReserved.
+var reservedTopics = map[lad.Topic]bool{
+	lad.TopicKeyOps: true,
+	lad.TopicQuorum: true,
+}
+
 func isSignedTopic(topic lad.Topic) bool {
 	switch topic {
 	case lad.TopicMember, lad.TopicRole, lad.TopicReach, lad.TopicKeyOps, lad.TopicQuorum:
@@ -54,8 +89,12 @@ func (s *signingLedger) Head(ctx context.Context) (lad.CausalWatermark, error) {
 }
 
 func (s *signingLedger) Append(ctx context.Context, rec lad.Record) error {
+	if reservedTopics[rec.Topic] {
+		return fmt.Errorf("%w: %q — publishing would be silently discarded by every "+
+			"receiver; land a consumer first", ErrTopicReserved, rec.Topic)
+	}
 	if isSignedTopic(rec.Topic) && len(rec.Signature) == 0 {
-		// MESH-H11: fail closed rather than append an unsigned record on a signed
+		// Fail closed rather than append an unsigned record on a signed
 		// topic — peers' signed-topic ACL would silently drop it, exactly the
 		// regression this wrapper exists to prevent. Guard the key up front
 		// (ed25519.Sign panics on a nil key) and re-check the signature landed.
@@ -71,9 +110,19 @@ func (s *signingLedger) Append(ctx context.Context, rec lad.Record) error {
 }
 
 func (s *signingLedger) BatchAppend(ctx context.Context, records []lad.Record) error {
+	// Checked in a first pass so the batch is refused as a whole: a partial
+	// append that dropped only the reserved records would be the same
+	// accept-and-discard failure one layer up.
+	for i := range records {
+		if reservedTopics[records[i].Topic] {
+			return fmt.Errorf("%w: %q at index %d — publishing would be silently "+
+				"discarded by every receiver; land a consumer first",
+				ErrTopicReserved, records[i].Topic, i)
+		}
+	}
 	for i := range records {
 		if isSignedTopic(records[i].Topic) && len(records[i].Signature) == 0 {
-			// MESH-H11: fail closed on a signed topic with no signing key or an
+			// Fail closed on a signed topic with no signing key or an
 			// empty signature — see Append.
 			if len(s.priv) == 0 {
 				return fmt.Errorf("signing ledger: cannot sign %s record — no private key", records[i].Topic)

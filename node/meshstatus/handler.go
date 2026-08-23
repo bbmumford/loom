@@ -12,9 +12,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ORBTR/aether"
 	lad "github.com/bbmumford/ledger"
 	ladcache "github.com/bbmumford/ledger/cache"
-	"github.com/ORBTR/aether"
 	"github.com/bbmumford/loom/ports"
 )
 
@@ -70,7 +70,6 @@ type DirectoryProvider interface {
 	Roles(ctx context.Context, tenant string, query ladcache.RoleQuery) ([]lad.RoleRecord, error)
 	Reach(ctx context.Context, tenant string, query ladcache.ReachQuery) ([]lad.ReachRecord, error)
 }
-
 
 // NewHandler returns an http.HandlerFunc that serves GET /mesh/status.
 // It exposes public, aggregate mesh status data suitable for external monitoring.

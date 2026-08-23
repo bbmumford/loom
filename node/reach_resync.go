@@ -26,8 +26,26 @@ const reachResyncInterval = 2 * time.Minute
 // from ConnectionManager.Start as a sibling of the upgrade walker and
 // scanAndConnect ticker. Stops when ctx is cancelled (typically on
 // Stop).
-func (m *ConnectionManager) runReachResyncWalker(ctx context.Context) {
-	t := time.NewTicker(reachResyncInterval)
+//
+// The period is a PARAMETER rather than a direct read of
+// reachResyncInterval for one reason: this is a BACKSTOP, so if the loop
+// ever stopped sweeping the symptom would not be an error — it would be
+// the intermittent return of the original "(unresolved)" bug, months
+// later, with nothing pointing here. A test cannot observe a second
+// sweep on a 2-minute period, so without this seam the "keeps sweeping"
+// property is permanently unverifiable. Production still passes
+// reachResyncInterval from the single call site in Start, so the live
+// period is unchanged and still declared in exactly one place.
+//
+// every <= 0 falls back to the constant instead of reaching
+// time.NewTicker, which PANICS on a non-positive duration — and this
+// runs in its own goroutine, where that panic takes the whole node down
+// rather than failing locally.
+func (m *ConnectionManager) runReachResyncWalker(ctx context.Context, every time.Duration) {
+	if every <= 0 {
+		every = reachResyncInterval
+	}
+	t := time.NewTicker(every)
 	defer t.Stop()
 	for {
 		select {

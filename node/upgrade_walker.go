@@ -148,11 +148,11 @@ func (m *ConnectionManager) tryProactiveUpgrades(ctx context.Context) {
 // path anyway.
 func (m *ConnectionManager) snapshotUpgradeCandidates(now time.Time) []upgradeCandidate {
 	type peerSnapshot struct {
-		nodeID         string
-		region         string
-		bootstrapHost  string
-		bestGrade      Grade
-		multipathMgr   interface{ AllProtocolsRepresented() []aether.Protocol }
+		nodeID        string
+		region        string
+		bootstrapHost string
+		bestGrade     Grade
+		multipathMgr  interface{ AllProtocolsRepresented() []aether.Protocol }
 	}
 
 	m.mu.Lock()
@@ -240,9 +240,28 @@ func (m *ConnectionManager) snapshotUpgradeCandidates(now time.Time) []upgradeCa
 		// pull a fresh read under m.mu. Cheap (one map lookup per peer).
 		m.mu.Lock()
 		peer, present := m.peers[s.nodeID]
+		var live []Protocol
+		if present && peer != nil {
+			live = make([]Protocol, 0, len(peer.transports))
+			for proto := range peer.transports {
+				live = append(live, proto)
+			}
+		}
 		m.mu.Unlock()
 		if !present || peer == nil {
 			continue
+		}
+
+		// peer.transports is keyed by NODE protocol and is the authoritative
+		// record of what this peer currently has. The set above was derived by
+		// round-tripping aether protocols through unmapProtocol, which cannot
+		// return ProtoTLS: mapProtocol folds ProtoTLS onto aether.ProtoWebSocket
+		// when the path is registered, and unmapProtocol only produces ProtoTLS
+		// from aether.ProtoTCP, which mapProtocol never emits. A peer with a
+		// live TLS path therefore never had ProtoTLS in the active set, so the
+		// walker re-probed a protocol it was already carrying on every pass.
+		for _, proto := range live {
+			active[proto] = struct{}{}
 		}
 		for _, proto := range protocolOrder {
 			if _, on := active[proto]; on {
@@ -454,7 +473,7 @@ func (m *ConnectionManager) probeUpgrade(ctx context.Context, c upgradeCandidate
 	// Hand off to the same negotiate+register path used by connectPeer.
 	// registerMeshSession arbitrates dedup vs the existing lower-grade
 	// session; multipath_dial's K-floor caps simultaneous paths.
-	go m.rt.DialAndAcceptMesh(ctx, conn, c.peerNodeID, c.peerRegion, c.target, c.bootstrapHost, svcName, "")
+	go m.rt.DialAndAcceptMesh(ctx, conn, c.peerNodeID, c.peerRegion, c.target, c.bootstrapHost, svcName, "", dialBorrowsConnectingState)
 }
 
 // markWalkerPendingSession records that a probe-dial for the given
@@ -619,9 +638,9 @@ func (m *ConnectionManager) WalkerStats() (ticks, candidates, started, succeeded
 
 // WalkerWakeStats returns the wake-channel coalescing counters.
 // delivered = SignalWalkerWake calls that enqueued a wake; coalesced =
-// calls that found the channel already full and dropped (the previously-
-// queued wake is sufficient to cover this signal too, by walker
-// semantics — the walker re-snapshots every connected peer every run).
+// calls that found the channel already full and dropped (the queued wake
+// covers this signal too, by walker semantics — the walker re-snapshots
+// every connected peer every run).
 func (m *ConnectionManager) WalkerWakeStats() (delivered, coalesced uint64) {
 	return m.walkerWakeDelivered.Load(), m.walkerWakeCoalesced.Load()
 }
