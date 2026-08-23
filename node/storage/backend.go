@@ -8,7 +8,6 @@ import (
 	"context"
 )
 
-
 // StoreBackend defines the content-addressable storage backend responsible for persisting chunks locally.
 type StoreBackend interface {
 	Put(hash Hash, data []byte) error

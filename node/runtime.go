@@ -28,36 +28,36 @@ import (
 	"sync/atomic"
 	"time"
 
+	aether "github.com/ORBTR/aether"
+	"github.com/ORBTR/aether/discovery"
+	"github.com/ORBTR/aether/nat"
+	"github.com/ORBTR/aether/noise"
+	quictransport "github.com/ORBTR/aether/quic"
+	"github.com/ORBTR/aether/relay"
+	lad "github.com/bbmumford/ledger"
+	"github.com/bbmumford/ledger/anchor"
+	ladcache "github.com/bbmumford/ledger/cache"
+	"github.com/bbmumford/ledger/storage"
+	"github.com/bbmumford/loom/core/directory/gossip"
+	meshledger "github.com/bbmumford/loom/core/directory/ledger"
+	"github.com/bbmumford/loom/core/transport/manager"
+	"github.com/bbmumford/reach"
 	"github.com/bbmumford/route"
 	"github.com/bbmumford/tursoraft/connectors"
 	meshdb "github.com/bbmumford/tursoraft/manager"
-	lad "github.com/bbmumford/ledger"
-	"github.com/bbmumford/ledger/anchor"
-	"github.com/ORBTR/aether/discovery"
-	"github.com/ORBTR/aether/nat"
-	ladcache "github.com/bbmumford/ledger/cache"
-	"github.com/bbmumford/reach"
-	"github.com/bbmumford/loom/core/directory/gossip"
-	"github.com/bbmumford/ledger/storage"
-	meshledger "github.com/bbmumford/loom/core/directory/ledger"
-	"github.com/bbmumford/loom/core/transport/manager"
-	quictransport "github.com/ORBTR/aether/quic"
-	aether "github.com/ORBTR/aether"
-	"github.com/ORBTR/aether/noise"
-	"github.com/ORBTR/aether/relay"
 
-	"github.com/gobwas/ws"
-	"google.golang.org/grpc"
 	wstransport "github.com/ORBTR/aether/websocket"
 	"github.com/bbmumford/loom/compose"
+	"github.com/bbmumford/loom/directory"
+	"github.com/bbmumford/loom/journal"
 	"github.com/bbmumford/loom/node/audit"
 	"github.com/bbmumford/loom/node/handlers"
 	obshealth "github.com/bbmumford/loom/pkg/obshealth"
 	"github.com/bbmumford/loom/pkg/rpc"
 	"github.com/bbmumford/loom/ports"
+	"github.com/gobwas/ws"
+	"google.golang.org/grpc"
 )
-
-
 
 // upgradedConn wraps a 101-upgraded HTTP connection for bidirectional use.
 // Reads go through resp.Body (which buffers from the TLS conn); writes go
@@ -78,10 +78,10 @@ func (c *upgradedConn) SetWriteDeadline(t time.Time) error { return c.writer.Set
 
 // bootstrapDialResult holds the outcome of a successful bootstrap host dial.
 type bootstrapDialResult struct {
-	conn     *upgradedConn // bidirectional conn (reads from resp.Body, writes to TLS)
-	nodeID   string        // remote node ID from X-VL1-Node-ID header
-	resp     *http.Response
-	rawConn  net.Conn // underlying TLS connection
+	conn    *upgradedConn // bidirectional conn (reads from resp.Body, writes to TLS)
+	nodeID  string        // remote node ID from X-VL1-Node-ID header
+	resp    *http.Response
+	rawConn net.Conn // underlying TLS connection
 }
 
 // dialBootstrapHost dials a bootstrap host via HTTPS + VL1 upgrade and returns
@@ -179,7 +179,7 @@ func (rt *Runtime) dialBootstrapHost(ctx context.Context, host string) (*bootstr
 		rt.republishWithPublicIP()
 	}
 
-	// Phase 1 (LAD-unified): fetch the anchor's signed ReachRecord and append
+	// Fetch the anchor's signed ReachRecord and append
 	// to our local ledger via the same TopicReach path that gossip uses.
 	// Replaces publishBootstrapMember (which wrote a member-only record from
 	// HTTP headers with NO addresses, leaving anchors invisible to
@@ -244,12 +244,12 @@ func (rt *Runtime) ingestPeerReachRecord(ctx context.Context, host, remoteNodeID
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Printf("[NODE] Bootstrap: fetch %s/mesh/reach/%s: %v (gossip will recover)", host, remoteNodeID[:12], err)
+		log.Printf("[NODE] Bootstrap: fetch %s/mesh/reach/%s: %v (gossip will recover)", host, truncID(remoteNodeID), err)
 		return
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		log.Printf("[NODE] Bootstrap: %s/mesh/reach/%s status %d (gossip will recover)", host, remoteNodeID[:12], resp.StatusCode)
+		log.Printf("[NODE] Bootstrap: %s/mesh/reach/%s status %d (gossip will recover)", host, truncID(remoteNodeID), resp.StatusCode)
 		return
 	}
 
@@ -271,11 +271,11 @@ func (rt *Runtime) ingestPeerReachRecord(ctx context.Context, host, remoteNodeID
 		return
 	}
 	if err := reach.Verify(rec); err != nil {
-		log.Printf("[NODE] Bootstrap: reach signature verify failed for %s: %v", remoteNodeID[:12], err)
+		log.Printf("[NODE] Bootstrap: reach signature verify failed for %s: %v", truncID(remoteNodeID), err)
 		return
 	}
 	if rec.NodeID != remoteNodeID {
-		log.Printf("[NODE] Bootstrap: reach NodeID mismatch (rec=%s expected=%s) — possible MITM, dropping", rec.NodeID[:12], remoteNodeID[:12])
+		log.Printf("[NODE] Bootstrap: reach NodeID mismatch (rec=%s expected=%s) — possible MITM, dropping", truncID(rec.NodeID), truncID(remoteNodeID))
 		return
 	}
 
@@ -289,10 +289,10 @@ func (rt *Runtime) ingestPeerReachRecord(ctx context.Context, host, remoteNodeID
 		Timestamp:    time.Now().UTC(),
 		LamportClock: rt.lamportClock.Tick(),
 	}); err != nil {
-		log.Printf("[NODE] Bootstrap: ledger.Append reach for %s: %v", remoteNodeID[:12], err)
+		log.Printf("[NODE] Bootstrap: ledger.Append reach for %s: %v", truncID(remoteNodeID), err)
 		return
 	}
-	log.Printf("[NODE] Bootstrap: ingested signed reach for %s from %s (addrs=%d)", remoteNodeID[:12], host, len(rec.Addresses))
+	log.Printf("[NODE] Bootstrap: ingested signed reach for %s from %s (addrs=%d)", truncID(remoteNodeID), host, len(rec.Addresses))
 }
 
 type rateLimitEntry struct {
@@ -324,7 +324,7 @@ type Runtime struct {
 	natStrategy    *nat.Strategy
 
 	// punchCoord builds, signs and verifies coordinated hole-punch
-	// payloads (Phase 2, fleet NAT traversal). It owns no transport —
+	// payloads for fleet NAT traversal. It owns no transport —
 	// the responder side is exposed over the mesh RPC path via
 	// holepunchRPCHandler, the initiator side drives it from connectPeer.
 	punchCoord *punchCoordinator
@@ -333,12 +333,31 @@ type Runtime struct {
 	identity         *NodeIdentity
 	transportMgr     *manager.TransportManager // per-tenant transport routing
 	sharedTransport  *manager.SharedTransport  // shared preamble-based transport (may be nil)
-	listenTransports []aether.Transport     // unique transports needing Listen()
+	listenTransports []aether.Transport        // unique transports needing Listen()
 	listenTenantIDs  []string                  // parallel: tenant ID per listener (""=from session)
 	ledger           lad.Ledger
 	cache            *ladcache.DirectoryCache
-	publicIPMu       sync.RWMutex // MESH-A01: guards publicIP (written by STUN + bootstrap goroutines, read by HTTP handlers + punch)
-	publicIP         string       // discovered via STUN after listener starts; access via getPublicIP/setPublicIP
+	// liveDir is the ports.LiveDirectory over the LAD cache. Mesh directory
+	// reads route through it instead of
+	// touching the cache directly. Nil when the cache is (VL1 disabled).
+	liveDir    ports.LiveDirectory
+	liveDirRaw *directory.LADDirectory
+
+	// (see closePortSeams for how these are released)
+	//
+	// journal is the ports.DurableJournal — the durable history and recovery
+	// boundary. Constructed and
+	// lifecycle-owned, with NO consumer routed through it yet, so it is not
+	// the live merge authority and nothing reads from it.
+	//
+	// ⚠ THE DELTA IS NOT ZERO AND SAYING SO MATTERS: journal.Open creates
+	// <DataDir>/journal/loom-journal.log and holds its fd until Shutdown.
+	// That is one empty file and one descriptor per node — no writes occur
+	// until an append path is routed here.
+	journal             ports.DurableJournal
+	journalRaw          *journal.FileJournal
+	publicIPMu          sync.RWMutex       // Guards publicIP (written by STUN + bootstrap goroutines, read by HTTP handlers + punch)
+	publicIP            string             // discovered via STUN after listener starts; access via getPublicIP/setPublicIP
 	connMgr             *ConnectionManager // multi-transport peer connection manager (allocated synchronously in Initialize before listener)
 	connMgrPostInitDone bool               // guards the post-init wiring goroutine in bootstrapPeers from re-running on re-bootstrap
 
@@ -346,13 +365,13 @@ type Runtime struct {
 	// latched state: it flips on at saturationHighWater utilization and off at
 	// saturationLowWater, so a budget hovering at the boundary does not flap
 	// the advertised "saturated" tag on every republish.
-	satMu     sync.Mutex
-	satActive bool
-	peerStore        *FilePeerStore         // persisted peer list for cold-restart warm dials
-	discoverers      []discovery.Discoverer // optional discovery layers (DNS SRV, mDNS, etc.)
+	satMu       sync.Mutex
+	satActive   bool
+	peerStore   *FilePeerStore         // persisted peer list for cold-restart warm dials
+	discoverers []discovery.Discoverer // optional discovery layers (DNS SRV, mDNS, etc.)
 	// (dormancy managed inline by ConnectionManager.transports)
-	syncer           *gossip.Synchronizer
-	meshDB           *meshdb.Manager
+	syncer *gossip.Synchronizer
+	meshDB *meshdb.Manager
 
 	// Optional components
 	rpcServer            *RPCServer
@@ -361,16 +380,16 @@ type Runtime struct {
 	sessionHealthMonitor *SessionHealthMonitor
 	circuitBreaker       *CircuitBreaker
 	auditLogger          *audit.AuditLogger
-	tlsConfig             *TLSConfig
-	healthEvaluator       HealthEvaluator      // unified mesh+HTTP health evaluator
-	ladSnapshot           *LADSnapshotCache    // refreshing snapshot of LAD directory state — readers never block on directory I/O
-	selfHealth            *SelfHealthMonitor   // observability self-health monitor (watches for staleness)
-	healthRegistry        *obshealth.Registry  // platform-wide degradedSubsystem sink — mesh/node/monitoring/billing/etc register here
-	lamportClock         LamportClock       // causal ordering for LAD records
-	partitionDetector    *PartitionDetector // split-brain detection via clock divergence across peers
+	tlsConfig            *TLSConfig
+	healthEvaluator      HealthEvaluator     // unified mesh+HTTP health evaluator
+	ladSnapshot          *LADSnapshotCache   // refreshing snapshot of LAD directory state — readers never block on directory I/O
+	selfHealth           *SelfHealthMonitor  // observability self-health monitor (watches for staleness)
+	healthRegistry       *obshealth.Registry // platform-wide degradedSubsystem sink — mesh/node/monitoring/billing/etc register here
+	lamportClock         LamportClock        // causal ordering for LAD records
+	partitionDetector    *PartitionDetector  // split-brain detection via clock divergence across peers
 
 	// Swarm integration — unified PeerRecord publisher + RoleTable +
-	// AddressTable. Replaces the legacy reach + role publish paths.
+	// AddressTable. Carries reach and role publication in one record.
 	// Initialized lazily via InitSwarm(); nil until the consumer wires
 	// it (typically inside Runtime.Initialize after identity load +
 	// rpc.Registry build).
@@ -397,9 +416,9 @@ type Runtime struct {
 	// Anchor service
 	anchorGenerator *anchor.Generator
 	// anchorLeader removed — all anchor-capable nodes generate snapshots independently
-	anchorCancel    context.CancelFunc
-	latestSnapshot  *anchor.Snapshot
-	snapshotMu      sync.RWMutex
+	anchorCancel   context.CancelFunc
+	latestSnapshot *anchor.Snapshot
+	snapshotMu     sync.RWMutex
 
 	// VL1/LAD metrics
 	vl1Metrics struct {
@@ -420,6 +439,8 @@ type Runtime struct {
 	ctx          context.Context
 	cancel       context.CancelFunc
 	shutdownOnce sync.Once
+	lifecycleMu  sync.Mutex // serializes goroutine admission and compose-registry creation against Shutdown
+	goClosed     bool       // guarded by lifecycleMu; true once Shutdown begins
 	wg           sync.WaitGroup
 
 	// Phase-1 runtime role activation (role_activation.go) + takeover
@@ -429,7 +450,24 @@ type Runtime struct {
 	roleActivation *roleActivationManager
 	rpcRegistry    *rpc.Registry
 	takeover       *TakeoverEngine
-	composeReg     *compose.Registry
+	composeReg     *compose.Registry // guarded by lifecycleMu
+	composeTaskSeq atomic.Uint64
+	// composeTaskInFlight bounds live async work independently of the
+	// terminal-completion retention cap. Rejections are exported through
+	// MeshMetrics so admission pressure is observable.
+	composeTaskAdmissionMu sync.Mutex
+	composeTaskInFlight    atomic.Int64
+	composeTaskByOwner     map[ports.ExecutionOwnerKey]int64
+	composeTaskRejected    atomic.Uint64
+
+	// composeTaskCompletions makes every accepted Deferred task handle
+	// queryable after it reaches a terminal state. The order slice bounds the
+	// in-memory history; optional external observation is configured through
+	// Config.ComposeTaskCompletionObserver.
+	composeTaskCompletionMu    sync.RWMutex
+	composeTaskCompletions     map[string]composeTaskCompletionRecord
+	composeTaskCompletionOrder []string
+	composeTaskCompletionOwner map[ports.ExecutionOwnerKey][]string
 
 	// bootstrap connections accepted when running as a bootstrap host
 	bootstrapConns   map[string]net.Conn
@@ -444,7 +482,6 @@ type Runtime struct {
 	// WebSocket gossip connections accepted via /mesh/ws
 	wsConns   map[string]net.Conn
 	wsConnsMu sync.Mutex
-
 }
 
 // Initialize creates and starts a new mesh node runtime
@@ -557,9 +594,9 @@ func Initialize(cfg Config) (*Runtime, error) {
 
 	// Register built-in handlers on the registry
 	_ = registry.RegisterRPC(&PingRPCHandler{})
-	_ = registry.RegisterRPC(&StatusRPCHandler{identity: identity, startTime: rt.rpcServer.startTime})
+	_ = registry.RegisterRPC(&StatusRPCHandler{identity: identity, startTime: rt.rpcServer.startTime, rt: rt})
 
-	// Phase 2 NAT traversal: the punch coordinator and its responder-side
+	// NAT traversal: the punch coordinator and its responder-side
 	// RPC handler. NATBehaviour / localPunchCandidates are snapshot
 	// functions read fresh on each build, so registering here — before
 	// STUN classification and transport listen — is safe: the payload
@@ -588,6 +625,35 @@ func Initialize(cfg Config) (*Runtime, error) {
 		// observed 94-tombstones-vs-2-live-members convergence stall
 		// on help.orbtr.io after fleet-wide deploys.
 		rt.cache.SetLocalNodeID(string(rt.identity.NodeID))
+
+		// The LiveDirectory seam over the same
+		// cache. Read-only apart from OverrideLiveness; it delegates every
+		// query to the cache with the tenant the caller passes, so routing a
+		// read through it is behaviour-identical for that caller.
+		if ld, err := directory.NewLADDirectory(rt.cache); err != nil {
+			log.Printf("[NODE] LiveDirectory seam unavailable: %v", err)
+		} else {
+			rt.liveDirRaw = ld
+			rt.liveDir = ld
+		}
+
+		// The DurableJournal seam. Constructed and
+		// lifecycle-owned here, with NO consumer routed through it — it is
+		// explicitly NOT the live merge authority ("it is not the live
+		// merge authority"), and nothing appends or replays yet.
+		//
+		// 🛑 FAIL-SOFT, MIRRORING THE LiveDirectory SEAM ABOVE, AND FOR THE
+		// SAME REASON: a node whose DataDir is read-only or full must keep
+		// running exactly as it does today rather than fail to start over a
+		// seam that no consumer depends on. rt.journal stays nil and every
+		// future consumer must nil-check it — the interface is nil, so an
+		// unguarded call would panic where the concrete nil would not.
+		if fj, err := journal.Open(filepath.Join(rt.cfg.DataDir, "journal")); err != nil {
+			log.Printf("[NODE] DurableJournal seam unavailable: %v", err)
+		} else {
+			rt.journalRaw = fj
+			rt.journal = fj
+		}
 		// Re-sign envelopes rebuilt from typed projections inside
 		// cache.Dump/DumpSince so the gossip emit path produces wire
 		// records the receiver's signedTopicACL can verify.
@@ -595,7 +661,15 @@ func Initialize(cfg Config) (*Runtime, error) {
 		rt.cache.StartEviction(ladcache.DefaultEvictionInterval)
 
 		// Register HSTLES topic configurations with the Ledger cache.
-		// All HSTLES topics use OverwriteMerge (latest timestamp wins) and NodeIDKey.
+		// All HSTLES topics use OverwriteMerge and NodeIDKey. OverwriteMerge
+		// takes the highest HLC when both records carry one and the latest
+		// Timestamp otherwise — so Reach, which is bridged
+		// with an HLC from the swarm envelope, is HLC-ordered, while the
+		// locally-published topics below fall to Timestamp.
+		//
+		// NodeIDKey is what makes that Timestamp fallback safe: each key holds
+		// ONE node's records, so the comparison is intra-node and cross-node
+		// clock skew never enters it.
 		rt.cache.RegisterTopic(lad.TopicMember, lad.TopicConfig{Merge: lad.OverwriteMerge, Key: lad.NodeIDKey})
 		rt.cache.RegisterTopic(lad.TopicRole, lad.TopicConfig{Merge: lad.OverwriteMerge, Key: lad.NodeIDKey})
 		rt.cache.RegisterTopic(lad.TopicReach, lad.TopicConfig{Merge: lad.OverwriteMerge, Key: lad.NodeIDKey, ExpiryEnabled: true})
@@ -759,6 +833,26 @@ func Initialize(cfg Config) (*Runtime, error) {
 		rt.syncer = gossip.NewSynchronizer(rt.ledger, rt.cache)
 		log.Printf("[NODE] LAD synchronizer initialized")
 
+		// Periodic subsystem probe. Constructed here because it needs rt.ledger,
+		// which is assigned just above.
+		//
+		// 🔴 WITHOUT THIS THE FIELD IS NEVER ASSIGNED, AND THREE READERS SILENTLY
+		// REPORT HEALTH. IsHealthy (:1353) returns true on a nil healthCheck, so
+		// every caller of Runtime.IsHealthy reads "healthy" regardless of state;
+		// HealthCheck (:1348) hands out nil; and performHealthCheck is the only
+		// writer of the mesh.raft and mesh.ledger entries in healthRegistry, which
+		// the mesh_subsystem_degraded gauge and /api/monitoring/subsystems both
+		// read — so an unreachable ledger renders as healthy on every mounted
+		// surface.
+		//
+		// Only the deps this Runtime actually owns are wired. performHealthCheck
+		// treats a nil dep as "not observed" and leaves that subsystem's registry
+		// entry untouched, so leaving the raft hooks nil reports nothing about
+		// raft rather than reporting it healthy — the fail-closed direction.
+		// Endpoints that own a raft can supply those hooks and get the same
+		// per-subsystem gradient without changing anything here.
+		rt.startHealthCheck(30 * time.Second)
+
 		if cfg.VL1.Enabled {
 			// Create TransportManager for tenant-aware transport routing
 			rt.transportMgr = manager.New()
@@ -906,9 +1000,9 @@ func Initialize(cfg Config) (*Runtime, error) {
 			// invariants — not deferred to PublishRPCHandlersToLAD.
 			// Endpoints that never call PublishRPCHandlersToLAD
 			// (api.hstles, login.hstles, monitoring.hstles,
-			// failover.hstles, support.hstles, orbtr.io, …) previously
-			// left rt.swarm and rt.route nil and emitted zero route
-			// advertisements; every dispatch from those nodes had to
+			// failover.hstles, support.hstles, orbtr.io, …) would otherwise
+			// leave rt.swarm and rt.route nil and emit zero route
+			// advertisements, forcing every dispatch from those nodes to
 			// fall back to LAD-latency lookups. Wiring here guarantees
 			// the route engine is live the moment any session can be
 			// accepted.
@@ -946,7 +1040,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 				}
 			}
 
-			// MESH-A06: start the scaler / AdaptiveController reader goroutines
+			// Start the scaler / AdaptiveController reader goroutines
 			// only AFTER rt.swarm is published by InitSwarm above. Those readers
 			// dereference m.rt.swarm.AddressTable/RoleTable; launching them before
 			// the swarm-pointer assignment raced the write (benign to the nil-
@@ -955,10 +1049,10 @@ func Initialize(cfg Config) (*Runtime, error) {
 			StartMeshServices(rt.ctx, rt.connMgr)
 			log.Printf("[NODE] Aether mesh services started")
 
-			// MESH-G02: poll the split-brain detector so clock divergence /
-			// silent-peer conditions are actually reported (Detect/LogStatus
-			// previously had no runtime caller). Detect also evicts long-departed
-			// peers, so this doubles as the detector's janitor.
+			// Poll the split-brain detector so clock divergence and silent-peer
+			// conditions are reported: this is Detect/LogStatus's only runtime
+			// caller. Detect also evicts long-departed peers, so this doubles as
+			// the detector's janitor.
 			if rt.partitionDetector != nil {
 				rt.GoCtx("partition-detector", func(ctx context.Context) {
 					t := time.NewTicker(2 * time.Minute)
@@ -1105,6 +1199,12 @@ func Initialize(cfg Config) (*Runtime, error) {
 		}
 	}
 
+	// Adaptive gossip cadence (opt-in): pace the gossip loop's interval from a
+	// live network profile fed by measured peer RTT. No-op unless
+	// Config.AdaptiveGossipCadence is set, in which case the loop keeps its fixed
+	// envelope. Bound to the runtime ctx so it stops with the node.
+	rt.startGossipCadence(ctx)
+
 	// Step 7: Initialize Tursoraft databases if configured
 	// NOTE: Databases are optional - applications can initialize Tursoraft directly
 	// in main.go for role-specific database groups and more control.
@@ -1194,7 +1294,10 @@ func Initialize(cfg Config) (*Runtime, error) {
 		// an earlier anchor-only publish.
 		hasAnchorRole := false
 		for _, r := range rt.cfg.Roles {
-			if r == "anchor" { hasAnchorRole = true; break }
+			if r == "anchor" {
+				hasAnchorRole = true
+				break
+			}
 		}
 		if !hasAnchorRole {
 			rt.cfg.Roles = append(rt.cfg.Roles, "anchor")
@@ -1247,7 +1350,6 @@ func (rt *Runtime) RPCServer() *RPCServer {
 	return rt.rpcServer
 }
 
-
 // Registry returns the handler registry for direct handler registration.
 // Callers should use registry.RegisterRPC(h) to register handlers that
 // implement handlers.RPCHandler (the preferred binary proto path).
@@ -1266,6 +1368,29 @@ func (rt *Runtime) AuditLogger() *audit.AuditLogger {
 // CircuitBreaker returns the circuit breaker if enabled
 func (rt *Runtime) CircuitBreaker() *CircuitBreaker {
 	return rt.circuitBreaker
+}
+
+// startHealthCheck constructs and starts the periodic subsystem probe from the
+// dependencies this Runtime owns. Separated from Initialize so the wiring has a
+// seam a test can enter: inlined, the only way to reach it was a full
+// Initialize, and a deleted assignment produced no failing test.
+//
+// Consumes rt.ledger and rt.healthRegistry, so it must run after both are
+// assigned. Feeds rt.healthCheck, which Runtime.IsHealthy and Runtime.
+// HealthCheck read, and whose probe is the only writer of the mesh.raft and
+// mesh.ledger entries the monitoring surfaces render.
+//
+// The raft hooks are left nil because this Runtime owns no raft.
+// performHealthCheck treats a nil dependency as unobserved and leaves that
+// subsystem alone, so nothing is reported about raft rather than raft being
+// reported healthy.
+func (rt *Runtime) startHealthCheck(interval time.Duration) {
+	rt.healthCheck = NewHealthCheck(HealthCheckDeps{
+		Ledger:   rt.ledger,
+		Registry: rt.healthRegistry,
+	}, interval)
+	rt.healthCheck.Start()
+	log.Printf("[NODE] Health check started (ledger probe, %v)", interval)
 }
 
 // HealthCheck returns the health checker if enabled
@@ -1302,6 +1427,27 @@ func (rt *Runtime) Shutdown() error {
 	rt.shutdownOnce.Do(func() {
 		log.Println("[NODE] Shutting down mesh node runtime...")
 
+		// Stop new tracked goroutines before any cleanup begins. Holding the
+		// same lock in Runtime.Go makes the final positive wg.Add happen before
+		// this point, so the later wg.Wait can never race a new enrollment.
+		// Close the compose registry before runtime cancellation so every
+		// instance receives its owned teardown signal and no post-shutdown
+		// TriggerRegistry call can manufacture a live registry.
+		rt.lifecycleMu.Lock()
+		rt.goClosed = true
+		composeReg := rt.composeReg
+		rt.lifecycleMu.Unlock()
+		if composeReg != nil {
+			composeReg.Close()
+		}
+
+		// Step 0a: release the LiveDirectory seam's own resources. It owns
+		// liveness-override timers (LAD's override has no expiry, so the
+		// adapter enforces the port's ttlMs itself) and those timers hold a
+		// reference to the cache — a shutdown that skipped this would leave
+		// them firing into a torn-down runtime.
+		rt.closePortSeams()
+
 		// Step 0: Evict our own records from the LOCAL cache only.
 		// Uses "liveness-local" reason so tombstones are NOT propagated via gossip.
 		// Propagating shutdown tombstones blocks the node from re-registering
@@ -1332,6 +1478,22 @@ func (rt *Runtime) Shutdown() error {
 		// Step 1d: Stop LAD cache eviction
 		if rt.cache != nil {
 			rt.cache.StopEviction()
+		}
+
+		// Step 1e: Stop the LAD snapshot refresh loop. Start is called during
+		// Initialize; without the matching Stop the refresh ticker and its
+		// per-tick fan-out keep running against a cache the rest of shutdown is
+		// tearing down.
+		if rt.ladSnapshot != nil {
+			rt.ladSnapshot.Stop()
+		}
+
+		// Step 1f: Stop the swarm transport read loops. The transport holds a
+		// per-peer reader goroutine; the transport manager closes the underlying
+		// connections, which unblocks them, but Stop is what marks the transport
+		// stopped so a late Send is refused rather than racing a closing conn.
+		if rt.swarm != nil && rt.swarm.Transport != nil {
+			rt.swarm.Transport.Stop()
 		}
 
 		// Step 1e: Stop swarm PeerPublisher BEFORE rt.cancel so the
@@ -1401,28 +1563,29 @@ func (rt *Runtime) Config() Config {
 // Every spawn that should keep the runtime alive — accept loops, walkers,
 // publishers, snapshot loops, gossip/upgrade reconcilers — MUST go through
 // one of these helpers instead of bare `go fn()`.
+// Calls made after Shutdown begins are rejected without running fn.
 //
 // Invariants the helpers guarantee:
 //
-//   1. wg enrollment. rt.wg.Add(1) before spawn, rt.wg.Done() on exit. The
-//      Shutdown sequence (`rt.cancel(); rt.wg.Wait()`) therefore drains
-//      every helper-spawned goroutine; bare `go fn()` callers are invisible
-//      to wg.Wait and may outlive Close, corrupting the next Initialize on
-//      hot reload.
+//  1. wg enrollment. rt.wg.Add(1) before spawn, rt.wg.Done() on exit. The
+//     Shutdown sequence (`rt.cancel(); rt.wg.Wait()`) therefore drains
+//     every helper-spawned goroutine; bare `go fn()` callers are invisible
+//     to wg.Wait and may outlive Close, corrupting the next Initialize on
+//     hot reload.
 //
-//   2. Panic recovery. Each goroutine runs under a deferred recover that
-//      logs the spawn site name + stack trace and returns. A panic in one
-//      walker no longer kills the whole process — the mesh keeps running
-//      and the operator sees `[runtime.Go] panic in <name>: ...` in logs
-//      with full forensic context. This complements BidiRPC's per-request
-//      recovery and the existing safeGo() helper in concurrency_helpers.go;
-//      Runtime.Go is the wg-enrolled strict superset.
+//  2. Panic recovery. Each goroutine runs under a deferred recover that
+//     logs the spawn site name + stack trace and returns. A panic in one
+//     walker no longer kills the whole process — the mesh keeps running
+//     and the operator sees `[runtime.Go] panic in <name>: ...` in logs
+//     with full forensic context. This complements BidiRPC's per-request
+//     recovery and the existing safeGo() helper in concurrency_helpers.go;
+//     Runtime.Go is the wg-enrolled strict superset.
 //
-//   3. Named forensics. The `name` argument is a short identifier (e.g.
-//      "lad.continuous_sync", "swarm.peer_publisher.run", "anchor.snapshot_loop")
-//      that appears in panic logs and may be exposed later via a debug
-//      endpoint. Use dotted-namespace strings; keep them stable so log
-//      greppers don't break.
+//  3. Named forensics. The `name` argument is a short identifier (e.g.
+//     "lad.continuous_sync", "swarm.peer_publisher.run", "anchor.snapshot_loop")
+//     that appears in panic logs and may be exposed later via a debug
+//     endpoint. Use dotted-namespace strings; keep them stable so log
+//     greppers don't break.
 //
 // GoCtx variant: passes rt.ctx to fn. Use it for goroutines whose entire
 // lifetime should track the runtime — the most common shape. The plain Go
@@ -1436,7 +1599,18 @@ func (rt *Runtime) Config() Config {
 // reachable (Init-time discovery, one-shot helpers) — see RUNTIME_README
 // for the exclusion list.
 func (rt *Runtime) Go(name string, fn func()) {
+	_ = rt.tryGo(name, fn)
+}
+
+func (rt *Runtime) tryGo(name string, fn func()) bool {
+	rt.lifecycleMu.Lock()
+	if rt.goClosed {
+		rt.lifecycleMu.Unlock()
+		return false
+	}
 	rt.wg.Add(1)
+	rt.lifecycleMu.Unlock()
+
 	go func() {
 		defer rt.wg.Done()
 		defer func() {
@@ -1446,22 +1620,18 @@ func (rt *Runtime) Go(name string, fn func()) {
 		}()
 		fn()
 	}()
+	return true
 }
 
 // GoCtx is the context-flavoured variant of Go. fn receives rt.ctx so the
 // callsite doesn't have to capture the Runtime pointer just to plumb the
 // shutdown signal in. Same wg-enrollment + panic-recovery semantics as Go.
 func (rt *Runtime) GoCtx(name string, fn func(context.Context)) {
-	rt.wg.Add(1)
-	go func() {
-		defer rt.wg.Done()
-		defer func() {
-			if r := recover(); r != nil {
-				log.Printf("[runtime.Go] panic in %s: %v\n%s", name, r, debug.Stack())
-			}
-		}()
-		fn(rt.ctx)
-	}()
+	_ = rt.tryGoCtx(name, fn)
+}
+
+func (rt *Runtime) tryGoCtx(name string, fn func(context.Context)) bool {
+	return rt.tryGo(name, func() { fn(rt.ctx) })
 }
 
 // TransportManager returns the multi-tenant transport manager if VL1 is enabled.
@@ -1767,12 +1937,16 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	defer rt.vl1Metrics.RUnlock()
 
 	m := map[string]interface{}{
-		"active_sessions":      rt.vl1Metrics.activeSessions,
-		"total_connections":    rt.vl1Metrics.totalConnections,
-		"failed_dials":         rt.vl1Metrics.failedDials,
-		"last_sync_time":       rt.vl1Metrics.lastSyncTime,
-		"sync_lag_seconds":     rt.vl1Metrics.syncLag.Seconds(),
-		"ledger_append_errors": rt.vl1Metrics.ledgerAppendErrors,
+		"active_sessions":                 rt.vl1Metrics.activeSessions,
+		"total_connections":               rt.vl1Metrics.totalConnections,
+		"failed_dials":                    rt.vl1Metrics.failedDials,
+		"last_sync_time":                  rt.vl1Metrics.lastSyncTime,
+		"sync_lag_seconds":                rt.vl1Metrics.syncLag.Seconds(),
+		"ledger_append_errors":            rt.vl1Metrics.ledgerAppendErrors,
+		"compose_task_in_flight":          rt.composeTaskInFlight.Load(),
+		"compose_task_in_flight_limit":    rt.composeTaskInFlightLimit(),
+		"compose_task_owner_limit":        rt.composeTaskOwnerInFlightLimit(),
+		"compose_task_admission_rejected": rt.composeTaskRejected.Load(),
 	}
 
 	// LAD cache stats
@@ -1897,7 +2071,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	var crossOrgMsg1Received uint64
 	// forwarderAttached/Absent disambiguate a zero cross_org_msg1_received.
 	//
-	// Named "attached" (not "installed") per @P-239 to match the code's own
+	// Named "attached" (not "installed") to match the code's own
 	// vocabulary: the constructor is attachIntraOrgForwarder and it logs "VL1
 	// cross-org forwarder attached to %s transport", so one grep now finds the
 	// log line AND the metric. Renamed while the gauge is still unpublished —
@@ -2049,7 +2223,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 			m[k] = v
 		}
 
-		// OBS-18: multipath_failover_total — cumulative count of primary-path
+		// multipath_failover_total — cumulative count of primary-path
 		// failure → promotion events across all peer multipath managers.
 		m["multipath_failover_total"] = rt.connMgr.multipathFailoverTotal.Load()
 
@@ -2115,7 +2289,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		m["mesh_unregister_skipped_not_owner"] = rt.connMgr.unregisterSkippedNotOwner.Load()
 		m["mesh_unregister_deleted"] = rt.connMgr.unregisterDeleted.Load()
 
-		// OBS-18: bidirpc_inflight_gauge — sum of in-flight Call() counts
+		// bidirpc_inflight_gauge — sum of in-flight Call() counts
 		// across every BidiRPC currently registered with this node. A sustained
 		// non-zero value under low traffic indicates a wedged bidi stream
 		// (caller waiting for a response that will never arrive because the
@@ -2130,7 +2304,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		rt.connMgr.dispatchMu.RUnlock()
 		m["bidirpc_inflight_gauge"] = bidiInflightTotal
 
-		// OBS-16: path_score_breakdown — one entry per (peer, proto) with the
+		// path_score_breakdown — one entry per (peer, proto) with the
 		// most recent quality score from each multipath manager. Keyed as
 		// "path_score_<peerShort>_<proto>" so the flat map structure the
 		// mesh-debug surface expects doesn't require a nested-object consumer.
@@ -2179,12 +2353,25 @@ func (rt *Runtime) logStatus() {
 
 	members := 0
 	roles := 0
-	if rt.cache != nil {
-		if m, err := rt.cache.Members(context.Background(), ""); err == nil {
+	if rt.liveDir != nil {
+		if m, err := rt.liveDir.Members(context.Background(), ""); err == nil {
 			members = len(m)
 		}
-		if r, err := rt.cache.Roles(context.Background(), "", ladcache.RoleQuery{}); err == nil {
-			roles = len(r)
+	}
+	// ROUTED. This counts ROLE ADVERTISEMENTS — one per advertising
+	// node — which Members cannot answer: LAD stores roles on their own
+	// records, so a node with a role record and no member record is absent
+	// from Members. The capability gap recorded here is now
+	// closed by ports.RoleEnumerator rather than approximated.
+	//
+	// Probed, not asserted: RoleEnumerator is OPTIONAL because adding a
+	// method to the published LiveDirectory interface would break external
+	// implementers. Both in-tree implementations satisfy it. If
+	// one ever does not, the count stays 0 — honestly "not known" rather
+	// than reaching back around the port to the raw cache.
+	if re, ok := rt.liveDir.(ports.RoleEnumerator); ok {
+		if adverts, err := re.RoleAdverts(context.Background(), ""); err == nil {
+			roles = len(adverts)
 		}
 	}
 
@@ -2226,9 +2413,9 @@ func (rt *Runtime) UnregisterSession(nodeID aether.NodeID) {
 //
 // scopeID is the tenant/org scope the external session belongs to; it is
 // threaded to aether's RelayCapable so the relay can enforce cross-scope
-// isolation on the bridge path (aether AE-H-08). A relay that does not resolve
+// isolation on the bridge path. A relay that does not resolve
 // a per-peer tenant passes "" (dedicated mode = no restriction), which
-// preserves the pre-AE-H-08 relay behavior — the bridge path was never
+// preserves the unisolated relay behavior — the bridge path was never
 // scope-checked before. Passing a non-empty scope isolates this external
 // session so only same-scope (or dedicated) peers may relay to it.
 func (rt *Runtime) RegisterExternalSession(nodeID aether.NodeID, sess aether.Connection, scopeID string) {
@@ -2496,8 +2683,8 @@ func (rt *Runtime) bootstrapFromAnchor(ctx context.Context, cfg Config) (bool, e
 // The dial-out phase is gated on cfg.LAD.BootstrapHosts because nodes that
 // are bootstrap anchors themselves (auth core, etc.) have no outbound
 // targets to seed. The scan loop is NOT gated — it is the sole driver of
-// outbound mesh connection establishment now that the legacy rumorPusher
-// pump is gone, and it must run on every node so that incoming sessions,
+// outbound mesh connection establishment, and it must run on every node so
+// that incoming sessions,
 // persistent peer-store entries, discovery-layer results, and future swarm
 // RoleTable lookups can all flow through it.
 //
@@ -2577,9 +2764,8 @@ func (rt *Runtime) bootstrapPeers(ctx context.Context, cfg Config) error {
 	rt.connMgrPostInitDone = true
 
 	// Spawn the long-running ConnectionManager scan loop UNCONDITIONALLY.
-	// The legacy rumorPusher implicitly drove peer discovery + dial seeding;
-	// with that path retired the scan loop is the sole driver of outbound
-	// mesh connection establishment. Gating it on bootstrap success would
+	// It is the sole driver of peer discovery, dial seeding and outbound mesh
+	// connection establishment. Gating it on bootstrap success would
 	// leave nodes that do not dial out (auth core, anchors, isolated tenants)
 	// without an active connection manager — no outbound dialing, no mesh
 	// convergence, no RPC dispatch.
@@ -2630,8 +2816,15 @@ func (rt *Runtime) bootstrapPeers(ctx context.Context, cfg Config) error {
 				rt.connMgr.mu.Unlock()
 			}
 
-			// Start periodic save (every 5 min + final save on shutdown)
-			peerStore.StartPeriodicSave(ctx)
+			// Start periodic save (every 5 min + final save on shutdown).
+			//
+			// Enrolled via rt.Go, NOT StartPeriodicSave: the final save runs
+			// on ctx cancellation, and Shutdown's `rt.cancel(); rt.wg.Wait()`
+			// must actually wait for it. A bare `go` here is invisible to
+			// wg.Wait (see Runtime.Go's doc), so the process could exit before
+			// the file was written and lose every peer learned since the last
+			// 5-minute tick — silently, on every clean shutdown.
+			rt.Go("peerstore.periodicSave", func() { peerStore.runPeriodicSave(ctx) })
 		}
 
 		// Run optional discovery layers (DNS SRV, mDNS, etc.) and feed
@@ -2789,7 +2982,7 @@ func (rt *Runtime) acceptIncomingSessionsWithMux(ctx context.Context, listener a
 		default:
 			session, err := listener.Accept(ctx)
 			if err != nil {
-				// MESH-A02: only exit on a definitively-terminated listener
+				// Only exit on a definitively-terminated listener
 				// (context cancellation). A transient per-accept error — a
 				// handshake/lifecycle failure of the churn class — must NOT kill
 				// the only accept goroutine for this transport, or the node stops
@@ -2921,7 +3114,10 @@ func (rt *Runtime) PublishHandlersToLAD(ctx context.Context, roles []string, reg
 	if rt.isAnchorCapable() {
 		hasAnchor := false
 		for _, r := range roles {
-			if r == "anchor" { hasAnchor = true; break }
+			if r == "anchor" {
+				hasAnchor = true
+				break
+			}
 		}
 		if !hasAnchor {
 			roles = append(roles, "anchor")
@@ -3024,8 +3220,7 @@ func (rt *Runtime) PublishRPCHandlersToLAD(ctx context.Context, reg *rpc.Registr
 	// into a single Publisher.Update so receivers index ONE PeerRecord
 	// instead of four in rapid succession. Carry operator-facing
 	// identifiers in every PeerRecord so topology builders can identify
-	// peers we're not directly connected to once the legacy LAD reach
-	// records stop flowing.
+	// peers we're not directly connected to without any LAD reach record.
 	si.Publisher.Update(func(s *State) {
 		s.Roles = roles
 		s.MaxGrade = swarmGradeFromInternal(bestGrade)
@@ -3133,7 +3328,7 @@ func (rt *Runtime) verifyAuthToken(token string) bool {
 // checkSnapshotRateLimit implements a token bucket rate limiter for snapshot requests
 // Returns true if request is allowed, false if rate limited
 // snapshotRateLimitTTL / snapshotRateLimitMaxIPs bound the per-IP rate-limit
-// map (MESH-A03 / MESH-H03). The endpoint is public and keyed on the client IP,
+// map. The endpoint is public and keyed on the client IP,
 // so without eviction a rotating-source-IP flood grows the map without bound.
 const (
 	snapshotRateLimitTTL    = 10 * time.Minute
@@ -3149,7 +3344,7 @@ func (rt *Runtime) checkSnapshotRateLimit(ip string) bool {
 		rt.snapshotRateLimit = make(map[string]*rateLimitEntry)
 	}
 
-	// MESH-A03/H03: evict idle entries so the map can't grow without bound. An
+	// Evict idle entries so the map can't grow without bound. An
 	// entry idle past the TTL has fully refilled its burst and is
 	// indistinguishable from a fresh one, so dropping it costs nothing.
 	for k, e := range rt.snapshotRateLimit {
@@ -3234,9 +3429,9 @@ func (rt *Runtime) BootstrapHandler() http.HandlerFunc {
 // when self record isn't cached yet (rare — only during the first
 // publish), 405 for non-GET.
 //
-// Replaces the legacy header-derived publishBootstrapMember path which
-// wrote a Member record with no addresses, leaving anchors invisible
-// to bestAddress and forcing all anchor-adjacent traffic onto WS.
+// Serves the self record with its addresses. A Member record published
+// without addresses leaves anchors invisible to bestAddress and forces all
+// anchor-adjacent traffic onto WS.
 func (rt *Runtime) ReachLookupHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -3297,10 +3492,10 @@ func (rt *Runtime) ReachLookupHandler() http.HandlerFunc {
 // WebSocketHandler returns an HTTP handler that accepts incoming WebSocket
 // connections for mesh aether. Register on thin-app endpoints at /mesh/ws.
 //
-// Every dial is AE-C-04-verified (VerifyMeshDial: mandatory signature,
+// Every dial is verified by VerifyMeshDial (mandatory signature,
 // freshness/replay, ed25519, NodeID-derives-from-pubkey) before the WS
 // upgrade; an unsigned or unverifiable dial is refused. There is no
-// gossip-only fallback: that unsigned path was the AE-C-04 hole.
+// gossip-only fallback: that unsigned path is the hole this closes.
 func (rt *Runtime) WebSocketHandler() http.HandlerFunc {
 	rt.wsConnsMu.Lock()
 	if rt.wsConns == nil {
@@ -3326,13 +3521,13 @@ func (rt *Runtime) WebSocketHandler() http.HandlerFunc {
 		remoteRegion := r.Header.Get("X-VL1-Region")
 		remoteRoles := r.Header.Get("X-VL1-Roles")
 
-		// AE-C-04: verify the dial cryptographically BEFORE the WS upgrade — a
-		// mandatory signature, AE-M-16 freshness/replay, ed25519, and a NodeID that
+		// Verify the dial cryptographically BEFORE the WS upgrade — a
+		// mandatory signature, freshness/replay, ed25519, and a NodeID that
 		// derives from the verified pubkey. Reject on failure here, while an HTTP
 		// status can still be written (a hijacked conn can carry none). The verified
 		// NodeID supersedes the header-claimed one for every downstream use; an
 		// unsigned dial (the former gossip-only fallback) is now refused, which is
-		// the hole AE-C-04 closes. A node with no connection manager has no transport
+		// the hole this closes. A node with no connection manager has no transport
 		// to verify with, so it fails closed rather than admitting unverified.
 		if rt.connMgr == nil {
 			http.Error(w, "mesh transport unavailable", http.StatusServiceUnavailable)
@@ -3351,7 +3546,7 @@ func (rt *Runtime) WebSocketHandler() http.HandlerFunc {
 		remoteNodeID = string(verifiedNodeID)
 
 		// Upgrade to WebSocket using gobwas/ws — hijacks the HTTP connection.
-		// AE-P-26: emit the aether transport's signed identity triple in the 101
+		// Emit the aether transport's signed identity triple in the 101
 		// response so the dialing peer can verify this server owns the NodeID it
 		// dialed. A bare UpgradeHTTP omits them, and the aether WS dialer then
 		// closes the accepted socket ("server did not present a signed identity")
@@ -3359,7 +3554,7 @@ func (rt *Runtime) WebSocketHandler() http.HandlerFunc {
 		// ws→noise-UDP upgrade never fires. AcceptHeaders is aether's own emit,
 		// shared so this custom handler stays byte-for-byte compatible with it.
 		// (Forward-port of the library v0.0.440 fix into the loom-extracted
-		// mesh/node, which was extracted pre-fix — see #P-96.)
+		// mesh/node, which was extracted before that change.)
 		respHdr := rt.connMgr.wsTr.AcceptHeaders(r)
 		rawConn, _, _, err := ws.HTTPUpgrader{Header: respHdr}.Upgrade(r, w)
 		if err != nil {
@@ -3393,7 +3588,7 @@ func (rt *Runtime) WebSocketHandler() http.HandlerFunc {
 		// The receiving side (this handler) runs gossip and publishes as "websocket" too.
 		// RPC is dispatched via existing TLS bootstrap sessions or direct UDP sessions.
 		// All WebSocket connections are "websocket" (Grade B).
-		// Every dial is AE-C-04-verified above, so there is no unsigned or
+		// Every dial is verified above, so there is no unsigned or
 		// gossip-only class here; gossip flows on all (verified) WebSocket conns.
 		transportLabel := "websocket"
 		log.Printf("[WS] Accepted %s connection from %s (%s)", transportLabel, key, r.RemoteAddr)
@@ -3547,9 +3742,9 @@ type ConnectivityTestResult struct {
 
 // ProtocolStatus reports the state of a single transport protocol.
 type ProtocolStatus struct {
-	Available   bool   `json:"available"`    // is protocol registered / transport present?
+	Available   bool   `json:"available"`   // is protocol registered / transport present?
 	ActivePeers int    `json:"activePeers"` // number of connected peers via this protocol
-	Grade       string `json:"grade"`        // A/B/C
+	Grade       string `json:"grade"`       // A/B/C
 }
 
 // STUNStatus reports reflexive address discovery status.
@@ -3784,7 +3979,9 @@ func (rt *Runtime) handleVL1Upgrade(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		truncLen := len(clientNodeID)
-		if truncLen > 12 { truncLen = 12 }
+		if truncLen > 12 {
+			truncLen = 12
+		}
 		log.Printf("[NODE] Bootstrap: join approved for %s via injected verifier", clientNodeID[:truncLen])
 	}
 
@@ -3845,7 +4042,7 @@ func (rt *Runtime) handleVL1Upgrade(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Store connection so we can manage/close it later (server-side counterpart
-	// to client bootstrap sessions). MESH-A05: include RemoteAddr in the key so a
+	// to client bootstrap sessions). Include RemoteAddr in the key so a
 	// reconnecting peer (same NodeID) gets a DISTINCT slot. Keying by NodeID
 	// alone let conn2 overwrite conn1 untracked, and conn1's later goroutine-exit
 	// delete then removed the live conn2 — leaving it unclosed on Shutdown. Close
@@ -4020,11 +4217,11 @@ func (rt *Runtime) GetLatestSnapshot() *anchor.Snapshot {
 	return rt.latestSnapshot
 }
 
-
 // isRoutablePrivateIP returns true if the IP is a private address suitable for
 // inter-host mesh connectivity. Filters out container/virtual network IPs:
 //   - Docker bridge: 172.16-31.x.x (RFC 1918 but not routable between hosts)
 //   - Container loopback/link-local
+//
 // Prefers IPv6 ULA (fd00::/8, includes Fly fdaa:) over IPv4 RFC1918.
 func isRoutablePrivateIP(ip net.IP) bool {
 	if ip == nil || ip.IsLoopback() || ip.IsUnspecified() || ip.IsLinkLocalUnicast() {
@@ -4042,14 +4239,15 @@ func isRoutablePrivateIP(ip net.IP) bool {
 
 // discoverPrivateIP returns the node's private IP for internal mesh networking.
 // Uses a tiered discovery chain — first valid routable private IP wins:
-//   0. PlatformInfo.PrivateIP() — authoritative on cloud (FLY_PRIVATE_IP
-//      on Fly, IMDS local-ipv4 on AWS, metadata internal-ip on GCP,
-//      POD_IP on k8s). Synchronous, single-shot, provider-agnostic via
-//      the platform abstraction.
-//   1. Hostname resolution (os.Hostname → net.LookupHost)
-//   2. Interface enumeration (fd00::/8 ULA preferred)
-//   3. .internal DNS lookup
-//   4. Outbound route probe (dial bootstrap host, check local addr)
+//  0. PlatformInfo.PrivateIP() — authoritative on cloud (FLY_PRIVATE_IP
+//     on Fly, IMDS local-ipv4 on AWS, metadata internal-ip on GCP,
+//     POD_IP on k8s). Synchronous, single-shot, provider-agnostic via
+//     the platform abstraction.
+//  1. Hostname resolution (os.Hostname → net.LookupHost)
+//  2. Interface enumeration (fd00::/8 ULA preferred)
+//  3. .internal DNS lookup
+//  4. Outbound route probe (dial bootstrap host, check local addr)
+//
 // Filters out Docker bridge IPs (172.16-31.x.x). Prefers IPv6 ULA (fdaa:).
 // Falls back to PrivateIP config field if all tiers fail.
 func (rt *Runtime) discoverPrivateIP() string {
@@ -4060,8 +4258,8 @@ func (rt *Runtime) discoverPrivateIP() string {
 
 	// Tier 0: Platform-authoritative source. Synchronous, provider-
 	// agnostic via the PlatformInfo interface — no per-platform env
-	// reads here. Replaces the legacy detectOurOriginLoop polling for
-	// the cross-org forwarder's ourOrigin determination.
+	// reads here. Determines ourOrigin for the cross-org forwarder without
+	// polling.
 	if rt.cfg.Platform != nil {
 		if ip := rt.cfg.Platform.PrivateIP(); ip != "" {
 			return ip
@@ -4157,7 +4355,7 @@ func (rt *Runtime) discoverPrivateIP() string {
 // egress IP, which differs from the dedicated Anycast ingress IP, so
 // the caller skips this on cloud — DNS self-resolution in
 // publishSelfReachability() provides the correct IPs there.
-// getPublicIP / setPublicIP guard rt.publicIP (MESH-A01). The field is written
+// getPublicIP / setPublicIP guard rt.publicIP. The field is written
 // from the STUN discovery goroutine and the re-bootstrap ticker, and read from
 // several HTTP handlers and the hole-punch candidate builder — all concurrent.
 // A bare string is a two-word (ptr,len) value, so an unsynchronized read could
@@ -4529,7 +4727,7 @@ func (rt *Runtime) DialByProtocol(ctx context.Context, proto string, nodeID stri
 		if err != nil {
 			return nil, fmt.Errorf("TLS bootstrap dial: %w", err)
 		}
-		// MESH-A04: wrap the bidirectional upgradedConn (reads through resp.Body,
+		// Wrap the bidirectional upgradedConn (reads through resp.Body,
 		// writes to the TLS socket), NOT the raw TLS conn. Using rawConn dropped
 		// any bytes the HTTP client's bufio reader already pulled past the 101
 		// response (corrupting the first inbound frame) and leaked resp.Body,
@@ -4573,14 +4771,23 @@ func (rt *Runtime) BestGradeToHandler(handler string) Grade {
 			break
 		}
 	}
-	roles, err := rt.cache.Roles(context.Background(), "", ladcache.RoleQuery{Role: role})
+	// Routed through the LiveDirectory seam. Behaviour is
+	// identical for this caller: it consumed only RoleRecord.NodeID, which is
+	// exactly what NodesByRole returns, and the adapter delegates to the same
+	// cache.Roles(ctx, tenant, RoleQuery{Role: role}) call. The empty tenant
+	// is the literal bucket this site has always queried — now stated rather
+	// than implied.
+	if rt.liveDir == nil {
+		return GradeF
+	}
+	roles, err := rt.liveDir.NodesByRole(context.Background(), "", role)
 	if err != nil || len(roles) == 0 {
 		return GradeF
 	}
 	if rt.connMgr != nil {
 		best := GradeF
-		for _, rn := range roles {
-			g := rt.peerGrade(rn.NodeID)
+		for _, rnID := range roles {
+			g := rt.peerGrade(string(rnID))
 			if g > best {
 				best = g
 			}
@@ -4662,7 +4869,7 @@ func (rt *Runtime) publishPeerStateEvent(event ConnectionEvent) {
 		return
 	}
 	dbgNode.Printf("Event-driven latency record: peer=%s reason=%s transport=%s rtt=%s",
-		event.PeerNodeID[:12], event.Reason, transport, rtt)
+		truncID(event.PeerNodeID), event.Reason, transport, rtt)
 }
 
 // publishGossipLatencyWithTransport publishes a latency record with a specific transport name.
@@ -4711,3 +4918,40 @@ func (rt *Runtime) isAnchorCapable() bool {
 // Anchor leader election removed — all anchor-capable nodes generate
 // snapshots independently. Each signs with the same ed25519 key.
 // Consumers accept the highest sequence number.
+
+// closePortSeams releases the resources owned by the directory and journal
+// ports. Called from Shutdown before the cache eviction pass, because both
+// seams hold references into state that pass tears down.
+//
+// It is a named function rather than inline shutdown code so that "shutdown
+// actually releases them" is testable. Inline, it is not: deleting the journal
+// Close from the shutdown body leaves the whole suite green, because nothing
+// constructs a Runtime and shuts it down — equally true of the LiveDirectory
+// close, which had gone unverified.
+//
+// What each release is FOR, since neither is obvious from the call:
+//
+//   - LiveDirectory owns liveness-override timers. LAD's own override has no
+//     expiry, so the adapter enforces the port's ttlMs itself; those timers
+//     hold a reference to the cache and would fire into a torn-down runtime.
+//   - DurableJournal holds an open fd on <DataDir>/journal and any live
+//     replay subscribers. Skipping it leaks the descriptor for the process
+//     lifetime and leaves replay channels open.
+//
+// Both Closes are idempotent, so calling this twice is safe. Errors are
+// logged rather than returned: shutdown must continue releasing the rest.
+func (rt *Runtime) closePortSeams() {
+	if rt == nil {
+		return
+	}
+	if rt.liveDirRaw != nil {
+		if err := rt.liveDirRaw.Close(); err != nil {
+			log.Printf("[NODE] LiveDirectory close: %v", err)
+		}
+	}
+	if rt.journalRaw != nil {
+		if err := rt.journalRaw.Close(); err != nil {
+			log.Printf("[NODE] DurableJournal close: %v", err)
+		}
+	}
+}

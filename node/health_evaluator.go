@@ -19,12 +19,12 @@ import (
 // ServiceHealthReport holds the evaluated health of a single service.
 type ServiceHealthReport struct {
 	ServiceName    string    `json:"serviceName"`
-	MeshStatus     string    `json:"meshStatus"`      // "healthy", "degraded", "connecting", "unreachable"
-	HTTPStatus     string    `json:"httpStatus"`       // "operational", "degraded", etc.
-	CombinedStatus string    `json:"combinedStatus"`   // final display status
-	BestTransport  string    `json:"bestTransport"`    // "A", "B", "C", "D", "gossip", "F"
-	Connections    int       `json:"connections"`       // direct connection count
-	Detail         string    `json:"detail"`            // human-readable explanation
+	MeshStatus     string    `json:"meshStatus"`     // "healthy", "degraded", "connecting", "unreachable"
+	HTTPStatus     string    `json:"httpStatus"`     // "operational", "degraded", etc.
+	CombinedStatus string    `json:"combinedStatus"` // final display status
+	BestTransport  string    `json:"bestTransport"`  // "A", "B", "C", "D", "gossip", "F"
+	Connections    int       `json:"connections"`    // direct connection count
+	Detail         string    `json:"detail"`         // human-readable explanation
 	EvaluatedAt    time.Time `json:"evaluatedAt"`
 }
 
@@ -97,6 +97,7 @@ type meshHealthEvaluator struct {
 	lastEval   time.Time
 	evalTicker time.Duration
 	stopCh     chan struct{}
+	stopOnce   sync.Once // Stop must be idempotent; a second close would panic
 	wg         sync.WaitGroup
 }
 
@@ -125,6 +126,15 @@ func NewHealthEvaluator(
 ) HealthEvaluator {
 	if reporter == nil {
 		reporter = NilConnectionReporter{}
+	}
+	if nodeToSvc == nil {
+		// evaluate() calls this on its first line with no guard, and it runs
+		// in the goroutine Start() spawns — so a nil resolver is not a
+		// degraded evaluation, it is an unrecovered panic that takes the
+		// endpoint process down. Every other input here is already defaulted;
+		// this one was the exception. An empty mapping is what a caller
+		// supplying nil is asking for.
+		nodeToSvc = func() map[string]string { return nil }
 	}
 	if cfg.CacheTTL == 0 {
 		cfg.CacheTTL = 30 * time.Second
@@ -178,6 +188,11 @@ func NewHealthEvaluatorWithSnapshot(
 	if snapshot == nil {
 		snapshot = func() *LADSnapshot { return &LADSnapshot{BuiltAt: time.Now()} }
 	}
+	if nodeToSvc == nil {
+		// See NewHealthEvaluator: unguarded in evaluate(), called from the
+		// Start() goroutine, so a nil here is a process-level panic.
+		nodeToSvc = func() map[string]string { return nil }
+	}
 	return &meshHealthEvaluator{
 		reporter:   reporter,
 		httpSource: httpSource,
@@ -209,10 +224,16 @@ func (e *meshHealthEvaluator) Start() {
 	}()
 }
 
-// Stop halts the evaluation loop.
+// Stop halts the evaluation loop. Idempotent.
+//
+// 🔴 The sync.Once is load-bearing — a bare close(e.stopCh) panics with "close
+// of closed channel" on a second call. See the fuller note on
+// SelfHealthMonitor.Stop.
 func (e *meshHealthEvaluator) Stop() {
-	close(e.stopCh)
-	e.wg.Wait()
+	e.stopOnce.Do(func() {
+		close(e.stopCh)
+		e.wg.Wait()
+	})
 }
 
 // ServiceHealth returns the cached health for a service.
@@ -327,11 +348,28 @@ func (e *meshHealthEvaluator) evaluate() {
 			if svcName == "" {
 				continue
 			}
-			latGrade := GradeForProtocol(ParseProtocol(lat.Transport))
+			// lat.Transport is a peer-supplied label off a gossiped latency
+			// record. ParseProtocol discards its ok flag and returns
+			// ProtoNoiseUDP for anything it does not recognise, which
+			// GradeForProtocol scores GradeA — the best grade — so an
+			// unrecognised label outranks every correctly-labelled transport in
+			// the max-selection below. This node publishes "unknown" itself for
+			// a transport it could not name (runtime.go:4656), so the label that
+			// grades best is one that carries no information at all.
+			//
+			// Strict parse, fail closed: an unrecognised label grades F and
+			// cannot win the selection. Liveness is unaffected — svcConnected is
+			// still set, because a record existing is evidence of an edge
+			// regardless of how its transport is spelled.
+			proto, known := ParseProtocolStrict(lat.Transport)
+			latGrade := GradeF
+			if known {
+				latGrade = GradeForProtocol(proto)
+			}
 			if best, ok := svcBestGrade[svcName]; !ok || latGrade > best {
 				svcBestGrade[svcName] = latGrade
-				svcConnected[svcName] = true
 			}
+			svcConnected[svcName] = true
 		}
 	}
 

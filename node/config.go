@@ -8,9 +8,9 @@ import (
 	"fmt"
 	"time"
 
-	meshdbcfg "github.com/bbmumford/tursoraft/manager"
 	"github.com/bbmumford/loom/pkg/rpc"
 	"github.com/bbmumford/loom/ports"
+	meshdbcfg "github.com/bbmumford/tursoraft/manager"
 )
 
 // AnchorConfig holds configuration for secure bootstrapping via signed snapshots
@@ -58,6 +58,73 @@ type Config struct {
 	// the real helpers package so its unexported context keys — the ones
 	// domain handlers read — are the ones written.
 	AuthValidator ports.AuthValidator
+
+	// SwarmTrustMode selects the inbound trust gate on the swarm
+	// live-directory convergence path. "" / "off" = no gate (current
+	// behaviour). "observe" runs the FULL pre-store authorization —
+	// TrustPolicy.AuthorizePublish: NodeID↔key bind (aether scheme), tenant
+	// scope, and the topic publish rule, seeded from the self-owned baseline —
+	// and COUNTS records that WOULD be rejected without rejecting any; that is
+	// the shadow-parity step, and it must show zero would-rejects for legit
+	// traffic fleet-wide (read TrustGateStats + the trust-shadow ShadowStats /
+	// ShadowParity) before cutover. "enforce" rejects a record that fails the
+	// same authorization. Default off.
+	//
+	// ⚠ Do NOT reach for the swarm RequireNodeKeyBinding bool instead: it
+	// derives NodeID as hex(pubkey), incompatible with aether's vl1_
+	// fingerprint, so on this fleet it would reject EVERY record. TrustCheck
+	// with the aether scheme (wired from this field) is the correct gate.
+	SwarmTrustMode string
+
+	// AdaptiveGossipCadence, when true, paces the gossip loop's adaptive
+	// interval from a live network profile (link type + measured peer RTT via
+	// GetPeerLatencies) instead of the built-in (GossipInterval, 2s, 60s)
+	// envelope: startGossipCadence installs a gossip.SetGossipCadence source
+	// backed by netpolicy.GossipBounds and refreshes it on the telemetry
+	// cadence. Default false = the gossip loop keeps its fixed envelope, so
+	// enabling this is an explicit opt-in to network-adaptive gossip timing
+	// (a fleet-wide change to how often nodes exchange).
+	AdaptiveGossipCadence bool
+
+	// RoleTakeover, when non-nil, arms the leaderless role-takeover engine after InitSwarm:
+	// this node guards the listed roles and covers a shortfall once a role stays under-covered
+	// past the corroboration window. Gated per role by the config's Policy
+	// (AuthorizeSecretRecipient) — an unseeded policy entitles nothing, so it fails closed. nil
+	// = off (current behaviour). No role is exclusive: the engine ranks claims but never fences
+	// a winner, so several nodes may hold a role. See RoleTakeoverConfig.
+	RoleTakeover *RoleTakeoverConfig
+
+	// ComposeTaskCompletionObserver receives terminal outcomes for task
+	// invocations that ComposeInvoke accepted as Deferred. The runtime stores
+	// each outcome in its bounded completion history before invoking this
+	// callback, so an observer panic cannot make the Deferred handle
+	// unqueryable. The callback runs on the tracked task goroutine and should
+	// respect its context.
+	ComposeTaskCompletionObserver ComposeTaskCompletionObserver
+
+	// ComposeTriggerPrincipalProvider re-resolves every trigger fire against
+	// the product registration/activation authority and establishes the
+	// current machine/service principal. nil is fail-closed: triggers may arm
+	// but cannot invoke a function.
+	ComposeTriggerPrincipalProvider ComposeTriggerPrincipalProvider
+
+	// ComposeTaskMaxInFlight bounds task invocations accepted by
+	// ComposeInvoke but not yet terminal. Values <= 0 use the safe runtime
+	// default; there is no configuration that restores unbounded admission.
+	// Admission also requires a nonempty opaque owner from the injected
+	// AuthValidator's ports.ExecutionPrincipalReader extension.
+	ComposeTaskMaxInFlight int
+
+	// ComposeTaskMaxInFlightPerOwner bounds live task invocations for one
+	// opaque execution owner. Values <= 0 use the safe default. The global and
+	// owner reservations are acquired atomically, so neither ceiling can be
+	// oversubscribed by concurrent admissions.
+	ComposeTaskMaxInFlightPerOwner int
+
+	// ComposeTaskCompletionRetentionPerOwner bounds terminal records retained
+	// for one opaque owner inside the global 1024-record history. Values <= 0
+	// use the safe default.
+	ComposeTaskCompletionRetentionPerOwner int
 
 	// RegisterDomains registers external RPC domains (e.g. the HSTLES
 	// anchor domain) on anchor-capable nodes. Each entry runs against a
@@ -257,10 +324,10 @@ type AuditConfig struct {
 // ConnectionBudgetConfig allows overriding default connection budget values.
 type ConnectionBudgetConfig struct {
 	MaxPerPeer       int `json:"maxPerPeer"`       // default: 3
-	MaxTotal         int `json:"maxTotal"`           // default: 50
-	MinPerPeer       int `json:"minPerPeer"`        // default: 1
-	PreferredPerPeer int `json:"preferredPerPeer"`  // default: 1
-	CrossRegionBonus int `json:"crossRegionBonus"`  // default: 1
+	MaxTotal         int `json:"maxTotal"`         // default: 50
+	MinPerPeer       int `json:"minPerPeer"`       // default: 1
+	PreferredPerPeer int `json:"preferredPerPeer"` // default: 1
+	CrossRegionBonus int `json:"crossRegionBonus"` // default: 1
 }
 
 // AuthKeys returns all network keys available for node-level auth (snapshot HMAC, etc.).

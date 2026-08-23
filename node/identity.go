@@ -95,8 +95,8 @@ const (
 	// identities give each machine a stable identity↔address↔session mapping.
 	//
 	// FLY_MACHINE_ID is stable across in-place (rolling) deploys — verified
-	// live: app/relay/devices machines created 2026-06-03 kept the same IDs
-	// through deploys months later — so mixing it in does NOT re-introduce
+	// live: app/relay/devices machines keep the same IDs across deploys
+	// months apart — so mixing it in does NOT re-introduce
 	// the per-deploy ghost-minting that MESH_IDENTITY_SEED exists to prevent.
 	// It changes only on genuine machine replacement, where a new identity is
 	// the correct outcome. When empty (local/non-Fly), the raw seed is used

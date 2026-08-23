@@ -58,7 +58,7 @@ func (l *Leech) FetchByID(ctx context.Context, id ManifestID, w io.Writer) (*Man
 	if err != nil {
 		return nil, err
 	}
-	// MESH-H04: verify the loaded manifest actually hashes to the requested id
+	// Verify the loaded manifest actually hashes to the requested id
 	// before fetching any chunks. Content-addressing IS the store's integrity
 	// guarantee — without this a compromised/buggy chain or cache could return a
 	// manifest with attacker-chosen chunk hashes and the leech would faithfully
