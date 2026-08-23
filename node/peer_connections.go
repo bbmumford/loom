@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"github.com/bbmumford/loom/ports"
 	"hash/fnv"
 	"log"
 	"net"
@@ -60,23 +61,76 @@ func (p Protocol) String() string {
 	}
 }
 
-// ParseProtocol converts a transport type string to a Protocol enum.
-// Returns ProtoNoiseUDP for unrecognized strings (safe default for VL1 listeners).
-func ParseProtocol(s string) Protocol {
+// installableMeshConn reports whether a SUCCESSFULLY-DIALED session is one the
+// mesh can actually install, returning the underlying connection when it is.
+//
+// The reason this check exists at all: QuicTransport.Dial
+// returns a *QuicSession, not a *BaseConnection, so on a noise-UDP→QUIC fallback
+// (same UDP address) a bare type assertion panicked; the defer-recover then
+// marked the peer Disconnected but never Closed the session, leaking the QUIC
+// conn and its goroutines after dial-success had already been recorded.
+//
+// 🔑 EXTRACTED AS A PURE FUNCTION, and the honest limit is worth
+// stating: this pins the LOGIC, not the CALL SITE. `connectPeer` is at 0.0%
+// coverage and cannot be reached by a unit test — the three transports are
+// concrete pointer types with no seam to substitute a fake through.
+// The call-site gap is RECORDED, not closed; (b), the injectable-dial seam the
+// sibling path already uses at multipath_dial.go:233, is sequenced behind
+// identifying peer_connections.go's other writer.
+// ⚠ NO EXPLICIT `session == nil` GUARD, and that is deliberate: my first draft
+// had one and mutation proved it inert — a nil interface fails the type
+// assertion, so `!ok` already covers it. `bs == nil` is NOT redundant, though:
+// it catches a non-nil interface holding a nil *BaseConnection, which the
+// assertion accepts.
+func installableMeshConn(session aether.Connection) (*aether.BaseConnection, bool) {
+	bs, ok := session.(*aether.BaseConnection)
+	if !ok || bs == nil {
+		return nil, false
+	}
+	return bs, true
+}
+
+// ParseProtocolStrict converts a transport type string to a Protocol enum and
+// reports whether the string was RECOGNISED. It is the single source of the
+// label set — ParseProtocol wraps it — so callers that must distinguish "this
+// is noise-udp" from "I could not parse this" have one list to trust.
+//
+// Added because ParseProtocol's lossy default made those two cases
+// indistinguishable, and the ranking site in rpc_forward.go needs to tell them
+// apart on peer-supplied input.
+func ParseProtocolStrict(s string) (Protocol, bool) {
 	switch s {
 	case "noise-udp", "vl1":
-		return ProtoNoiseUDP
+		return ProtoNoiseUDP, true
 	case "quic":
-		return ProtoQUIC
+		return ProtoQUIC, true
 	case "websocket", "ws", "wss":
-		return ProtoWebSocket
+		return ProtoWebSocket, true
 	case "grpc":
-		return ProtoGRPC
-	case "tls":
-		return ProtoTLS
+		return ProtoGRPC, true
+	// "gossip-tls" is a DOCUMENTED value of lad.LatencyRecord.Transport
+	// (ledger/types.go:261) that was missing from this switch, so it fell to the
+	// default and graded A — the best grade — where its own transport class
+	// grades C..
+	case "tls", "gossip-tls":
+		return ProtoTLS, true
 	default:
-		return ProtoNoiseUDP
+		return ProtoNoiseUDP, false
 	}
+}
+
+// ParseProtocol converts a transport type string to a Protocol enum.
+// Returns ProtoNoiseUDP for unrecognized strings (safe default for VL1 listeners).
+//
+// ⚠ THE DEFAULT IS LOSSY AND FIVE CALLERS DEPEND ON IT. ProtoNoiseUDP is the
+// zero value of Protocol and grades A, so an unrecognised or absent transport
+// grades BEST here. That is deliberate for VL1 listeners and was deliberately
+// NOT changed — flipping it is a package-wide grading-policy change.
+// Callers that rank PEER-SUPPLIED transport strings must use ParseProtocolStrict
+// and decide for themselves what an unparseable label deserves.
+func ParseProtocol(s string) Protocol {
+	p, _ := ParseProtocolStrict(s)
+	return p
 }
 
 // protocolOrder is the failover hierarchy — fastest first, TLS as final fallback.
@@ -123,7 +177,7 @@ type transportConn struct {
 	connectedAt   time.Time
 	successCount  int    // consecutive gossip successes on this transport
 	isDormant     bool   // lower-priority transport: all streams alive, routing flag only
-	draining      bool   // MESH-C06: set by closeDrainedConnection so cleanup skips chronic/path-failure accounting (voluntary scale-down, not a failure)
+	draining      bool   // Set by closeDrainedConnection so cleanup skips chronic/path-failure accounting (voluntary scale-down, not a failure)
 	bootstrapHost string // TLS only: host for re-dial if conn dies
 }
 
@@ -309,7 +363,7 @@ func (p *peerConn) bestActiveGrade() Grade {
 // are WS/TLS — any outbound dial would just produce a second Grade-C
 // transport and feed the WS↔TLS drain loop.
 //
-// L1 #4 fix: the previous implementation only checked Proto; an
+// The previous implementation only checked Proto; an
 // address that AddressTracker had marked dead still counted as
 // "available", which caused dialWithProtocol to return "no suitable
 // address" → recorded as failure → cooldown grew. Now we check
@@ -419,8 +473,6 @@ func (p *peerConn) hasActiveTransport() bool {
 	return false
 }
 
-// addTransport registers a transport connection. If a higher-grade transport
-// for the same protocol already exists, it's not replaced.
 // addTransport associates a transportConn with the peer under its
 // protocol key. Pre-v0.0.218 the map was strict single-slot per
 // protocol: a second active session of the same protocol arriving
@@ -573,11 +625,11 @@ const (
 
 // ConnectionManager manages per-peer transport connections with failover.
 type ConnectionManager struct {
-	mu                sync.Mutex
-	peers             map[string]*peerConn
-	rt                *Runtime
-	selfID            string
-	selfRegion        string // our region from config
+	mu         sync.Mutex
+	peers      map[string]*peerConn
+	rt         *Runtime
+	selfID     string
+	selfRegion string // our region from config
 	// ourOrigin holds our network origin prefix (e.g. "a:ba33" from a Fly
 	// 6PN ULA fdaa:a:ba33:…). Stored via atomic.Pointer so a background
 	// re-detection goroutine can update it after construction without
@@ -590,12 +642,12 @@ type ConnectionManager struct {
 	// isCrossOrigin() conservatively returns true so cross-org dials emit
 	// the noise-UDP preamble — same-org dials pay 34 bytes of overhead
 	// but the forwarder hairpin keeps working.
-	ourOriginAtomic atomic.Pointer[string]
+	ourOriginAtomic   atomic.Pointer[string]
 	budget            *ConnectionBudget
 	scaler            *ConnectionScaler
 	connectionMap     *ConnectionMap
 	drainMgr          *DrainManager
-	peerStore         *FilePeerStore // persisted peer list for cold-restart warm dials
+	peerStore         *FilePeerStore     // persisted peer list for cold-restart warm dials
 	reputationTracker *ReputationTracker // rolling per-peer uptime/grade/drop score
 	quicTr            *quictransport.QuicTransport
 	wsTr              *wstransport.WebsocketTransport
@@ -605,6 +657,12 @@ type ConnectionManager struct {
 	// Used by AetherCaller (SessionFinder) for role-based RPC routing.
 	dispatchMu   sync.RWMutex
 	meshSessions map[string]aether.Session
+	// sessionLifecycleStripes serialize admission against peer-wide zombie
+	// cleanup for the same nodeID. A bounded stripe table avoids an
+	// ever-growing lock map while retaining per-peer concurrency in the
+	// common case; unrelated peers that hash to the same stripe merely
+	// serialize their short admission/cleanup transactions.
+	sessionLifecycleStripes [64]sync.Mutex
 
 	// sessionHook fires after a session is installed/removed in meshSessions.
 	// Set via SetSessionHook. Used by the swarm transport adapter to track
@@ -658,7 +716,7 @@ type ConnectionManager struct {
 	// into a back-off signal so the loop cannot self-sustain. Guarded
 	// by dispatchMu alongside meshSessions.
 	//
-	// L3 #11 fix: keyed by (nodeID, protocol) — composite string
+	// Keyed by (nodeID, protocol) — composite string
 	// "nodeID|proto" — so a WS reject doesn't block a noise-UDP
 	// upgrade dial. Before this, the field was keyed by nodeID alone,
 	// meaning any reject on any protocol suppressed EnsureK's path-
@@ -676,11 +734,11 @@ type ConnectionManager struct {
 	//
 	// Why session-keyed instead of nodeID-keyed:
 	//
-	// The earlier nodeID-keyed design stored only the LATEST registered
-	// bidi per peer, because each AcceptMeshConnection overwrote the
-	// entry. When a multipath standby was added, its registration would
-	// clobber the primary's bidi entry. When the OLDER path then died,
-	// the failover cleanup deleted the entry — but that entry was the
+	// A nodeID-keyed map stores only the LATEST registered bidi per peer,
+	// because each AcceptMeshConnection overwrites the entry. A multipath
+	// standby's registration then clobbers the primary's bidi entry, and
+	// when the OLDER path dies the failover cleanup deletes the entry —
+	// but that entry is the
 	// SURVIVING (newer) session's bidi. Dispatch then fell through to
 	// dynamic-stream every call, adding 1 RTT per RPC (≈100 ms on
 	// cross-region WAN). Observable as a uniform latency floor shift
@@ -747,7 +805,7 @@ type ConnectionManager struct {
 	gossipMu     sync.Mutex
 	gossipActive map[string]*gossipOwner
 
-	// OBS-18: multipath_failover_total counts every time the ConnectionManager
+	// multipath_failover_total counts every time the ConnectionManager
 	// promotes a standby path after a primary session failure. Incremented at
 	// the OnPrimaryFailure call site in mesh_connection.go; a single multipath
 	// takeover bumps this once regardless of how many paths exist. Monotonically
@@ -792,12 +850,12 @@ type ConnectionManager struct {
 	//   BestAddrNonAnycastSelected > 0 && PreambleDialsAttempted == 0 →
 	//     peers advertise direct (non-anycast) public IPs; preamble
 	//     correctly skipped, hairpin not needed
-	crossOrgPickPathNoiseUDPIncluded atomic.Uint64
-	crossOrgBestAddrPublicUDPCount   atomic.Uint64
-	crossOrgBestAddrCandidatesEmpty  atomic.Uint64
-	crossOrgBestAddrAllDead          atomic.Uint64
+	crossOrgPickPathNoiseUDPIncluded   atomic.Uint64
+	crossOrgBestAddrPublicUDPCount     atomic.Uint64
+	crossOrgBestAddrCandidatesEmpty    atomic.Uint64
+	crossOrgBestAddrAllDead            atomic.Uint64
 	crossOrgBestAddrNonAnycastSelected atomic.Uint64
-	crossOrgDialNoSuitableAddr       atomic.Uint64
+	crossOrgDialNoSuitableAddr         atomic.Uint64
 
 	// Proactive transport-grade upgrade walker telemetry. Each tick of
 	// tryProactiveUpgrades increments walkerTicks; the count of candidate
@@ -928,6 +986,12 @@ type ConnectionManager struct {
 	unregisterDeleted         atomic.Uint64
 }
 
+func (m *ConnectionManager) sessionLifecycleLock(nodeID string) *sync.Mutex {
+	h := fnv.New64a()
+	_, _ = h.Write([]byte(nodeID))
+	return &m.sessionLifecycleStripes[h.Sum64()%uint64(len(m.sessionLifecycleStripes))]
+}
+
 // NewConnectionManager creates a new manager with all available transports.
 func NewConnectionManager(rt *Runtime) *ConnectionManager {
 	ourOrigin := ""
@@ -1005,7 +1069,7 @@ func NewConnectionManager(rt *Runtime) *ConnectionManager {
 		grpcTr:       grpcTr,
 		walkerWakeCh: make(chan struct{}, 1),
 	}
-	// Seed ourOrigin atomically. With Phase 3 (PlatformInfo.PrivateIP())
+	// Seed ourOrigin atomically. With PlatformInfo.PrivateIP()
 	// the platform-authoritative source resolves synchronously at boot
 	// on every supported cloud, so ourOrigin should be populated here.
 	// Empty is now a hard misconfiguration signal (non-cloud platform
@@ -1017,8 +1081,8 @@ func NewConnectionManager(rt *Runtime) *ConnectionManager {
 		log.Printf("[PEERS] ERROR: ourOrigin empty at construction — Platform.PrivateIP() returned empty AND no fdaa: interface AND cfg.PrivateIP unset. Cross-org forwarder will treat ALL peers as cross-org. Set cfg.PrivateIP to fix this on non-cloud platforms.")
 	}
 	mgr.connectionMap = NewConnectionMap()
-	mgr.drainMgr = NewDrainManager(func(peerNodeID, transport string) {
-		mgr.closeDrainedConnection(peerNodeID, transport)
+	mgr.drainMgr = NewDrainManager(func(peerNodeID, transport string, startedAt time.Time) {
+		mgr.closeDrainedConnection(peerNodeID, transport, startedAt)
 	})
 	mgr.scaler = NewConnectionScaler(mgr, func(event ConnectionEvent) {
 		// Default handler: log only. Endpoints that want to feed events into
@@ -1086,7 +1150,7 @@ func (m *ConnectionManager) Start(ctx context.Context) {
 		m.stoppedCh = make(chan struct{})
 	}
 	defer close(m.stoppedCh)
-	log.Printf("[PEERS] Connection manager started (self=%s, org=%s, region=%s)", m.selfID[:12], m.getOurOrigin(), m.selfRegion)
+	log.Printf("[PEERS] Connection manager started (self=%s, org=%s, region=%s)", truncID(m.selfID), m.getOurOrigin(), m.selfRegion)
 
 	// Start gRPC mesh listener (if transport is configured)
 	go m.rt.startGRPCAcceptLoop(ctx)
@@ -1097,7 +1161,7 @@ func (m *ConnectionManager) Start(ctx context.Context) {
 	// scanAndConnect merge ran before the AddressTable held the
 	// peer's record and never re-ran for that nodeID, leaving the
 	// peer reachable via WS but invisible to noise-UDP dial path.
-	go m.runReachResyncWalker(ctx)
+	go m.runReachResyncWalker(ctx, reachResyncInterval)
 
 	// Jitter the FIRST connect scan to desynchronise a fleet-wide simultaneous
 	// reform. When the whole fleet restarts at once (coordinated redeploy,
@@ -1129,12 +1193,12 @@ func (m *ConnectionManager) Start(ctx context.Context) {
 	m.scanAndConnect(ctx)
 
 	scanTicker := time.NewTicker(scanInterval)
-	rebalanceTicker := time.NewTicker(scanInterval)       // rebalance on same cadence as scan
-	priorityTicker := time.NewTicker(30 * time.Second)    // recompute per-connection priority from tenant reservations + RPC traffic
-	rpcResetTicker := time.NewTicker(1 * time.Minute)     // reset per-minute RPC counters (sliding 1-minute window)
-	convergeTicker := time.NewTicker(60 * time.Second)    // service convergence (merged from MeshConvergenceManager)
-	congestionTicker := time.NewTicker(15 * time.Second)  // feed reputation tracker with current RTT and grade per peer
-	zombieTicker := time.NewTicker(10 * time.Second) // sweep meshSessions for IsClosed entries the per-session cleanup goroutine missed
+	rebalanceTicker := time.NewTicker(scanInterval)      // rebalance on same cadence as scan
+	priorityTicker := time.NewTicker(30 * time.Second)   // recompute per-connection priority from tenant reservations + RPC traffic
+	rpcResetTicker := time.NewTicker(1 * time.Minute)    // reset per-minute RPC counters (sliding 1-minute window)
+	convergeTicker := time.NewTicker(60 * time.Second)   // service convergence (merged from MeshConvergenceManager)
+	congestionTicker := time.NewTicker(15 * time.Second) // feed reputation tracker with current RTT and grade per peer
+	zombieTicker := time.NewTicker(10 * time.Second)     // sweep meshSessions for IsClosed entries the per-session cleanup goroutine missed
 	// kRefreshTicker recomputes EnsureK targets per peer so RTT
 	// spikes, drop accumulation, hotspot adjustments, and traffic-
 	// weight changes propagate into the multipath manager's reconnect
@@ -1144,9 +1208,9 @@ func (m *ConnectionManager) Start(ctx context.Context) {
 	// EnsureK is reactive (fires only when a path dies). The walker is
 	// proactive — every tick it probes every connected peer for any
 	// strictly-greater-grade non-active transport that has a dialable
-	// address. Restores the property the deleted tryUpgrades used to
-	// guarantee: a peer that COULD be on noise-UDP IS on noise-UDP within
-	// one upgradeWalkInterval of the underlying condition allowing it.
+	// address. It guarantees that a peer that COULD be on noise-UDP IS on
+	// noise-UDP within one upgradeWalkInterval of the underlying condition
+	// allowing it.
 	upgradeTicker := time.NewTicker(upgradeWalkInterval)
 	defer scanTicker.Stop()
 	defer rebalanceTicker.Stop()
@@ -1219,6 +1283,14 @@ func (m *ConnectionManager) Start(ctx context.Context) {
 // returns.
 func (m *ConnectionManager) Stop() {
 	m.stopOnce.Do(func() {
+		// 0. Abandon in-flight drains first. Each StartDrain leaves a monitor
+		//    goroutine that fires closeDrainedConnection after its grace window;
+		//    that callback releases a budget slot and cancels peer gossip on this
+		//    manager, so it must not run once the teardown below has begun.
+		if m.drainMgr != nil {
+			m.drainMgr.Stop()
+		}
+
 		// 1. Snapshot + Stop all multipath managers. Each manager's
 		//    Stop is idempotent and bounded — won't block here.
 		m.multipathMu.Lock()
@@ -1244,10 +1316,12 @@ func (m *ConnectionManager) Stop() {
 // observerSilenceThreshold is the minimum gossip-silence required before
 // the zombie sweep emits a propagating death-tombstone for a peer. The
 // triple-gate from the liveness-tombstone-churn-latency workflow:
-//   (a) session IsClosed() — built into sweepZombieSessions' selector
-//   (b) we have the anchor role (non-anchors emit nothing; their
-//       attestations would be rejected by the swarm CRDT gate anyway)
-//   (c) LAD has seen no gossip from this peer for at least this window
+//
+//	(a) session IsClosed() — built into sweepZombieSessions' selector
+//	(b) we have the anchor role (non-anchors emit nothing; their
+//	    attestations would be rejected by the swarm CRDT gate anyway)
+//	(c) LAD has seen no gossip from this peer for at least this window
+//
 // One minute is conservative — well above any normal gossip silence on a
 // healthy peer (gossip ticks every few seconds) but well below the
 // 16-minute GossipLivenessTimeout the LAD passive-eviction timer uses.
@@ -1334,6 +1408,11 @@ func (m *ConnectionManager) emitPeerTombstone(nodeID, reason string) {
 // session ever does slip past those defences, dispatch consumers see
 // a fresh-state peer within at most the ticker interval (10s) instead
 // of an indefinite zombie.
+type zombieSessionSnapshot struct {
+	nodeID string
+	sess   aether.Session
+}
+
 func (m *ConnectionManager) sweepZombieSessions() {
 	// Phase 1: zombie meshSessions entries — registered but underlying
 	// session is IsClosed. Snapshot under RLock so we don't hold
@@ -1342,59 +1421,16 @@ func (m *ConnectionManager) sweepZombieSessions() {
 	// be identity-guarded — if a NEWER session has replaced this zombie
 	// between snapshot and unregister, the guard skips the delete and
 	// the live session is preserved.
-	type zombie struct {
-		nodeID string
-		sess   aether.Session
-	}
 	m.dispatchMu.RLock()
-	zombies := make([]zombie, 0)
+	zombies := make([]zombieSessionSnapshot, 0)
 	for nodeID, sess := range m.meshSessions {
 		if sess == nil || sess.IsClosed() {
-			zombies = append(zombies, zombie{nodeID: nodeID, sess: sess})
+			zombies = append(zombies, zombieSessionSnapshot{nodeID: nodeID, sess: sess})
 		}
 	}
 	m.dispatchMu.RUnlock()
 
-	for _, z := range zombies {
-		nodeID := z.nodeID
-		log.Printf("[ZOMBIE-SWEEP] reaping closed session for peer=%s", truncID(nodeID))
-		m.unregisterMeshSession(nodeID, z.sess)
-		m.reapMultipathClosed(nodeID)
-		// Drive the peer back to PeerDisconnected so scanAndConnect's
-		// state machine re-dials. Without this, peer.state stays
-		// PeerConnected (set during accept) and the scan loop's
-		// "already connected" gate suppresses the redial — we'd reap
-		// the session and never reconnect.
-		m.mu.Lock()
-		if p, ok := m.peers[nodeID]; ok && p.state == PeerConnected {
-			p.state = PeerDisconnected
-			p.connCount = 0
-		}
-		m.mu.Unlock()
-		// Drop the LAD cache liveness override too — the session is
-		// gone so the cache's normal timeout-based eviction is the
-		// right authority again.
-		if m.rt != nil && m.rt.cache != nil {
-			m.rt.cache.SetGossipLivenessOverride(nodeID, false)
-		}
-
-		// Propagating-tombstone emit. Two preconditions:
-		//   (a) we are an anchor — non-anchor observer attestations are
-		//       rejected by the CRDT's anchor-role gate anyway, and
-		//       emitting LAD EvictPeer from non-anchors floods the mesh
-		//       with redundant tombstones that race with anchor-emitted
-		//       ones on HLC ordering.
-		//   (b) gossip-silence > observerSilenceThreshold (60s) — a peer
-		//       whose session just closed but whose gossip we received
-		//       within the last minute is probably mid-reconnect, not
-		//       dead.
-		// Anchors run BOTH emissions so swarm RoleTable/AddressTable
-		// (drained by PublishObserverTombstone+K-of-N quorum) and LAD
-		// (drained by EvictPeer immediately) converge in lock-step.
-		if m.shouldEmitObserverTombstone(nodeID) {
-			m.emitPeerTombstone(nodeID, "keepalive-dead")
-		}
-	}
+	m.reapZombieSessionSnapshots(zombies)
 
 	// Phase 2: orphan multipath managers — manager exists for a peer
 	// that no longer has a meshSessions entry (often because the
@@ -1422,6 +1458,18 @@ func (m *ConnectionManager) sweepZombieSessions() {
 	m.multipathMu.Unlock()
 
 	for _, nodeID := range orphans {
+		lifecycleMu := m.sessionLifecycleLock(nodeID)
+		lifecycleMu.Lock()
+		// The orphan list was built from a snapshot. A fresh admission may
+		// have completed since then; revalidate under the same lifecycle
+		// gate used by AcceptMeshConnection before touching peer-wide state.
+		m.dispatchMu.RLock()
+		_, hasSession := m.meshSessions[nodeID]
+		m.dispatchMu.RUnlock()
+		if hasSession {
+			lifecycleMu.Unlock()
+			continue
+		}
 		log.Printf("[ZOMBIE-SWEEP] reaping orphan multipath manager for peer=%s", truncID(nodeID))
 		m.reapMultipathClosed(nodeID)
 		// Force peer back to disconnected so scan reconnects — same
@@ -1432,6 +1480,7 @@ func (m *ConnectionManager) sweepZombieSessions() {
 			p.connCount = 0
 		}
 		m.mu.Unlock()
+		lifecycleMu.Unlock()
 	}
 
 	// Phase 3: stale proving sessions. Each upgrade installs a
@@ -1475,19 +1524,89 @@ func (m *ConnectionManager) sweepZombieSessions() {
 	// initiate. Bounded by peer count so unlikely to dominate memory,
 	// but the side-effect (suppressed initiator) is the real issue.
 	m.gossipMu.Lock()
-	staleGossip := make([]string, 0)
+	gossipCandidates := make([]string, 0, len(m.gossipActive))
 	for nodeID := range m.gossipActive {
-		if !hasMeshSession[nodeID] {
-			staleGossip = append(staleGossip, nodeID)
-		}
-	}
-	for _, nodeID := range staleGossip {
-		delete(m.gossipActive, nodeID)
+		gossipCandidates = append(gossipCandidates, nodeID)
 	}
 	m.gossipMu.Unlock()
+	staleGossip := make([]string, 0)
+	for _, nodeID := range gossipCandidates {
+		lifecycleMu := m.sessionLifecycleLock(nodeID)
+		lifecycleMu.Lock()
+		m.dispatchMu.RLock()
+		_, hasSession := m.meshSessions[nodeID]
+		m.dispatchMu.RUnlock()
+		if !hasSession {
+			m.gossipMu.Lock()
+			if _, present := m.gossipActive[nodeID]; present {
+				delete(m.gossipActive, nodeID)
+				staleGossip = append(staleGossip, nodeID)
+			}
+			m.gossipMu.Unlock()
+		}
+		lifecycleMu.Unlock()
+	}
 	if len(staleGossip) > 0 {
 		log.Printf("[ZOMBIE-SWEEP] cleared %d orphan gossipActive flag(s) for peers without sessions",
 			len(staleGossip))
+	}
+}
+
+// reapZombieSessionSnapshots applies Phase 1 only when unregister confirms
+// that the captured dispatch identity was removed. A false result means a
+// newer live session owns the peer, so multipath, peer state, LAD liveness and
+// tombstone admission must all remain untouched.
+func (m *ConnectionManager) reapZombieSessionSnapshots(zombies []zombieSessionSnapshot) {
+	for _, z := range zombies {
+		nodeID := z.nodeID
+		log.Printf("[ZOMBIE-SWEEP] reaping closed session for peer=%s", truncID(nodeID))
+		lifecycleMu := m.sessionLifecycleLock(nodeID)
+		lifecycleMu.Lock()
+		if !m.unregisterMeshSessionWithoutHook(nodeID, z.sess) {
+			lifecycleMu.Unlock()
+			continue
+		}
+		m.reapMultipathClosed(nodeID)
+		// Drive the peer back to PeerDisconnected so scanAndConnect's
+		// state machine re-dials. Without this, peer.state stays
+		// PeerConnected (set during accept) and the scan loop's
+		// "already connected" gate suppresses the redial — we'd reap
+		// the session and never reconnect.
+		m.mu.Lock()
+		if p, ok := m.peers[nodeID]; ok && p.state == PeerConnected {
+			p.state = PeerDisconnected
+			p.connCount = 0
+		}
+		m.mu.Unlock()
+		// Drop the LAD cache liveness override too — the session is
+		// gone so the cache's normal timeout-based eviction is the
+		// right authority again.
+		if m.rt != nil && m.rt.cache != nil {
+			m.rt.cache.SetGossipLivenessOverride(nodeID, false)
+		}
+
+		// Propagating-tombstone emit. Two preconditions:
+		//   (a) we are an anchor — non-anchor observer attestations are
+		//       rejected by the CRDT's anchor-role gate anyway, and
+		//       emitting LAD EvictPeer from non-anchors floods the mesh
+		//       with redundant tombstones that race with anchor-emitted
+		//       ones on HLC ordering.
+		//   (b) gossip-silence > observerSilenceThreshold (60s) — a peer
+		//       whose session just closed but whose gossip we received
+		//       within the last minute is probably mid-reconnect, not
+		//       dead.
+		// Anchors run BOTH emissions so swarm RoleTable/AddressTable
+		// (drained by PublishObserverTombstone+K-of-N quorum) and LAD
+		// (drained by EvictPeer immediately) converge in lock-step.
+		if m.shouldEmitObserverTombstone(nodeID) {
+			m.emitPeerTombstone(nodeID, "keepalive-dead")
+		}
+		lifecycleMu.Unlock()
+		// Keep the external hook outside both dispatchMu and the lifecycle
+		// transaction: callbacks may re-enter registration. Firing it only
+		// after cleanup also prevents that fresh admission from being erased
+		// by the stale zombie transaction that announced the departure.
+		m.fireSessionHook(nodeID, nil, false)
 	}
 }
 
@@ -1524,9 +1643,7 @@ func (m *ConnectionManager) reapMultipathClosed(nodeID string) {
 	m.multipathMu.Unlock()
 
 	for _, sess := range closedPaths {
-		if sess != nil {
-			mgr.RemovePath(sess)
-		}
+		mgr.RemovePath(sess)
 	}
 
 	// Final-decision critical section: re-check identity AND count under
@@ -1584,7 +1701,7 @@ const staleDiscoveryTTL = 30 * time.Minute
 //     staleDiscoveryTTL and lastConnected.IsZero() (peer was added to
 //     the map by PEX/LAD/discoverers, dialed across the protocol
 //     fallback chain, every dial failed, and we never received a
-//     handshake). These entries used to leak indefinitely.
+//     handshake). Without this sweep such entries leak indefinitely.
 //
 // In both paths we preserve peers that still have active transports
 // or are mid-drain, so an in-progress graceful shutdown never has its
@@ -1601,6 +1718,9 @@ func (m *ConnectionManager) pruneStalePeers() {
 	evictedIDs := make([]string, 0)
 	for id, p := range m.peers {
 		// Preserve peers with active transports or in-progress drains.
+		// DrainActive is the zero value and means "not draining" — a peer is
+		// mid-drain when the field is DrainStarted, which Rebalance sets and
+		// closeDrainedConnection clears.
 		if p.connCount > 0 || p.drainState != DrainActive {
 			continue
 		}
@@ -1675,7 +1795,7 @@ func (m *ConnectionManager) pruneStalePeers() {
 				m.addressTracker.ForgetPeer(id)
 			}
 		}
-		// MESH-H06: drop upgrade-walker per-peer state for evicted peers.
+		// Drop upgrade-walker per-peer state for evicted peers.
 		// walkerProbeAt (keyed by nodeID) was only ever written, never deleted,
 		// and walkerStalls was cleared only on a successful probe — so in a
 		// churning fleet both grew one entry per distinct peer ever seen.
@@ -1850,35 +1970,35 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 		// which is the healthy case. duplicate non-zero = peer is
 		// retransmitting frames whose original ACK was lost (loss in
 		// the ACK direction).
-		"aether_ack_emit_immediate":  0,
+		"aether_ack_emit_immediate":   0,
 		"aether_ack_emit_delay_timer": 0,
 		"aether_ack_emit_duplicate":   0,
 		// Anti-replay + frame-validation counters retained for back-compat:
-		"aether_suspicious_acks":   0,
-		"aether_replay_duplicates": 0,
-		"aether_replay_ancient":    0,
-		"aether_replay_rejects":    0,
-		"aether_seqno_wraps":       0,
-		"aether_recv_window_drops": 0,
-		"aether_decrypt_errors":    0,
-		"aether_inbox_drops":       0,
-		"aether_stream_refused":    0,
+		"aether_suspicious_acks":    0,
+		"aether_replay_duplicates":  0,
+		"aether_replay_ancient":     0,
+		"aether_replay_rejects":     0,
+		"aether_seqno_wraps":        0,
+		"aether_recv_window_drops":  0,
+		"aether_decrypt_errors":     0,
+		"aether_inbox_drops":        0,
+		"aether_stream_refused":     0,
 		"aether_fec_groups_evicted": 0,
 		// Per-session byte and frame totals. Non-zero confirms the
 		// session is actually doing work — when these read 0
 		// fleet-wide while traffic is observable elsewhere, the
 		// adapter's counter wiring is broken.
-		"aether_bytes_sent":   0,
-		"aether_bytes_recv":   0,
-		"aether_frames_sent":  0,
+		"aether_bytes_sent":  0,
+		"aether_bytes_recv":  0,
+		"aether_frames_sent": 0,
 		// Recent-RTT distribution from the BidiRPC primary stream per
 		// session, summed across all sessions to produce a fleet-wide
 		// upper bound. Operators reading these alongside the EMA
 		// `aether_rtt_ema_*` series can spot bimodal-latency tails the
 		// EMA averages away.
-		"aether_rtt_p50_ns_sum":  0,
-		"aether_rtt_p95_ns_sum":  0,
-		"aether_rtt_p99_ns_sum":  0,
+		"aether_rtt_p50_ns_sum":   0,
+		"aether_rtt_p95_ns_sum":   0,
+		"aether_rtt_p99_ns_sum":   0,
 		"aether_rtt_samples_seen": 0,
 		// Health-monitor SRTT — the ping/pong path's smoothed RTT.
 		// Independent of per-stream RTT: fires on every Pong arrival
@@ -1900,7 +2020,7 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 		// not the aether.Session interface, so we type-assert per session
 		// to the structural interface that both satisfy.
 		"aether_congestion_throttle_hits": 0,
-		// OBS-15: noise send-cipher rekey telemetry summed across all
+		// noise send-cipher rekey telemetry summed across all
 		// active sessions. aether_rekey_total = lifetime count of
 		// completed ResetSend events (every send-cipher ratchet bumps
 		// it once). aether_bytes_since_rekey = bytes encrypted on the
@@ -1913,7 +2033,7 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 		// and contribute zero, which is the correct behaviour.
 		"aether_rekey_total":       0,
 		"aether_bytes_since_rekey": 0,
-		// OBS-1: write-syscall latency distribution summed across all active
+		// write-syscall latency distribution summed across all active
 		// sessions. p50_sum / p99_sum are the sums of each session's p50 / p99
 		// write-syscall µs. Divide by aether_sessions_sampled to get the
 		// cross-fleet mean percentile. High p99_sum flags kernel send-buffer
@@ -1923,7 +2043,7 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 		// available — aether's DurationHist only captures p50/p95/p99.
 		"aether_write_syscall_us_p50_sum": 0,
 		"aether_write_syscall_us_p99_sum": 0,
-		// OBS-10: cwnd-utilisation per-mille distribution summed across all
+		// cwnd-utilisation per-mille distribution summed across all
 		// active sessions. p50_sum / p99_sum are the sums of each session's
 		// p50 / p99 CwndUtil permille. p50_sum ≈ sessions×1000 = cwnd-bound
 		// for most sends; p50_sum << sessions×1000 = app-bound (cwnd is
@@ -1932,7 +2052,7 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 		// only (non-noise adapters contribute zero).
 		"aether_cwnd_util_permille_p50_sum": 0,
 		"aether_cwnd_util_permille_p99_sum": 0,
-		// OBS-8: per-session receive-path delivery counters summed across
+		// per-session receive-path delivery counters summed across
 		// all active adapter sessions that expose DeliveryStats(). Sourced
 		// from each session's DeliveryStats accessor (aether adapter,
 		// *NoiseSession + *TCPSession). QUIC / gRPC / TLS adapters route
@@ -1956,7 +2076,7 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 		"aether_deliver_dropped":       0,
 		"aether_deliver_backpressure":  0,
 		"aether_deliver_bytes_dropped": 0,
-		// OBS-13: recv-window head-of-line-block latency sums across all
+		// recv-window head-of-line-block latency sums across all
 		// sessions. Each session contributes its p50/p99 percentile (µs).
 		// Non-zero confirms reordering is occurring fleet-wide; a climbing
 		// _p99_sum with a stable _p50_sum is the "rare-but-deep HOL" shape
@@ -1965,7 +2085,7 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 		// receive-reorder picture.
 		"aether_recv_window_hol_us_p50_sum": 0,
 		"aether_recv_window_hol_us_p99_sum": 0,
-		// OBS-9: writeLoop scheduler queue-depth distribution summed across
+		// writeLoop scheduler queue-depth distribution summed across
 		// all active sessions. Each session contributes its p50 / p99
 		// queue-depth sample (frames pending + TLP probes). Sustained-high
 		// p50_sum (relative to aether_sessions_sampled) means work piles up
@@ -1976,7 +2096,7 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 		// non-empty queue (the healthy-fast-path zero contribution).
 		"aether_scheduler_depth_p50_sum": 0,
 		"aether_scheduler_depth_p99_sum": 0,
-		// OBS-14: Stream.Send credit-starvation block latency sums (µs)
+		// Stream.Send credit-starvation block latency sums (µs)
 		// across all active sessions. Each session contributes its p50 / p99.
 		// Elevated p99 with a healthy aether_writeloop_park_*_us_sum (OBS-2)
 		// fingerprints the flow-control credit semaphore — not the wire — as
@@ -2004,7 +2124,7 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 		"aether_conn_window_wait_us_p99_sum":       0,
 		"aether_post_credit_send_us_p50_sum":       0,
 		"aether_post_credit_send_us_p99_sum":       0,
-		// OBS-18 sub-item 3: per-decrypt AEAD latency distribution (µs)
+		// per-decrypt AEAD latency distribution (µs)
 		// summed across all noise sessions. p50_sum near sessions×<few> +
 		// p99_sum in the millisecond tier = canonical CPU-saturation
 		// asymmetric shape; sustained millisecond p50_sum indicates
@@ -2044,7 +2164,7 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 		out["aether_bytes_sent"] += mm.BytesSent
 		out["aether_bytes_recv"] += mm.BytesRecv
 		out["aether_frames_sent"] += mm.FramesSent
-		// OBS-15 — RekeyTotal/RekeyBytesSinceLast are noise-only (non-
+		// RekeyTotal/RekeyBytesSinceLast are noise-only (non-
 		// noise adapters report zero via the noiseConnStats interface
 		// miss), so summing across all sessions naturally yields the
 		// noise-fleet rekey total + bytes-since-rekey aggregate.
@@ -2084,14 +2204,14 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 				out["aether_congestion_throttle_hits"] += th.TotalHits()
 			}
 		}
-		// OBS-1: write-syscall latency sums. Cast uint64→uint64 directly;
+		// write-syscall latency sums. Cast uint64→uint64 directly;
 		// zeros from non-noise adapters are correct and harmless.
 		out["aether_write_syscall_us_p50_sum"] += mm.WriteSyscallP50Us
 		out["aether_write_syscall_us_p99_sum"] += mm.WriteSyscallP99Us
-		// OBS-10: cwnd-utilisation permille sums. uint32 widened to uint64.
+		// cwnd-utilisation permille sums. uint32 widened to uint64.
 		out["aether_cwnd_util_permille_p50_sum"] += uint64(mm.CwndUtilP50Permille)
 		out["aether_cwnd_util_permille_p99_sum"] += uint64(mm.CwndUtilP99Permille)
-		// OBS-8: receive-path delivery counters via the adapter's
+		// receive-path delivery counters via the adapter's
 		// DeliveryStats accessor. Same shape as the Throttle() probe —
 		// the aether.Session interface doesn't expose DeliveryStats; we
 		// type-assert to a structural interface that both NoiseSession
@@ -2110,21 +2230,21 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 				out["aether_deliver_bytes_dropped"] += uint64(ds.BytesDropped.Load())
 			}
 		}
-		// OBS-13: HOL-block latency sums. Gate on p50 > 0 so sessions with
+		// HOL-block latency sums. Gate on p50 > 0 so sessions with
 		// no reordering (pure in-order delivery) don't pollute the sum with
 		// meaningless zeros. Same gating convention as aether_rtt_p50_ns_sum.
 		if mm.RecvWindowHOLP50Us > 0 {
 			out["aether_recv_window_hol_us_p50_sum"] += mm.RecvWindowHOLP50Us
 			out["aether_recv_window_hol_us_p99_sum"] += mm.RecvWindowHOLP99Us
 		}
-		// OBS-9: scheduler queue-depth sums. uint32 widened to uint64.
+		// scheduler queue-depth sums. uint32 widened to uint64.
 		// Gate on p50 > 0 so sessions whose writeLoop never observed a
 		// non-empty queue (pure fast-path) don't dilute the percentile sum.
 		if mm.SchedulerDepthP50 > 0 {
 			out["aether_scheduler_depth_p50_sum"] += uint64(mm.SchedulerDepthP50)
 			out["aether_scheduler_depth_p99_sum"] += uint64(mm.SchedulerDepthP99)
 		}
-		// OBS-14: stream-send-block latency sums. Sessions whose Send path
+		// stream-send-block latency sums. Sessions whose Send path
 		// never blocked on credit (uncontended fast path) report p50 == 0
 		// and are skipped — same shape as the RTT histogram gate.
 		if mm.StreamSendBlockP50Us > 0 {
@@ -2147,7 +2267,7 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 			out["aether_post_credit_send_us_p50_sum"] += mm.PostCreditSendP50Us
 			out["aether_post_credit_send_us_p99_sum"] += mm.PostCreditSendP99Us
 		}
-		// OBS-18 sub-item 3: per-decrypt AEAD latency sums. Non-noise
+		// per-decrypt AEAD latency sums. Non-noise
 		// adapters always report p50 == 0 (no AEAD on the recv hot path)
 		// and are skipped, which keeps the sum a noise-only fleet view.
 		if mm.DecryptLatencyP50Us > 0 {
@@ -2166,7 +2286,7 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 
 // isSameRegionSameOrigin reports whether the peer is in the same Fly
 // region AND the same network origin as us. Pairs satisfying this MUST
-// use noise-UDP per the Phase 4 design goal — they have 6PN private
+// use noise-UDP by design — they have 6PN private
 // IPv6 routes available and there's no reason to fall back to a
 // WebSocket-via-edge path that suffers from edge-proxy reaping.
 //
@@ -2175,7 +2295,34 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 //   - peer.peerRegion is empty (peer hasn't published region yet)
 //   - regions differ
 //   - peer is cross-origin (different Fly org / VPC)
+//
+// 🔴 CONCURRENCY. Both fields this reads — peer.crossOrigin and
+// peer.peerRegion — are written under m.mu by scanAndConnect (:2407, :2501,
+// :2645, :2704), SeedBootstrapPeer (:2788, :2775) and reach_resync (:170),
+// while scanAndConnect dials peers in parallel goroutines. Reading them
+// unlocked was a data race the race detector confirmed at :2233 and :2236.
+//
+// The same remedy is applied eleven lines below for the crossOrigin telemetry
+// read, and in ForceConnect for peer.state; it simply never reached the read
+// that decides the protocol set.
+//
+// The split exists because sync.Mutex is not reentrant and the three callers
+// disagree about the lock: pickPath and connectPeer hold nothing,
+// AcceptMeshConnection (mesh_connection.go:1048) holds m.mu. Locking inside a
+// single function would have deadlocked the accept path.
 func (m *ConnectionManager) isSameRegionSameOrigin(peer *peerConn) bool {
+	if peer == nil {
+		return false
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.isSameRegionSameOriginLocked(peer)
+}
+
+// isSameRegionSameOriginLocked is the lock-free core.
+//
+// Caller must hold m.mu (same contract as dialOwned).
+func (m *ConnectionManager) isSameRegionSameOriginLocked(peer *peerConn) bool {
 	if peer == nil || peer.crossOrigin {
 		return false
 	}
@@ -2202,7 +2349,19 @@ func (m *ConnectionManager) isSameRegionSameOrigin(peer *peerConn) bool {
 //  2. ProtoWebSocket (6PN-direct for same-org, edge-WS for cross-org)
 //  3. ProtoQUIC, ProtoGRPC, ProtoTLS (in protocolOrder sequence)
 func (m *ConnectionManager) pickPath(peer *peerConn) []Protocol {
-	if m.isSameRegionSameOrigin(peer) {
+	// ONE acquisition for BOTH reads. Locking only the telemetry read below
+	// leaves the same-region decision — which reads the same two fields —
+	// unlocked, and the race detector confirms it. Taking m.mu
+	// twice would fix the race but let the decision and the counter observe
+	// different states of one peer, so they share a single snapshot.
+	sameRegionSameOrigin, crossOrigin := false, false
+	if peer != nil {
+		m.mu.Lock()
+		sameRegionSameOrigin = m.isSameRegionSameOriginLocked(peer)
+		crossOrigin = peer.crossOrigin
+		m.mu.Unlock()
+	}
+	if sameRegionSameOrigin {
 		return []Protocol{ProtoNoiseUDP}
 	}
 	// Copy protocolOrder so callers can't mutate the package global.
@@ -2211,13 +2370,6 @@ func (m *ConnectionManager) pickPath(peer *peerConn) []Protocol {
 	// Cross-org dial funnel telemetry: count whenever pickPath returns
 	// the full protocolOrder (which begins with ProtoNoiseUDP) for a
 	// cross-org peer. Confirms NoiseUDP was offered to the dial loop.
-	// MESH-B02: read crossOrigin under m.mu (written by scanAndConnect/resync).
-	crossOrigin := false
-	if peer != nil {
-		m.mu.Lock()
-		crossOrigin = peer.crossOrigin
-		m.mu.Unlock()
-	}
 	if crossOrigin {
 		m.crossOrgPickPathNoiseUDPIncluded.Add(1)
 	}
@@ -2358,9 +2510,8 @@ func (m *ConnectionManager) scanAndConnect(ctx context.Context) {
 			}
 		}
 	}
-	// Swarm AddressTable: PeerRecord-advertised dial candidates from the
-	// new swarm fabric. The legacy reach publisher is disabled (see
-	// runtime.go boot block), so swarm.AddressTable is the authoritative
+	// Swarm AddressTable: PeerRecord-advertised dial candidates. Nothing
+	// else publishes reach, so swarm.AddressTable is the authoritative
 	// source of dialable addresses for fleet peers. Without this merge,
 	// peer.addresses stays empty and EnsureK reports "no suitable address
 	// for noise-udp/grpc/websocket" on every outbound dial — which then
@@ -2518,10 +2669,9 @@ func (m *ConnectionManager) scanAndConnect(ctx context.Context) {
 				// Gate (b): skip only when EVERY upgrade-candidate
 				// protocol is currently within drain-redial cooldown.
 				// The previous aggregate-OR gate ("ANY drained class
-				// stays cool") blanket-blocked Grade-A redials for 5
-				// minutes after a Grade-C drain — see Cascade A / L1
-				// #3. Now we only skip if there's no protocol we
-				// could still try.
+				// stays cool") blanket-blocks Grade-A redials for five
+				// minutes after a Grade-C drain. Skip only when there is
+				// no protocol left to try.
 				if len(p.drainedAt) > 0 {
 					bestActive := p.bestActiveGrade()
 					anyUpgradeAvailable := false
@@ -2656,7 +2806,7 @@ func (m *ConnectionManager) scanAndConnect(ctx context.Context) {
 	var wg sync.WaitGroup
 	connectCount := 0
 	for _, p := range toConnect {
-		// MESH-B07: read connCount under m.mu — the toConnect list was built
+		// Read connCount under m.mu — the toConnect list was built
 		// after releasing the lock, and the accept-cleanup path mutates
 		// connCount concurrently, so a bare read both raced and used a stale
 		// value for the budget decision.
@@ -2728,9 +2878,8 @@ func (m *ConnectionManager) SeedBootstrapPeer(nodeID, host, region string) {
 		// Merge new addresses onto whatever was already there.
 		existing.addresses = mergeReachAddresses(existing.addresses, addresses)
 		// Recompute crossOrigin against the merged set — bootstrap
-		// seeding may add a Scope:"private" entry to a peer that was
-		// previously discovered with only public addresses, flipping
-		// the same-origin determination.
+		// seeding may add a Scope:"private" entry to a peer discovered with
+		// only public addresses, flipping the same-origin determination.
 		existing.crossOrigin = m.isCrossOrigin(existing.addresses)
 		log.Printf("[SWARM] SeedBootstrapPeer: updated existing peer=%s addresses=%d", truncID(nodeID), len(existing.addresses))
 		return
@@ -2793,7 +2942,7 @@ func (m *ConnectionManager) ForceConnect(ctx context.Context, nodeID string) {
 	if peer.state == PeerDisconnected {
 		peer.state = PeerDiscovered
 	}
-	// MESH-B06: capture the connect decision under m.mu; peer.state is written
+	// Capture the connect decision under m.mu; peer.state is written
 	// concurrently by the accept/scan paths, so reading it after Unlock raced.
 	shouldConnect := peer.state == PeerDiscovered
 	m.mu.Unlock()
@@ -2807,7 +2956,7 @@ func (m *ConnectionManager) ForceConnect(ctx context.Context, nodeID string) {
 func (m *ConnectionManager) connectPeer(ctx context.Context, peer *peerConn) {
 	defer func() {
 		if r := recover(); r != nil {
-			log.Printf("[PEERS] %s: connectPeer panic recovered: %v", peer.nodeID[:12], r)
+			log.Printf("[PEERS] %s: connectPeer panic recovered: %v", truncID(peer.nodeID), r)
 			m.mu.Lock()
 			peer.state = PeerDisconnected
 			m.mu.Unlock()
@@ -2820,12 +2969,12 @@ func (m *ConnectionManager) connectPeer(ctx context.Context, peer *peerConn) {
 	// so connectToPeer can try a Grade-A upgrade if the peer's reach
 	// records advertise a better-grade address.
 	//
-	// L1 #10 fix: previously this short-circuit fired for ANY existing
+	// Previously this short-circuit fired for ANY existing
 	// session regardless of grade. A Grade-C inbound WS session would
 	// suppress every outbound dial via this path — EnsureK was the
-	// only upgrade driver, and Cascade A.1 + A.4 needed for that loop
-	// to actually fire. Now connectPeer participates in upgrade
-	// attempts directly when the peer has a better-grade address.
+	// only upgrade driver, and that loop needs several other conditions to
+	// fire. connectPeer participates in upgrade attempts directly when the
+	// peer has a better-grade address.
 	m.dispatchMu.RLock()
 	sess, ok := m.meshSessions[peer.nodeID]
 	m.dispatchMu.RUnlock()
@@ -2853,7 +3002,7 @@ func (m *ConnectionManager) connectPeer(ctx context.Context, peer *peerConn) {
 	peer.state = PeerConnecting
 	m.mu.Unlock()
 
-	// Phase 4: pickPath returns a scored, ordered list of protocols to
+	// pickPath returns a scored, ordered list of protocols to
 	// try for this peer. For same-region same-origin peers it returns
 	// only ProtoNoiseUDP — these pairs MUST land on noise-UDP and never
 	// fall back to WebSocket (the design goal: 100% noise-UDP for
@@ -2870,14 +3019,14 @@ func (m *ConnectionManager) connectPeer(ctx context.Context, peer *peerConn) {
 		// site, so a session that keeps tripping the aether stall
 		// detector backs off without a separate sticky-path memory.
 		// tryDial consumes a probe slot — call only at the actual
-		// dial gate. Audit M12.
+		// dial gate..
 		if !m.tryDial(peer.nodeID, proto) {
 			continue
 		}
 
 		session, err := m.dialWithProtocol(ctx, peer, proto)
 		if err != nil {
-			log.Printf("[PEERS] %s: %s dial failed: %v", peer.nodeID[:12], proto, err)
+			log.Printf("[PEERS] %s: %s dial failed: %v", truncID(peer.nodeID), proto, err)
 			// Same-region same-origin hard rule: on noise-UDP failure
 			// we DO NOT recordDialFailure (which would set the long
 			// growing-schedule cooldown and cause subsequent scan
@@ -2888,27 +3037,40 @@ func (m *ConnectionManager) connectPeer(ctx context.Context, peer *peerConn) {
 			// scanAndConnect will re-enter on the next tick.
 			if m.isSameRegionSameOrigin(peer) && proto == ProtoNoiseUDP {
 				m.recordStallCooldown(peer.nodeID, proto)
-				dbgPeers.Printf("%s: same-region same-origin noise-UDP dial failed, transient cooldown (will retry)", peer.nodeID[:12])
+				dbgPeers.Printf("%s: same-region same-origin noise-UDP dial failed, transient cooldown (will retry)", truncID(peer.nodeID))
 				continue
 			}
-			m.recordDialFailure(peer.nodeID, proto)
+			// Classify before recording. A local precondition
+			// ("QUIC transport not initialized", "no suitable address", …)
+			// implicates this node, not the peer, and records nothing; a
+			// single reachability error takes the flat stall cooldown and
+			// only escalates onto the exponential ladder once it repeats.
+			m.recordDialOutcome(peer.nodeID, proto, err)
 			continue
 		}
 
 		// Success — clear failure state for this (peer, transport).
 		m.recordDialSuccess(peer.nodeID, proto)
 
-		// MESH-B01/E04: check the type assertion instead of a bare
+		// Check the type assertion instead of a bare
 		// session.(*aether.BaseConnection). QuicTransport.Dial returns a
 		// *QuicSession, not a *BaseConnection, so on a noise-UDP→QUIC fallback
 		// (same UDP address) the bare assertion panicked; the defer-recover then
 		// marked the peer Disconnected but never Closed the session, leaking the
 		// QUIC conn + goroutines after dial-success was already recorded.
-		bs, ok := session.(*aether.BaseConnection)
-		if !ok || bs == nil {
-			log.Printf("[PEERS] %s: dial via %s returned unexpected session type %T — closing", peer.nodeID[:12], proto, session)
+		bs, ok := installableMeshConn(session)
+		if !ok {
+			log.Printf("[PEERS] %s: dial via %s returned unexpected session type %T — closing", truncID(peer.nodeID), proto, session)
 			_ = session.Close()
-			m.recordDialFailure(peer.nodeID, proto)
+			// Deliberately NO recordDialFailure here. The dial
+			// SUCCEEDED — the handshake completed and recordDialSuccess above
+			// has already (correctly) cleared this path's cooldown. An
+			// unexpected session type is evidence about OUR adapter layer, not
+			// about the peer or the path, and a cooldown may be recorded only
+			// on evidence about the path. Recording it here suppressed a
+			// reachable peer for up to 10 minutes — and because ProtoTLS and
+			// ProtoWebSocket share one tracker key, a mismatch on
+			// one of them suppressed the other too.
 			continue
 		}
 		conn := bs.Conn
@@ -2919,14 +3081,14 @@ func (m *ConnectionManager) connectPeer(ctx context.Context, peer *peerConn) {
 		if bs.InitialRTT() > 0 {
 			peer.initRTT = bs.InitialRTT() // dial/handshake timing — separate from gossip RTT
 		}
-		// MESH-B08: snapshot the mutable peer fields the handoff goroutine needs
+		// Snapshot the mutable peer fields the handoff goroutine needs
 		// while we hold m.mu — reading peer.peerRegion/peer.bootstrapHost in the
 		// `go` call arguments raced writers under m.mu. nodeID is immutable.
 		peerRegion := peer.peerRegion
 		bootstrapHost := peer.bootstrapHost
 		m.mu.Unlock()
 
-		dbgPeers.Printf("%s: dialed via %s", peer.nodeID[:12], proto)
+		dbgPeers.Printf("%s: dialed via %s", truncID(peer.nodeID), proto)
 
 		// Aether — negotiate and accept in goroutine so connectPeer returns immediately.
 		// peerServiceName() reads the service identity from LAD member attrs
@@ -2936,8 +3098,8 @@ func (m *ConnectionManager) connectPeer(ctx context.Context, peer *peerConn) {
 		// new session is established so topology views remain consistent
 		// across session churn.
 		svcName := m.peerServiceName(peer.nodeID)
-		log.Printf("[AETHER] connectPeer dialed %s via %s, launching Aether session", peer.nodeID[:12], proto)
-		go m.rt.DialAndAcceptMesh(ctx, conn, peer.nodeID, peerRegion, proto, bootstrapHost, svcName, "")
+		log.Printf("[AETHER] connectPeer dialed %s via %s, launching Aether session", truncID(peer.nodeID), proto)
+		go m.rt.DialAndAcceptMesh(ctx, conn, peer.nodeID, peerRegion, proto, bootstrapHost, svcName, "", dialOwnsConnectingState)
 		return
 	}
 
@@ -2947,7 +3109,7 @@ func (m *ConnectionManager) connectPeer(ctx context.Context, peer *peerConn) {
 	m.mu.Unlock()
 
 	if hasDormant {
-		log.Printf("[PEERS] %s: all dial protocols failed, reactivating dormant transport", peer.nodeID[:12])
+		log.Printf("[PEERS] %s: all dial protocols failed, reactivating dormant transport", truncID(peer.nodeID))
 		m.reactivateDormantTransport(ctx, peer)
 		return
 	}
@@ -2962,7 +3124,7 @@ func (m *ConnectionManager) connectPeer(ctx context.Context, peer *peerConn) {
 	peer.outboundDialed = false // allow re-dial on next scan
 	peer.reconnectDelay = min(peer.reconnectDelay*2, maxCooldown)
 	m.mu.Unlock()
-	log.Printf("[PEERS] %s: all protocols failed, backoff %v", peer.nodeID[:12], peer.reconnectDelay)
+	log.Printf("[PEERS] %s: all protocols failed, backoff %v", truncID(peer.nodeID), peer.reconnectDelay)
 
 	// Dormant reactivation now handled in connectPeer() above (line 713-722)
 }
@@ -2975,7 +3137,7 @@ func (m *ConnectionManager) dialWithProtocol(ctx context.Context, peer *peerConn
 	dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 
-	// MESH-B02: snapshot peer.crossOrigin under m.mu (written by scanAndConnect/
+	// Snapshot peer.crossOrigin under m.mu (written by scanAndConnect/
 	// resync); read the local below instead of racing the field.
 	m.mu.Lock()
 	peerCrossOrigin := peer.crossOrigin
@@ -2991,7 +3153,7 @@ func (m *ConnectionManager) dialWithProtocol(ctx context.Context, peer *peerConn
 		if proto == ProtoNoiseUDP && peerCrossOrigin {
 			m.crossOrgDialNoSuitableAddr.Add(1)
 		}
-		return nil, fmt.Errorf("no suitable address for %s", proto)
+		return nil, fmt.Errorf("no suitable address for %s: %w", proto, errLocalDialState)
 	}
 
 	target := aether.Target{
@@ -3045,12 +3207,12 @@ func (m *ConnectionManager) dialWithProtocol(ctx context.Context, peer *peerConn
 		return conn, err
 	case ProtoQUIC:
 		if m.quicTr == nil {
-			return nil, fmt.Errorf("QUIC transport not initialized")
+			return nil, fmt.Errorf("QUIC transport not initialized: %w", errLocalDialState)
 		}
 		return m.quicTr.Dial(dialCtx, target)
 	case ProtoWebSocket:
 		if m.wsTr == nil {
-			return nil, fmt.Errorf("WebSocket transport not initialized")
+			return nil, fmt.Errorf("WebSocket transport not initialized: %w", errLocalDialState)
 		}
 		// 6PN-direct path: bestAddress returned a raw private IPv6:port,
 		// meaning this is a same-org Fly peer reachable over the 6PN
@@ -3088,7 +3250,7 @@ func (m *ConnectionManager) dialWithProtocol(ctx context.Context, peer *peerConn
 			case <-time.After(500 * time.Millisecond):
 			}
 			if session2, err2 := m.wsTr.Dial(dialCtx, wsTarget); err2 == nil {
-				log.Printf("[PEERS] %s: WS dial succeeded after DNS retry", peer.nodeID[:12])
+				log.Printf("[PEERS] %s: WS dial succeeded after DNS retry", truncID(peer.nodeID))
 				return session2, nil
 			} else {
 				err = err2
@@ -3116,22 +3278,22 @@ func (m *ConnectionManager) dialWithProtocol(ctx context.Context, peer *peerConn
 				})
 				if session3, err3 := m.wsTr.Dial(dialCtx, wsInternal); err3 == nil {
 					log.Printf("[PEERS] %s: WS dial succeeded via Fly internal %s (public DNS sustainedly broken, SNI=%s)",
-						peer.nodeID[:12], internalAddr, publicHost)
+						truncID(peer.nodeID), internalAddr, publicHost)
 					return session3, nil
 				} else {
-					log.Printf("[PEERS] %s: Fly internal fallback also failed: %v", peer.nodeID[:12], err3)
+					log.Printf("[PEERS] %s: Fly internal fallback also failed: %v", truncID(peer.nodeID), err3)
 				}
 			}
 		}
 		// Fallback: HTTP/1.1 hijack relay — avoids proxy interference on
 		// Fly.io/Cloudflare by using raw TCP framing instead of WS frames.
-		log.Printf("[PEERS] %s: WS dial failed, trying hijack relay fallback: %v", peer.nodeID[:12], err)
+		log.Printf("[PEERS] %s: WS dial failed, trying hijack relay fallback: %v", truncID(peer.nodeID), err)
 		hjTarget := target
 		hjTarget.Address = addr // DialHijack constructs URL internally
 		return m.wsTr.DialHijack(dialCtx, hjTarget)
 	case ProtoGRPC:
 		if m.grpcTr == nil {
-			return nil, fmt.Errorf("gRPC transport not initialized")
+			return nil, fmt.Errorf("gRPC transport not initialized: %w", errLocalDialState)
 		}
 		return m.grpcTr.Dial(dialCtx, target)
 	case ProtoTLS:
@@ -3139,7 +3301,7 @@ func (m *ConnectionManager) dialWithProtocol(ctx context.Context, peer *peerConn
 		// HTTPS upgrade → VL1 connection. Only works for bootstrap-capable hosts.
 		host := addr
 		if host == "" {
-			return nil, fmt.Errorf("no TLS host for %s", peer.nodeID[:12])
+			return nil, fmt.Errorf("no TLS host for %s: %w", truncID(peer.nodeID), errLocalDialState)
 		}
 		result, err := m.rt.dialBootstrapHost(dialCtx, host)
 		if err != nil {
@@ -3148,7 +3310,7 @@ func (m *ConnectionManager) dialWithProtocol(ctx context.Context, peer *peerConn
 		// Create a session-like wrapper from the raw conn
 		return aether.NewConnection(m.rt.identity.NodeID, aether.NodeID(result.nodeID), result.rawConn), nil
 	default:
-		return nil, fmt.Errorf("unknown protocol: %d", proto)
+		return nil, fmt.Errorf("unknown protocol: %d: %w", proto, errLocalDialState)
 	}
 }
 
@@ -3169,7 +3331,7 @@ func (m *ConnectionManager) dialWithProtocol(ctx context.Context, peer *peerConn
 // even when the peer only has a hostname from DNS self-resolution (not a
 // dedicated WSS reach record).
 func (m *ConnectionManager) bestAddress(peer *peerConn, proto Protocol) string {
-	// MESH-B02: snapshot the mutable dial inputs under m.mu. peer.addresses is
+	// Snapshot the mutable dial inputs under m.mu. peer.addresses is
 	// reassigned (peer.addresses = ...) by scanAndConnect / resyncStalePeerAddresses
 	// under m.mu, while this function runs lock-free — a bare `range peer.addresses`
 	// could tear the slice header (ptr,len,cap) and panic with an out-of-bounds
@@ -3201,11 +3363,30 @@ func (m *ConnectionManager) bestAddress(peer *peerConn, proto Protocol) string {
 		if len(candidates) == 0 {
 			return ""
 		}
-		if len(candidates) == 1 {
-			return candidates[0].addr
-		}
+
+		// TIER ORDER FIRST, UNCONDITIONALLY. Tier is a property
+		// of the ADDRESS — IPv4 (1) before IPv6 (2), private 6PN (0) before
+		// both — and needs no AddressTracker to evaluate. Placing it inside
+		// the tracker-only sort below gives a tracker-independent property a
+		// tracker dependency by CO-LOCATION: with no tracker the function
+		// returns candidates[0] in APPEND order while
+		// its comment claimed tier order, and IPv4 preference did not exist.
+		// A nil tracker is a supported state (mesh_services.go), so that was
+		// the common path, not an edge.
+		sort.SliceStable(candidates, func(i, j int) bool {
+			if candidates[i].tier != candidates[j].tier {
+				return candidates[i].tier < candidates[j].tier
+			}
+			// Stable lex at equal tier so the pick does not flap when LAD
+			// reorders the reach record between gossip rounds.
+			return candidates[i].addr < candidates[j].addr
+		})
+
+		// Health scoring needs the tracker; tier ordering above does not.
+		// An early return for a missing dependency must skip ONLY the work
+		// that needs it.
 		if m.addressTracker == nil {
-			return candidates[0].addr // no tracker — use tier order
+			return candidates[0].addr
 		}
 
 		sort.SliceStable(candidates, func(i, j int) bool {
@@ -3242,13 +3423,21 @@ func (m *ConnectionManager) bestAddress(peer *peerConn, proto Protocol) string {
 			if candidates[i].tier != candidates[j].tier {
 				return candidates[i].tier < candidates[j].tier
 			}
-			// L2 #7: stable lex on addr string at exactly-equal tier
+			// Stable lex on addr string at exactly-equal tier
 			// so the picked candidate doesn't flap when LAD reorders
 			// the reach record between gossip rounds.
 			return candidates[i].addr < candidates[j].addr
 		})
 
-		// Skip dead paths entirely — fall through to no-address
+		// Skip dead paths entirely — fall through to no-address.
+		//
+		// This is reached for a SINGLE candidate too. Behind a
+		// `len(candidates) == 1` fast path, a peer whose only address is
+		// known-dead is re-dialled every cycle for the whole 30-minute
+		// cooldown — the tight loop AddressDeadCooldown exists to
+		// prevent, and the opposite of what this comment promised. The
+		// cooldown EXPIRES (measured: 30m, cleared on any success), so
+		// returning "" suppresses dialling temporarily and strands nothing.
 		if best, ok := m.addressTracker.Score(peer.nodeID, transport, candidates[0].addr); ok && best.IsDead() {
 			return ""
 		}
@@ -3259,8 +3448,8 @@ func (m *ConnectionManager) bestAddress(peer *peerConn, proto Protocol) string {
 	case ProtoNoiseUDP, ProtoQUIC:
 		var candidates []addressCandidate
 
-		// Tier 0: Private IPs for same-origin. Cascade E / L2 #1 fix:
-		// require an IPv6 ULA (Fly's 6PN fdaa:) or — failing that — at
+		// Tier 0: Private IPs for same-origin. Require an IPv6 ULA
+		// (Fly's 6PN fdaa:) or — failing that — at
 		// least skip Docker bridge RFC1918 + link-local that have no
 		// chance of routing. Without this filter, a peer that publishes
 		// BOTH a 6PN fdaa:.. private entry AND a 172.18.x.x Docker
@@ -3429,7 +3618,7 @@ func (m *ConnectionManager) bestAddress(peer *peerConn, proto Protocol) string {
 		// No UDP address found — log for diagnosing why Noise/QUIC fails
 		if len(peerAddresses) > 0 {
 			dbgPeers.Printf("%s: no UDP address for %s (cross_origin=%v, addrs=%d)",
-				peer.nodeID[:12], proto, peerCrossOrigin, len(peerAddresses))
+				truncID(peer.nodeID), proto, peerCrossOrigin, len(peerAddresses))
 		}
 
 	case ProtoWebSocket, ProtoGRPC, ProtoTLS:
@@ -3492,7 +3681,7 @@ func (m *ConnectionManager) bestAddress(peer *peerConn, proto Protocol) string {
 		}
 
 		// Debug: log why no WS/gRPC address was found
-		dbgPeers.Printf("%s: no %s address found (addrs: %d, cross_origin: %v)", peer.nodeID[:12], proto, len(peer.addresses), peer.crossOrigin)
+		dbgPeers.Printf("%s: no %s address found (addrs: %d, cross_origin: %v)", truncID(peer.nodeID), proto, len(peer.addresses), peer.crossOrigin)
 		for i, a := range peer.addresses {
 			dbgPeers.Printf("  addr[%d]: host=%s port=%d proto=%s scope=%s", i, a.Host, a.Port, a.Proto, a.Scope)
 		}
@@ -3650,19 +3839,20 @@ func (m *ConnectionManager) peerServiceHostname(peerNodeID string) string {
 	if m.rt.cache == nil {
 		return ""
 	}
-	members, err := m.rt.cache.Members(context.Background(), "")
-	if err != nil {
+	// nil seam: VL1/LAD disabled. A nil INTERFACE panics on any call, unlike
+	// the nil *DirectoryCache this replaced, so the guard is required and not
+	// defensive padding.
+	if m.rt.liveDir == nil {
 		return ""
 	}
-	for _, member := range members {
-		if member.NodeID == peerNodeID {
-			svcName := member.Attrs["serviceName"]
-			// Only return if it looks like a hostname (contains a dot, not an IP)
-			if svcName != "" && strings.Contains(svcName, ".") && isHostname(svcName) {
-				return svcName
-			}
-			break
-		}
+	member, ok, err := m.rt.liveDir.Member(context.Background(), "", ports.NodeID(peerNodeID))
+	if err != nil || !ok {
+		return ""
+	}
+	svcName := member.Attrs["serviceName"]
+	// Only return if it looks like a hostname (contains a dot, not an IP)
+	if svcName != "" && strings.Contains(svcName, ".") && isHostname(svcName) {
+		return svcName
 	}
 	return ""
 }
@@ -3715,17 +3905,15 @@ func (m *ConnectionManager) peerHTTPPort(peerNodeID string) string {
 	if m.rt.cache == nil {
 		return defaultMeshHTTPPort
 	}
-	members, err := m.rt.cache.Members(context.Background(), "")
-	if err != nil {
+	if m.rt.liveDir == nil {
 		return defaultMeshHTTPPort
 	}
-	for _, member := range members {
-		if member.NodeID == peerNodeID {
-			if p := member.Attrs["http_port"]; p != "" {
-				return p
-			}
-			break
-		}
+	member, ok, err := m.rt.liveDir.Member(context.Background(), "", ports.NodeID(peerNodeID))
+	if err != nil || !ok {
+		return defaultMeshHTTPPort
+	}
+	if p := member.Attrs["http_port"]; p != "" {
+		return p
 	}
 	return defaultMeshHTTPPort
 }
@@ -3740,7 +3928,7 @@ func isSixPNHostPort(addr string) bool {
 		h = hp
 	}
 	ip := net.ParseIP(h)
-	// L2 #8: strict fdaa::/8 match — see isFly6PN comment.
+	// Strict fdaa::/8 match — see isFly6PN comment.
 	return isFly6PN(ip)
 }
 
@@ -3772,8 +3960,8 @@ func isSixPNHostPort(addr string) bool {
 //   - Bare hostnames without a dot ("localhost", per-test private DNS),
 //     since those resolve to loopback/private addresses in practice.
 //
-// Cascade B / L2 #5 fix kept the v4-private filter; Batch 4 added the
-// FQDN branch to fix the silent hostname-bypass case.
+// The v4-private filter and the FQDN branch are both required: without the
+// FQDN branch a hostname bypasses the check silently.
 func isPublicAnycastHostPort(addr string) bool {
 	h := addr
 	if hp, _, err := net.SplitHostPort(addr); err == nil {
@@ -3809,9 +3997,8 @@ func (m *ConnectionManager) getOurOrigin() string {
 }
 
 // setOurOrigin atomically replaces the origin prefix. Used at
-// construction; Phase 3 retired the late-detection retry goroutine
-// because PlatformInfo.PrivateIP() resolves synchronously on every
-// supported cloud.
+// construction. No late-detection retry is needed because
+// PlatformInfo.PrivateIP() resolves synchronously on every supported cloud.
 func (m *ConnectionManager) setOurOrigin(s string) {
 	v := s
 	m.ourOriginAtomic.Store(&v)
@@ -3830,7 +4017,7 @@ func (m *ConnectionManager) setOurOrigin(s string) {
 //  2. ANY of the peer's Scope:"private" addresses matches our origin → same
 //  3. Any Scope:"private" address belongs to a DIFFERENT origin → cross
 //  4. NO Scope:"private" addresses at all → treat as CROSS (was same-org
-//     before — Cascade B / L2 #3). Rationale: a same-org peer almost
+//     before). Rationale: a same-org peer almost
 //     always publishes a 6PN reach record. A peer with only public
 //     addresses is most likely cross-org (the public-only side of a
 //     cross-org pair). Treating it as cross-org costs at most a 34-byte
@@ -4050,21 +4237,30 @@ func (m *ConnectionManager) updatePriorities() {
 	}
 }
 
-// isAnchorNode checks if a peer has the "anchor" role in the LAD directory.
-// Must NOT be called with m.mu held — acquires cache.mu internally.
+// isAnchorNode checks if a peer has the "anchor" role in the directory.
+// Must NOT be called with m.mu held — acquires the cache's lock internally.
+//
+// Reads are cut by capability — Role/Address first — so this read is routed
+// through the LiveDirectory port rather than reaching into
+// ladcache directly. Member carries the node's role list and the LAD adapter
+// populates it from the same role records, with the same empty tenant, so the
+// routed read and a direct ladcache read return the same answer.
+//
+// Fails CLOSED when the port is absent. That direction is load-bearing: an
+// anchor is pinned to PriorityCritical and thereby exempted from drain
+// selection, so answering "yes" without a directory would make every peer
+// undrainable rather than merely unprotected.
 func (m *ConnectionManager) isAnchorNode(nodeID string) bool {
-	if m.rt.cache == nil {
+	if m.rt == nil || m.rt.liveDir == nil {
 		return false
 	}
-	roles, err := m.rt.cache.Roles(context.Background(), "", ladcache.RoleQuery{NodeID: nodeID})
-	if err != nil || len(roles) == 0 {
+	mem, ok, err := m.rt.liveDir.Member(context.Background(), "", ports.NodeID(nodeID))
+	if err != nil || !ok {
 		return false
 	}
-	for _, rec := range roles {
-		for _, role := range rec.Roles {
-			if role == "anchor" {
-				return true
-			}
+	for _, role := range mem.Roles {
+		if role == "anchor" {
+			return true
 		}
 	}
 	return false
@@ -4074,13 +4270,29 @@ func (m *ConnectionManager) isAnchorNode(nodeID string) bool {
 // connected peer into the ReputationTracker so its stability factor
 // reflects current network conditions.
 //
-// Reputation is a separate concern from local dispatch routing — the
-// tracker feeds LAD reach-scoring which influences peer-discovery
-// decisions across the mesh, not just local session selection — so it
-// stays even though the dispatch-side congestion-demotion that used
-// to feed alongside it is gone (its capability now lives inside
-// quality.Score's RTT component, normalised against RouteClass
-// instead of a fleet-wide constant).
+// 🛑 THIS LOOP CURRENTLY DOES NOTHING, AND THE JUSTIFICATION BELOW IT WAS
+// FALSE. Measured:
+//
+//   - Both Inject* methods open with `rep, ok := rt.scores[nodeID]; if !ok
+//     { return }`, and ReputationTracker.ComputeAll is the ONLY thing that
+//     ever inserts a key. ComputeAll has ZERO callers in any root, so
+//     rt.scores is permanently empty and every call from here returns at
+//     the guard.
+//   - The old comment said "the tracker feeds LAD reach-scoring". It does
+//     not and cannot: reachScore lives in ledger/cache/directory.go:1701,
+//     ranks only ReachRecord fields, and the ledger module does not import
+//     loom (the dependency runs the other way). There is no path from a
+//     reputation score to that ranking.
+//
+// The calls are left in place rather than deleted because the subsystem is
+// CORRECT and merely uncalled — see peer_reputation_test.go, which proves
+// the same injections land once ComputeAll has run. Wiring a periodic
+// ComputeAll is the open decision; until then this is an inert loop and
+// should not be cited as a live input to anything.
+//
+// Dispatch-side congestion-demotion is not a separate feed: that capability
+// lives inside quality.Score's RTT component, normalised against RouteClass
+// rather than a fleet-wide constant.
 func (m *ConnectionManager) feedReputationFromRTT() {
 	if m.reputationTracker == nil {
 		return
@@ -4103,16 +4315,47 @@ func (m *ConnectionManager) feedReputationFromRTT() {
 }
 
 // RecordRPC records an RPC event on the connection to a peer.
-// Called by RPC dispatch when traffic flows through a peer connection.
+// Called by RPC dispatch when traffic flows through a peer connection —
+// rpc_forward.go's callOverMeshSession, the single funnel every outbound peer
+// RPC takes (both the BidiRPC and dynamic-stream paths).
+//
+// 🔴 THIS IS THE SOLE WRITER OF PER-PEER RPC TRAFFIC, AND TWO INDEPENDENT
+// SUBSYSTEMS READ WHAT IT WRITES. Both degrade to a constant rather than to an
+// error if it is not called, so neither surfaces the loss:
+//
+//   - peer.rpcsLastMinute / peer.lastRPCAt feed updatePriorities' ladder
+//     (:4219-4224). Permanently zero meant three of its five arms — High,
+//     Normal and Low — were unreachable, so EVERY non-anchor peer sat at
+//     PriorityIdle and drain selection could not tell a peer carrying all the
+//     traffic from one carrying none.
+//   - ConnectionScaler.rpcCounters feeds the TrafficWeight factor of the
+//     connection-sizing formula (connection_scaling.go:196-204). Permanently
+//     empty meant trafficWeight = 1 + ln(1+0/10) = 1.0 exactly, so the fourth
+//     of five factors was an identity multiply on every peer forever.
+//
+// Both consumers are fed from here rather than from two call sites, so the
+// two counters cannot drift apart.
 func (m *ConnectionManager) RecordRPC(peerNodeID string) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	peer, ok := m.peers[peerNodeID]
+	if ok {
+		peer.rpcsLastMinute++
+		peer.lastRPCAt = time.Now()
+	}
+	m.mu.Unlock()
+
 	if !ok {
 		return
 	}
-	peer.rpcsLastMinute++
-	peer.lastRPCAt = time.Now()
+	// 🔴 THE SCALER IS CREDITED OUTSIDE m.mu, AND THAT IS LOAD-BEARING, NOT
+	// TIDINESS. pruneCountersFor (connection_scaling.go:137) holds s.mu while
+	// invoking its shouldPrune callback, and the caller at :1753 passes a
+	// closure that takes m.mu — so an s.mu -> m.mu order already exists.
+	// Crediting the scaler while holding m.mu would add m.mu -> s.mu and close
+	// a classic inversion between the scan loop's prune and this hot path.
+	if m.scaler != nil {
+		m.scaler.RecordRPC(peerNodeID)
+	}
 }
 
 // resetRPCCounters resets the per-minute RPC counters for all peers.
@@ -4128,9 +4371,9 @@ func (m *ConnectionManager) resetRPCCounters() {
 // closeDrainedConnection is called by DrainManager when a drain completes.
 // It cancels the peer's gossip, releases the budget slot, and decrements connCount.
 // resetConnectingState transitions a peer stuck in PeerConnecting back to
-// PeerDisconnected (MESH-B04). connectPeer sets PeerConnecting before handing a
-// successful transport dial to the async DialAndAcceptMesh; if the Aether setup
-// then fails, nothing reset the state, and neither the toConnect builder nor
+// PeerDisconnected. connectPeer sets PeerConnecting before handing a successful
+// transport dial to the async DialAndAcceptMesh; if the Aether setup then fails
+// nothing else resets the state, and neither the toConnect builder nor
 // pruneStalePeers handle PeerConnecting — so a bootstrap-only / NAT'd peer was
 // never re-dialed or evicted. No-op if the peer moved on (e.g. an inbound accept
 // already connected it).
@@ -4142,7 +4385,7 @@ func (m *ConnectionManager) resetConnectingState(nodeID string) {
 	}
 }
 
-func (m *ConnectionManager) closeDrainedConnection(peerNodeID, transport string) {
+func (m *ConnectionManager) closeDrainedConnection(peerNodeID, transport string, drainStartedAt time.Time) {
 	m.mu.Lock()
 	peer, exists := m.peers[peerNodeID]
 	if !exists {
@@ -4154,14 +4397,26 @@ func (m *ConnectionManager) closeDrainedConnection(peerNodeID, transport string)
 	var cancel context.CancelFunc
 	if peer.transports != nil {
 		if tc, ok := peer.transports[proto]; ok && tc != nil {
-			// MESH-C06: mark the drain so AcceptMeshConnection's cleanup treats
+			// 🔴 CANCEL ONLY THE TRANSPORT THIS DRAIN WAS STARTED FOR. The map is
+			// keyed by protocol alone, so a reconnect during the grace window
+			// installs a replacement under the same key. Cancelling that one
+			// tears down a healthy connection the scaler never selected, and the
+			// drain accounting then attributes it to a voluntary scale-down.
+			// connectedAt is the only thing distinguishing the instances.
+			if tc.connectedAt.After(drainStartedAt) {
+				m.mu.Unlock()
+				log.Printf("[DRAIN] %s to %s was replaced during the grace window; leaving the newer transport alone",
+					transport, truncID(peerNodeID))
+				return
+			}
+			// Mark the drain so AcceptMeshConnection's cleanup treats
 			// this as a voluntary scale-down, not a chronic/path failure.
 			tc.draining = true
 			cancel = tc.cancelFunc
 		}
 	}
 
-	// MESH-C03/B03: do NOT decrement connCount or release the budget here.
+	// Do NOT decrement connCount or release the budget here.
 	// Cancelling the transport's connCtx drives AcceptMeshConnection's cleanup,
 	// which is the SINGLE owner of that accounting (connCount--, budget.Release,
 	// state transition). Doing it in both places double-decremented
@@ -4178,7 +4433,7 @@ func (m *ConnectionManager) closeDrainedConnection(peerNodeID, transport string)
 		peer.drainedAt = make(map[Protocol]time.Time)
 	}
 	peer.drainedAt[proto] = time.Now()
-	oldGrade := GradeForProtocol(peer.protocol) // MESH-B05: capture under the lock
+	oldGrade := GradeForProtocol(peer.protocol) // Capture under the lock
 	m.mu.Unlock()
 
 	// Cancelling triggers cleanup, which performs the connCount/budget
@@ -4215,7 +4470,7 @@ func (m *ConnectionManager) PeerDispatchHealth() float64 {
 	total, healthy := 0, 0
 	for _, session := range m.meshSessions {
 		total++
-		// MESH-B09: nil-guard for consistency with sweepZombieSessions, which
+		// Nil-guard for consistency with sweepZombieSessions, which
 		// treats a nil map value as possible; a nil session here would panic.
 		if session != nil && !session.IsClosed() {
 			healthy++
@@ -4233,12 +4488,10 @@ func (m *ConnectionManager) PeerDispatchHealth() float64 {
 //
 // The LAD-backed variant lives in computeCrossOriginForNode and MUST
 // be called before m.mu is taken (it does network/cache I/O that
-// can stall under load — see the project_ledger_cache_lock_contention
-// memory for an example of how holding a hot mutex across LAD reads
-// stalls the whole mesh).
+// can stall under load, and holding a hot mutex across LAD reads stalls
+// the whole mesh).
 //
-// Before this fix (Cascade B / L2 #2) this function was a `return false`
-// stub. Every inbound-discovered cross-org peer was stamped
+// A `return false` stub here stamps every inbound-discovered cross-org peer
 // crossOrigin=false permanently, so subsequent cross-org dials never
 // emitted the routing preamble and the forwarder hairpin never engaged.
 // That defeated the cross-org forwarder shipped in aether v0.0.46.
@@ -4264,7 +4517,7 @@ func (m *ConnectionManager) isCrossOriginLocked(nodeID string) bool {
 // querying the LAD reach cache. MUST be called without m.mu held —
 // the reach cache has its own locking and can stall under contention,
 // so blocking m.mu across this call would serialize the entire
-// connection table (see project_ledger_cache_lock_contention).
+// connection table.
 //
 // The intended call pattern, used by AcceptMeshConnection:
 //
@@ -4393,17 +4646,20 @@ func (m *ConnectionManager) converge(ctx context.Context) {
 
 	// 1. Build set of known services from LAD member records
 	services := map[string][]string{} // serviceName → []nodeID
-	members, err := m.rt.cache.Members(ctx, "")
+	if m.rt.liveDir == nil {
+		return
+	}
+	members, err := m.rt.liveDir.Members(ctx, "")
 	if err != nil {
 		return
 	}
 	for _, member := range members {
-		if member.NodeID == m.selfID {
+		if string(member.NodeID) == m.selfID {
 			continue
 		}
 		svc := member.Attrs["serviceName"]
 		if svc != "" {
-			services[svc] = append(services[svc], member.NodeID)
+			services[svc] = append(services[svc], string(member.NodeID))
 		}
 	}
 	if len(services) == 0 {
@@ -4427,7 +4683,7 @@ func (m *ConnectionManager) converge(ctx context.Context) {
 	m.dispatchMu.RLock()
 	if m.meshSessions != nil {
 		for nodeID, session := range m.meshSessions {
-			if session != nil && !session.IsClosed() { // MESH-B09: nil-guard
+			if session != nil && !session.IsClosed() { // Nil-guard
 				svc := m.peerServiceName(nodeID)
 				if svc != "" {
 					connectedServices[svc] = true
@@ -4443,8 +4699,15 @@ func (m *ConnectionManager) converge(ctx context.Context) {
 			continue
 		}
 		for _, nodeID := range nodeIDs {
-			reaches, err := m.rt.cache.Reach(ctx, "", ladcache.ReachQuery{NodeID: nodeID})
-			if err != nil || len(reaches) == 0 || len(reaches[0].Addresses) == 0 {
+			// §0.5.3 step 4: routed onto the port. This asks only
+			// whether the node has ANY dial candidate — no address value
+			// escapes, so none of the reach VOCABULARY crosses this seam and
+			// the normalised/raw distinction cannot affect the answer. The
+			// three sibling reads that DO propagate addresses into
+			// peerConn.addresses stay on ladcache until that migration is
+			// claimed separately.
+			addrs, err := m.rt.liveDir.Reach(ctx, "", ports.NodeID(nodeID))
+			if err != nil || len(addrs) == 0 {
 				continue
 			}
 			log.Printf("[CONVERGE] No connection to service %s, attempting %s", svc, truncID(nodeID))
@@ -4459,16 +4722,14 @@ func (m *ConnectionManager) peerServiceName(nodeID string) string {
 	if m.rt.cache == nil {
 		return ""
 	}
-	members, err := m.rt.cache.Members(context.Background(), "")
-	if err != nil {
+	if m.rt.liveDir == nil {
 		return ""
 	}
-	for _, member := range members {
-		if member.NodeID == nodeID {
-			return member.Attrs["serviceName"]
-		}
+	member, ok, err := m.rt.liveDir.Member(context.Background(), "", ports.NodeID(nodeID))
+	if err != nil || !ok {
+		return ""
 	}
-	return ""
+	return member.Attrs["serviceName"]
 }
 
 // peerServiceNameLocked is peerServiceName but safe to call with m.mu held

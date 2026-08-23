@@ -16,14 +16,14 @@ const reputationMaxPeers = 500
 
 // PeerReputation holds the computed reputation metrics for a single peer.
 type PeerReputation struct {
-	NodeID             string        // full node ID
-	UptimePercent      float64       // fraction of observed window spent connected (0-1)
-	AvgGrade           float64       // average connection grade normalized to 0-1 (A=1.0 … F=0.0)
-	DropFrequency      float64       // drops per hour (lower is better)
-	AvgRTT             time.Duration // average round-trip time across connected events
-	Score              float64       // composite reputation score (0-1, higher is better)
-	GradeStableSince   time.Time     // when the current grade was established (feeds stability factor)
-	EffectiveGrade     float64       // may differ from transport grade under sustained RTT bloat
+	NodeID           string        // full node ID
+	UptimePercent    float64       // fraction of observed window spent connected (0-1)
+	AvgGrade         float64       // average connection grade normalized to 0-1 (A=1.0 … F=0.0)
+	DropFrequency    float64       // drops per hour (lower is better)
+	AvgRTT           time.Duration // average round-trip time across connected events
+	Score            float64       // composite reputation score (0-1, higher is better)
+	GradeStableSince time.Time     // when the current grade was established (feeds stability factor)
+	EffectiveGrade   float64       // may differ from transport grade under sustained RTT bloat
 }
 
 // ComputeScore calculates the composite score from the individual metrics.
@@ -35,7 +35,7 @@ func (r *PeerReputation) ComputeScore() {
 	// Uptime component: already 0-1
 	uptime := clampFloat(r.UptimePercent, 0, 1)
 
-	// Grade component: already 0-1. MESH-G04: prefer EffectiveGrade when set — it
+	// Grade component: already 0-1. : prefer EffectiveGrade when set — it
 	// captures the sustained-RTT-bloat demotion injected via InjectGradeInfo,
 	// which AvgGrade alone ignored entirely (so the documented demotion had no
 	// effect on the score). Fall back to AvgGrade when no effective grade exists.
@@ -117,9 +117,9 @@ func (rt *ReputationTracker) ComputeAll() {
 	windowStart := now.Add(-rt.window)
 	events := rt.eventLog.EventsSince(windowStart)
 	if len(events) == 0 {
-		// MESH-G04: no events in the window means every previously-scored peer is
-		// now stale. Clear the scores rather than leaving them frozen at their
-		// last value forever (the old early-return left rt.scores populated).
+		// No events in the window means every scored peer is stale. Clear the
+		// scores rather than leaving them frozen at their last value forever;
+		// returning early here instead leaves rt.scores populated.
 		rt.mu.Lock()
 		rt.scores = make(map[string]*PeerReputation)
 		rt.mu.Unlock()

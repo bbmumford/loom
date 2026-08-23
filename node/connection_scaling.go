@@ -8,15 +8,13 @@ import (
 	"math"
 	"sync"
 	"time"
-
 )
 
 // Grade is the connection quality tier from the transport package.
 // Type alias so all node-package consumers use Grade transparently.
 
 // Re-export grade constants so existing node-package code compiles unchanged.
-const (
-)
+const ()
 
 // ProtocolForGrade maps a connection grade back to the node Protocol used to dial.
 // Inverse of GradeForProtocol. Used by TopologyRouter to determine which
@@ -56,7 +54,7 @@ type ConnectionEvent struct {
 	OldGrade   Grade
 	NewGrade   Grade
 	Transport  string
-	Reason     string    // "connected", "upgraded", "downgraded", "disconnected"
+	Reason     string // "connected", "upgraded", "downgraded", "disconnected"
 	Timestamp  time.Time
 }
 
@@ -168,7 +166,7 @@ func (s *ConnectionScaler) TargetConnections(peer *peerConn, peerRegion string) 
 
 	// GradePenalty: A=1.0, B=1.2, C=1.5, F=2.0.
 	//
-	// Audit M10: use peer.bestActiveGrade() instead of
+	// Use peer.bestActiveGrade() instead of
 	// GradeForProtocol(peer.protocol). The single peer.protocol field
 	// only reflects the last-accepted transport — for a peer with
 	// Noise-UDP + WS both active, it can be either depending on which
@@ -389,36 +387,54 @@ func (s *ConnectionScaler) Rebalance() []DrainCandidate {
 	for _, snap := range snaps {
 		peer := snap.peer
 		current := snap.connCount
-		// MESH-C01: TargetConnections reads peer.bestActiveGrade(), which
+		// TargetConnections reads peer.bestActiveGrade(), which
 		// iterates peer.transports. Rebalance runs after releasing m.mu, so a
 		// concurrent addTransport/removeTransport made this a `fatal error:
 		// concurrent map read and map write` that crashes the whole node. Hold
 		// m.mu across the call — the multipath_dial.go callers already do.
 		s.connMgr.mu.Lock()
 		target := s.TargetConnections(peer, snap.peerRegion)
+		conns := s.connMgr.connectionInfoPerTransport(peer)
 		s.connMgr.mu.Unlock()
+
+		// ONE POPULATION DECIDES BOTH DIRECTIONS, and it is the live non-dormant
+		// transports — the connections that actually exist and that a drain can
+		// act on. peer.connCount is a separate counter written by the
+		// accept/close accounting in mesh_connection.go and can drift from the
+		// transports map; it is kept below only so the drift is visible in the
+		// log.
+		//
+		// Deciding grow-versus-shrink on connCount while SelectForDrain applies
+		// its own len(connections) <= targetCount test puts two over-budget tests
+		// on two different populations. The branches are exclusive, so a peer
+		// whose connCount reads BELOW target takes the scale-up branch and the
+		// scale-down test is never evaluated, leaving live transports in excess
+		// of the budget unreclaimed. One population decides both directions.
+		drainable := len(conns)
+
 		// Saturation back-off: a peer asking us to stop opening paths is not
 		// grown beyond what we already hold, but keeps its K>=2 standby.
-		target = saturationCap(target, current, snap.wantsBackoff)
+		target = saturationCap(target, drainable, snap.wantsBackoff)
 
-		if current < target {
-			dbgScaler.Printf("%s: scaling up %d -> %d connections", truncID(peer.nodeID), current, target)
+		if drainable < target {
+			dbgScaler.Printf("%s: scaling up %d -> %d connections (connCount=%d)",
+				truncID(peer.nodeID), drainable, target, current)
 			// Additional connections will be attempted on next scan cycle.
 			// ConnectionManager.scanAndConnect handles the actual dial.
-		} else if current > target {
+		} else if drainable > target {
 			// Never drain when this peer has ANY Grade-A transport
 			// active — they're the fastest path and should be
 			// preserved even if the scaler thinks we're over budget.
 			//
-			// L1 #5 fix: previously this used GradeForProtocol(peer.protocol),
+			// Using GradeForProtocol(peer.protocol) here is wrong:
 			// but peer.protocol is a single field that holds the
 			// last-accepted protocol. A rejected duplicate accept
 			// could have flipped it to a lower grade temporarily
-			// (the rollback for Cascade A.1 closes that hole, but
+			// (a rollback closes that hole, but
 			// peer.protocol is still a one-transport-of-many view).
 			// bestActiveGrade() reflects the truth across all active
 			// transports.
-			// MESH-C01: guard the transports-map read (see above).
+			// Guard the transports-map read (see above).
 			s.connMgr.mu.Lock()
 			isGradeA := peer.bestActiveGrade() == GradeA
 			s.connMgr.mu.Unlock()
@@ -437,7 +453,7 @@ func (s *ConnectionScaler) Rebalance() []DrainCandidate {
 			// comes back up, the scaler sees current > target, drains
 			// the sibling. Observed on cross-region Fly pairs where the
 			// grade-A UDP path is unavailable.
-			// L1 #9 gate: only preserve dual Grade-C when there is
+			// Only preserve dual Grade-C when there is
 			// NO better grade active. With noise-UDP up, the WS+TLS
 			// duo is redundant; the scaler should be allowed to drain
 			// the WS/TLS sibling instead of preserving both.
@@ -445,13 +461,14 @@ func (s *ConnectionScaler) Rebalance() []DrainCandidate {
 			distinctClasses := peerDistinctGradeCTransportClasses(peer)
 			haveBetterThanC := peer.bestActiveGrade() > GradeC
 			s.connMgr.mu.Unlock()
-			if !haveBetterThanC && distinctClasses >= 2 && current <= distinctClasses {
+			if !haveBetterThanC && distinctClasses >= 2 && drainable <= distinctClasses {
 				dbgScaler.Printf("%s: %d grade-C transport classes active; preserving for failover",
 					truncID(peer.nodeID), distinctClasses)
 				continue
 			}
 
-			dbgScaler.Printf("%s: scaling down %d -> %d connections", truncID(peer.nodeID), current, target)
+			dbgScaler.Printf("%s: scaling down %d drainable -> %d connections (connCount=%d)",
+				truncID(peer.nodeID), drainable, target, current)
 
 			// Build one ConnectionInfo per active transport. The
 			// original code synthesised N copies of a single
@@ -465,10 +482,7 @@ func (s *ConnectionScaler) Rebalance() []DrainCandidate {
 			// shouldDrainFirst sort by real per-class grade and age,
 			// so the lower-grade WS gets drained and the noise-UDP path
 			// is preserved.
-			s.connMgr.mu.Lock()
-			conns := s.connMgr.connectionInfoPerTransport(peer)
-			s.connMgr.mu.Unlock()
-			if len(conns) == 0 {
+			if drainable == 0 {
 				continue
 			}
 
@@ -482,8 +496,23 @@ func (s *ConnectionScaler) Rebalance() []DrainCandidate {
 		}
 	}
 
-	// Trigger draining for selected connections
+	// Trigger draining for selected connections.
+	//
+	// 🔴 THE PEER IS MARKED BEFORE THE DRAIN STARTS. pruneStalePeers keeps a peer
+	// whose drainState is anything other than DrainActive ("not draining"), and
+	// nothing else in the package ever assigns DrainStarted — so that half of its
+	// guard could not fire and a peer could be evicted while its drain was still
+	// inside the grace window, taking the drainedAt suppression and the transport
+	// map with it. closeDrainedConnection returns the field to DrainActive when
+	// the drain completes.
 	if len(candidates) > 0 && s.connMgr.drainMgr != nil {
+		s.connMgr.mu.Lock()
+		for _, c := range candidates {
+			if peer, ok := s.connMgr.peers[c.PeerNodeID]; ok && peer != nil {
+				peer.drainState = DrainStarted
+			}
+		}
+		s.connMgr.mu.Unlock()
 		for _, c := range candidates {
 			s.connMgr.drainMgr.StartDrain(c.PeerNodeID, c.Transport, "scale_down")
 		}

@@ -13,6 +13,12 @@ import (
 // from gossip-propagated data.
 const connMapMaxEntries = 200
 
+// connCountMetaKey is the Capabilities.Tags key carrying a node's open-session
+// count. PeerPublisher writes it on every periodic republish and the fleet.peer
+// ingest reads it into ConnectionMap; both sides must agree on this exact
+// string or the map takes no entries and IsHotspot answers false for everyone.
+const connCountMetaKey = "conn_count"
+
 // ConnectionMapEntry tracks a single node's connection count as reported via gossip.
 type ConnectionMapEntry struct {
 	NodeID      string

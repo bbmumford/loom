@@ -41,12 +41,12 @@ func (p ConnectionPriority) String() string {
 // Prevents unbounded connection growth as the mesh scales.
 type ConnectionBudget struct {
 	mu               sync.RWMutex
-	MaxPerPeer       int // max connections to a single peer (default: 3)
-	MaxTotal         int // max total connections across all peers (default: 50)
-	MinPerPeer       int // minimum connections to maintain per peer (default: 1)
-	PreferredPerPeer int // target connections in normal conditions (default: 1)
-	CrossRegionBonus int // extra connections for cross-region peers (default: 1)
-	currentTotal     int // current total active connections
+	MaxPerPeer       int                           // max connections to a single peer (default: 3)
+	MaxTotal         int                           // max total connections across all peers (default: 50)
+	MinPerPeer       int                           // minimum connections to maintain per peer (default: 1)
+	PreferredPerPeer int                           // target connections in normal conditions (default: 1)
+	CrossRegionBonus int                           // extra connections for cross-region peers (default: 1)
+	currentTotal     int                           // current total active connections
 	priorities       map[string]ConnectionPriority // nodeID → priority level
 }
 

@@ -232,6 +232,27 @@ func (a *AddressTable) onRecord(r swarm.Record) error {
 		if pi != pj {
 			return pi > pj // higher priority first
 		}
+		// 🔴 RTTEstMs == 0 means UNMEASURED, not "0 ms". A plain ascending sort
+		// therefore ranked every unmeasured address FIRST — best-in-class — and
+		// loom's publisher never stamps this field at all, so in
+		// practice the intended latency preference never applied and addresses
+		// were ordered by wire arrival.
+		//
+		// This is field-for-field the defect ruled on for
+		// the transport grade, so its remedy applies unchanged — fail closed AT
+		// THE RANKING SITE, distinguish absent from stated, and do NOT touch the
+		// shared field that other consumers read.
+		//
+		// Ranking-last is safe where a filter would not be: if every candidate is
+		// unmeasured they all tie and SliceStable keeps arrival order, which is
+		// exactly today's behaviour. No address is ever dropped.
+		iMeasured, jMeasured := cands[i].RTTEstMs > 0, cands[j].RTTEstMs > 0
+		if iMeasured != jMeasured {
+			return iMeasured // a real measurement outranks "cannot say"
+		}
+		if !iMeasured {
+			return false // both unmeasured — stable, so arrival order stands
+		}
 		return cands[i].RTTEstMs < cands[j].RTTEstMs
 	})
 	a.mu.Lock()
