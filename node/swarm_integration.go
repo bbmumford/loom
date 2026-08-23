@@ -9,29 +9,127 @@ import (
 	"context"
 	"crypto/ed25519"
 	"log"
+	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ORBTR/aether"
+	"github.com/bbmumford/loom/directory"
+	"github.com/bbmumford/loom/pkg/rpc"
+	"github.com/bbmumford/loom/ports"
 	"github.com/bbmumford/route"
 	"github.com/bbmumford/swarm"
 	swarmpb "github.com/bbmumford/swarm/proto/pb"
-	"github.com/bbmumford/loom/pkg/rpc"
 )
 
 // SwarmIntegration aggregates the swarm-side wiring on Runtime: the
 // swarm.Node, the unified PeerPublisher, and the RoleTable +
 // AddressTable subscribers that index incoming PeerRecords.
 //
-// Callers migrate from legacy `cache.Roles` + reach lookup paths to this
-// substrate one call site at a time (mesh_session_finder,
-// peer_connections.pickPath, etc.); each switch-over is independent.
+// Callers move from `cache.Roles` + reach lookup paths to this substrate one
+// call site at a time (mesh_session_finder, peer_connections.pickPath, etc.);
+// each switch-over is independent.
 type SwarmIntegration struct {
 	Node         swarm.Node
 	Publisher    *PeerPublisher
 	RoleTable    *RoleTable
 	AddressTable *AddressTable
 	Transport    *MeshSwarmTransport
+	trustGate    *trustGateCounters // non-nil when Config.SwarmTrustMode is observe/enforce
+	trustShadow  *TrustShadow       // non-nil only in "observe" mode; mirrors accepted records for parity
+}
+
+// trustGateCounters records the inbound trust-gate outcome on the swarm
+// convergence path. checked = signature-verified records that reached the gate;
+// wouldReject = records whose NodeID did not bind to their key under the aether
+// scheme. In observe mode a would-reject record is still accepted, so the ratio
+// is the ME-P21 shadow-parity evidence that gates the move to enforce.
+type trustGateCounters struct {
+	checked     atomic.Uint64
+	wouldReject atomic.Uint64
+	enforce     bool
+}
+
+// TrustGateStats reports (checked, wouldReject) for the inbound trust gate, or
+// (0,0) when it is off. A non-zero wouldReject in observe mode means the fleet
+// is not yet safe to move Config.SwarmTrustMode to "enforce".
+func (si *SwarmIntegration) TrustGateStats() (checked, wouldReject uint64) {
+	if si == nil || si.trustGate == nil {
+		return 0, 0
+	}
+	return si.trustGate.checked.Load(), si.trustGate.wouldReject.Load()
+}
+
+// ShadowStats reports the trust shadow's (checked, wouldReject, dropped), or
+// zeros when no shadow is running (any mode but "observe"). Read alongside
+// TrustGateStats to judge whether the seed is complete enough to move to enforce.
+func (si *SwarmIntegration) ShadowStats() (checked, rejected, dropped uint64) {
+	if si == nil {
+		return 0, 0, 0
+	}
+	return si.trustShadow.Stats()
+}
+
+// ShadowParity compares the authoritative live directory against the trust
+// shadow's Swarm-backed projection over one tenant + role set, returning the
+// per-capability report. It returns (nil, nil) when no shadow is running. A
+// report whose InParity() is false means the Swarm directory does not yet
+// reproduce the live directory — the LAD→Swarm cutover must not proceed on it.
+func (si *SwarmIntegration) ShadowParity(ctx context.Context, authoritative ports.LiveDirectory, tenant ports.Tenant, roles []string) (*directory.ShadowReport, error) {
+	if si == nil || si.trustShadow == nil {
+		return nil, nil
+	}
+	return directory.CompareDirectories(ctx, authoritative, si.trustShadow.Directory(), tenant, roles)
+}
+
+// newSwarmTrustGate builds the inbound trust-gate check for the given mode, or
+// returns (nil, nil) when the gate is off ("" / "off"). The check verifies each
+// signature-verified record's NodeID binds to its key under loom's aether scheme
+// via TrustPolicy.VerifyNodeKey (ME-P18) — for an observer attestation the bound
+// identity is the observer, whose key signed the record. "observe" counts a
+// would-reject and ACCEPTS (the ME-P04/ME-P21 shadow-parity step); "enforce"
+// rejects. A minimal PolicyConfig covers the binding+revocation check; topic /
+// tenant / role authorization is a later leg needing a seeded PolicyConfig.
+func newSwarmTrustGate(mode string) (func(swarm.Record) error, *trustGateCounters) {
+	if mode != "observe" && mode != "enforce" {
+		return nil, nil
+	}
+	gate := &trustGateCounters{enforce: mode == "enforce"}
+	// Seed the self-owned open-publish prefixes (fleet.peer, fleet.latency.) so a
+	// node's own PeerRecord and latency records pass. An unseeded policy rejects
+	// EVERY publish ("topic matches no publish rule"), which is why the gate is
+	// off by default — observe mode with this seed is what shows whether the seed
+	// is complete against live traffic before an enforce cut. Tenant/role
+	// entitlement is not seeded here: a nil-tenant principal skips the tenant
+	// gate, and role-restricted topics (role.secrets.*) are absent from the
+	// baseline, so they count as would-rejects in observe until their writers are
+	// configured — surfacing exactly which topics still need entitlement.
+	policy := directory.NewPolicy(directory.BaselinePolicyConfig())
+	check := func(r swarm.Record) error {
+		bindID := r.NodeID
+		if r.IsObserverAttestation() {
+			bindID = r.ObserverNodeID
+		}
+		gate.checked.Add(1)
+		pr := ports.Principal{NodeID: ports.NodeID(string(bindID)), PubKey: ed25519.PublicKey(r.PubKey)}
+		// AuthorizePublish is the full pre-store authorization the ports.TrustPolicy
+		// contract mandates for Swarm: NodeID↔key bind (VerifyNodeKey), tenant scope,
+		// and the topic publish rule — a superset of the bind-only check this gate
+		// began as.
+		if err := policy.AuthorizePublish(context.Background(), pr, ports.Topic(string(r.Topic))); err != nil {
+			n := gate.wouldReject.Add(1)
+			if n <= 10 || n%100 == 0 {
+				log.Printf("[SWARM-TRUST-%s] topic=%q NodeID=%s rejected: %v (would-reject #%d)",
+					mode, r.Topic, truncID(string(bindID)), err, n)
+			}
+			if gate.enforce {
+				return err
+			}
+		}
+		return nil
+	}
+	return check, gate
 }
 
 // InitSwarm wires the swarm engine + tables + publisher into the Runtime.
@@ -70,6 +168,41 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 		PrivKey:    ed25519.PrivateKey(rt.identity.PrivateKey),
 		TreeDegree: 4,
 	}
+
+	// Inbound trust gate (ME-P18): loom's TrustPolicy wired as swarm's TrustCheck
+	// hook (see newSwarmTrustGate). Off by default; "observe" counts would-rejects
+	// without rejecting (the shadow-parity step), "enforce" rejects. NOT the swarm
+	// RequireNodeKeyBinding bool — its hex(pubkey) NodeID derivation is incompatible
+	// with aether's vl1_ fingerprint and would reject every record on this fleet.
+	var trustGate *trustGateCounters
+	if check, gate := newSwarmTrustGate(rt.cfg.SwarmTrustMode); check != nil {
+		cfg.TrustCheck = check
+		trustGate = gate
+		log.Printf("[SWARM] InitSwarm: trust gate wired mode=%s (aether NodeID↔key bind)", rt.cfg.SwarmTrustMode)
+	}
+
+	// Trust shadow (observe-only): mirror every accepted record into a
+	// Swarm-backed directory so ShadowParity can compare its state against the
+	// live LAD directory before the LAD→Swarm cutover. nil in every mode but
+	// "observe"; the feed (cfg.OnAccepted below) is non-blocking, so it never
+	// slows swarm accept. The seed opens the self-owned topics plus the
+	// configured tenants — anything else surfaces as a would-reject to observe.
+	seed := directory.BaselinePolicyConfig()
+	for _, tc := range rt.cfg.Tenants {
+		if tc.TenantID != "" {
+			seed.Tenants = append(seed.Tenants, tc.TenantID)
+		}
+	}
+	trustShadow, err := newTrustShadow(rt.Context(), rt.cfg.SwarmTrustMode,
+		filepath.Join(rt.cfg.DataDir, "trust-shadow"), seed)
+	if err != nil {
+		log.Printf("[SWARM] InitSwarm: trust shadow unavailable: %v", err)
+		trustShadow = nil
+	} else if trustShadow != nil {
+		cfg.OnAccepted = trustShadow.Observe
+		log.Printf("[SWARM] InitSwarm: trust shadow wired (observe)")
+	}
+
 	node, err := swarm.New(cfg)
 	if err != nil {
 		log.Printf("[SWARM] InitSwarm: ERROR swarm.New: %v", err)
@@ -116,6 +249,8 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 		RoleTable:    roleTable,
 		AddressTable: addrTable,
 		Transport:    tport,
+		trustGate:    trustGate,
+		trustShadow:  trustShadow,
 	}
 
 	// Wire the AddressTable -> ConnectionManager wake hook. When a
@@ -150,25 +285,24 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 
 	// Plumb the anchor role into the swarm Node's role enum.
 	//
-	// There are TWO notions of "role" and they were never connected. The
+	// There are TWO notions of "role" and this call is what connects them. The
 	// STRING role ("anchor") is advertised in the PeerRecord by PeerPublisher
 	// and is what RoleTable/topology display. The swarm Node's Role ENUM
-	// (RoleLeaf..RoleAnchor) is what SelfRole() returns — and NOTHING in the
-	// mesh ever called SetRole, so SelfRole() returned RoleLeaf (the zero
-	// value) on every node, forever.
+	// (RoleLeaf..RoleAnchor) is what SelfRole() returns, and this is its only
+	// setter — without it SelfRole() answers RoleLeaf, the zero value, on every
+	// node.
 	//
-	// Every observer-tombstone emit path gates on SelfRole() == RoleAnchor:
-	// the zombie-session sweep (peer_connections.shouldEmitObserverTombstone),
-	// and the two staleness sweeps below. With the enum never set, ALL of them
-	// silently returned on the first line — so no node ever emitted an observer
-	// attestation, and the K-of-N mechanism, though fully wired, had never once
-	// fired in production. That is the deepest reason the ghosts were immortal:
-	// not that the sweeps were session-blind, but that the anchor gate every
-	// sweep shares could never pass.
+	// Every observer-tombstone emit path gates on SelfRole() == RoleAnchor: the
+	// zombie-session sweep (peer_connections.shouldEmitObserverTombstone) and
+	// the two staleness sweeps below. With the enum unset ALL of them return on
+	// their first line, so no node emits an observer attestation and the K-of-N
+	// quorum cannot fire however completely the rest of it is wired. That gate,
+	// not session-blindness in the sweeps, is what keeps departed nodes
+	// resident.
 	//
-	// isAnchorCapable() is the same predicate that makes PeerPublisher
-	// advertise the "anchor" string role, so the enum and the advertised role
-	// now agree by construction.
+	// isAnchorCapable() is the same predicate that makes PeerPublisher advertise
+	// the "anchor" string role, so the enum and the advertised role agree by
+	// construction.
 	if rt.isAnchorCapable() {
 		if err := node.SetRole(swarm.RoleAnchor); err != nil {
 			log.Printf("[SWARM] InitSwarm: SetRole(anchor) failed: %v", err)
@@ -180,18 +314,19 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	// Wire the LAD liveness sweep to attest, so a node that dies abruptly can
 	// finally be forgotten by the whole mesh rather than by one node at a time.
 	//
-	// Until now the only caller of PublishObserverTombstone was
+	// PublishObserverTombstone's other caller is
 	// ConnectionManager.sweepZombieSessions, which reaps dead SESSIONS. A node
-	// that vanished without ever holding a session here — every machine
-	// replaced by a deploy — is invisible to it: nothing to sweep, so nothing
-	// ever attested, so the corpse was never collectively forgotten. The
+	// that vanishes without ever holding a session here — every machine
+	// replaced by a deploy — is invisible to that sweep: nothing to sweep, so
+	// nothing attested, so the corpse is never collectively forgotten. The
 	// directory's 16-minute liveness sweep is the one place that DOES see it,
-	// and its verdict was local-only ("liveness-local" is deliberately not
-	// gossiped), so every peer re-gossiped the corpse back to whoever had just
-	// evicted it. Measured: 11 real machines, 40 identities, ghosts surviving
-	// 15+ hours; node-orbtr-io alone carried 3 anchor identities for 1 machine.
+	// and its verdict is local-only ("liveness-local" is deliberately not
+	// gossiped), so without this wiring every peer re-gossips the corpse back
+	// to whoever just evicted it — 11 machines carrying 40 identities, ghosts
+	// surviving 15+ hours, one node holding 3 anchor identities for 1 machine.
 	//
-	// The two halves existed and were never joined. This joins them.
+	// This is what joins the sweep that sees the departure to the attestation
+	// that propagates it.
 	//
 	// Safety is the quorum's job, not ours: this publishes ONE witness. It
 	// becomes a real propagating death only once K distinct anchors
@@ -226,10 +361,10 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 
 	// LAD reach bridge — translate every inbound swarm PeerRecord into a
 	// lad.Record{Topic:TopicReach} so the LAD-fronted topology, members
-	// counter, and gossip-liveness monitor see live data. The v0.0.290+
-	// swarm cutover retired the gossip-driven LAD reach WRITE side but
-	// kept the READ side (snap.Reach, cache.MemberCount); this bridge
-	// closes that gap without re-enabling the legacy publisher.
+	// counter, and gossip-liveness monitor see live data. Nothing writes the
+	// gossip-driven LAD reach side while readers (snap.Reach,
+	// cache.MemberCount) remain; this bridge closes that gap without adding a
+	// second publisher.
 	//
 	// Uses DirectoryCache.ApplyLocal (ledger v0.0.13+) to bypass the
 	// signedTopicACL — the swarm record's signature is in swarm's
@@ -323,9 +458,9 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	// A RoleTable entry has exactly one removal path: an inbound tombstone on
 	// fleet.peer (RoleTable.onRecord). No TTL, no expiry. So an entry dies only
 	// by the owner's graceful tombstone — never emitted when a deploy destroys
-	// the machine — or by an observer tombstone, which until now was published
-	// solely by sweepZombieSessions, a sweep over dead SESSIONS that is
-	// structurally blind to a peer this process never held a session with.
+	// the machine — or by an observer tombstone, whose other publisher is
+	// sweepZombieSessions, a sweep over dead SESSIONS that is structurally
+	// blind to a peer this process never held a session with.
 	// Every machine replaced by a deploy landed in that gap and became
 	// immortal: measured 40 entries against 11 real machines, with the LAD
 	// directory (which HAS a TTL) sitting clean at 8 beside it.
@@ -340,6 +475,10 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	rt.Go("swarm.role_table.liveness_sweep", func() {
 		sweepStaleRolesUntil(rtCtx, rt, node, roleTable)
 	})
+
+	// Arm leaderless role takeover if Config.RoleTakeover is set (default off). Subscribes to
+	// swarm topics, so it must run after the node is wired; non-fatal on failure.
+	rt.armRoleTakeover()
 
 	log.Printf("[SWARM] InitSwarm: integration ready")
 	return rt.swarm, nil
@@ -405,7 +544,7 @@ func (rt *Runtime) Swarm() *SwarmIntegration {
 // other callers that still use `rt.cache.Roles(ctx, "", query)`. It
 // returns a trimmed view (NodeID + MaxGrade) sourced from the swarm
 // RoleTable, or nil if InitSwarm has not yet been called — callers should
-// fall through to the legacy `rt.cache.Roles` path in that case.
+// fall through to the `rt.cache.Roles` path in that case.
 func (rt *Runtime) LookupRoleViaSwarm(role, handler string) []lookupRoleResult {
 	if rt.swarm == nil || rt.swarm.RoleTable == nil {
 		return nil
@@ -487,19 +626,19 @@ func (s *SwarmIntegration) AdvertiseLocalAddress(transport swarmpb.Address_Trans
 // {transport, host, port} so calling repeatedly is safe.
 //
 // What gets advertised:
-//   - noise-UDP @ cfg.VL1.UDPPort on cfg.PublicDomain (scope=public) —
-//     the Grade-A target for cross-fabric / cross-org peers
-//   - noise-UDP @ cfg.VL1.UDPPort on the platform private IP
-//     (scope=private) when the platform exposes one — same-org peers
-//     prefer this entry, skipping the public LB and routing direct
-//     over the private fabric (Fly 6PN, GCP VPC, etc.). Uses the SAME
-//     listener socket as the public entry — single UDP port, two
-//     advertised endpoints.
-//   - WebSocket @ 443 on cfg.PublicDomain — the WSS endpoint Fly's
-//     edge serves at /mesh/ws (peers that can't reach UDP)
-//   - HTTP @ 443 on cfg.PublicDomain — the /mesh/vl1 bootstrap entry
-//     so a brand-new peer that doesn't yet hold our record can still
-//     reach us via the public hostname
+// - noise-UDP @ cfg.VL1.UDPPort on cfg.PublicDomain (scope=public) —
+// the Grade-A target for cross-fabric / cross-org peers
+// - noise-UDP @ cfg.VL1.UDPPort on the platform private IP
+// (scope=private) when the platform exposes one — same-org peers
+// prefer this entry, skipping the public LB and routing direct
+// over the private fabric (Fly 6PN, GCP VPC, etc.). Uses the SAME
+// listener socket as the public entry — single UDP port, two
+// advertised endpoints.
+// - WebSocket @ 443 on cfg.PublicDomain — the WSS endpoint Fly's
+// edge serves at /mesh/ws (peers that can't reach UDP)
+// - HTTP @ 443 on cfg.PublicDomain — the /mesh/vl1 bootstrap entry
+// so a brand-new peer that doesn't yet hold our record can still
+// reach us via the public hostname
 func (rt *Runtime) advertiseSwarmListeners(si *SwarmIntegration) {
 	if si == nil || si.Publisher == nil {
 		return
@@ -513,13 +652,25 @@ func (rt *Runtime) advertiseSwarmListeners(si *SwarmIntegration) {
 		publicHost = rt.publicIP
 	}
 	if publicHost == "" {
-		log.Printf("[SWARM] advertiseSwarmListeners: no public hostname/IP available — skipping (will retry on next publish)")
-		return
+		// Having no public hostname is not a reason to advertise nothing.
+		//
+		// loom is the platform-service mesh, distinct from the tenant overlay,
+		// and no settled rule governs the advertisement path this feeds. The
+		// behaviour here stands on its own merits: a node reachable over its
+		// private fabric that publishes ZERO candidates is unreachable to peers
+		// that could otherwise dial it directly. So skip only the entries that
+		// genuinely need a public name, and keep publishing the private-fabric
+		// and interface-derived candidates. This is a normal steady state for a
+		// private-only node, not a transient condition a later publish will
+		// resolve.
+		log.Printf("[SWARM] advertiseSwarmListeners: no public hostname/IP — advertising private and interface-derived candidates only (private-only node, steady state)")
 	}
 
 	udpPort := rt.cfg.VL1.UDPPort
 	if udpPort > 0 {
-		si.AdvertiseLocalAddress(swarmpb.Address_NOISE_UDP, publicHost, uint32(udpPort), "", "public")
+		if publicHost != "" {
+			si.AdvertiseLocalAddress(swarmpb.Address_NOISE_UDP, publicHost, uint32(udpPort), "", "public")
+		}
 		// Same-fabric private endpoint: same UDP port, private IP. On
 		// Fly this is the 6PN ULA (fdaa:<org>:<net>:…). Receivers that
 		// see Scope:"private" and an origin-matching prefix dial the

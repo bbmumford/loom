@@ -13,10 +13,10 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/bbmumford/route"
-	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/ORBTR/aether"
+	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/bbmumford/loom/pkg/rpc"
+	"github.com/bbmumford/route"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -37,10 +37,9 @@ var forwardStreamCounter uint64
 //     advertisements to the target (one extra hop)
 //  3. Role-aware — sessions to peers that also serve the same role
 //
-// The legacy blind-relay (Path 4) and direct-dial (Path 5) paths were
-// removed in the parallel-reroute refactor; Forward() now fails fast
-// when none of Paths 1-3 produce a candidate, leaving recovery to the
-// dispatch caller.
+// There is no blind-relay or direct-dial fallback: Forward() fails fast when
+// none of Paths 1-3 produce a candidate, leaving recovery to the dispatch
+// caller.
 type runtimeForwarder struct {
 	rt *Runtime
 
@@ -88,7 +87,7 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 				atomic.AddInt64(&f.forwardLADRouted, 1)
 				return resp, nil
 			}
-			// L3 #15: stamp a relay-failure on the broken hop so the
+			// Stamp a relay-failure on the broken hop so the
 			// FindRoutes scoring (and any peer-selection logic that
 			// reads dial-failure history) deprioritises it next time.
 			// Without this, a relay whose session keeps breaking
@@ -119,9 +118,9 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 
 	targetNodeID := req.TargetNodeId
 	if targetNodeID == "" {
-		// Canonical source: swarm RoleTable. The LAD DirectoryCache.Roles
-		// publisher was retired in the swarm migration (project_swarm_pubkey
-		// 2026-05-27); querying it returns empty fleet-wide. Without this
+		// Canonical source: swarm RoleTable. Nothing publishes to the LAD
+		// DirectoryCache.Roles path, so querying it returns empty fleet-wide.
+		// Without this
 		// switch every TargetNodeId-empty request returned "no node serves
 		// role" even when the receiving node's own swarm table knew the
 		// role.
@@ -310,7 +309,7 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 		}
 	}
 
-	// MESH-D04: bound fan-out to the ORIGIN. Each probe forwards to a next-hop
+	// Bound fan-out to the ORIGIN. Each probe forwards to a next-hop
 	// that itself re-routes; letting every hop fan out across all its paths
 	// produced up to ~fanout^MaxRPCHops (≈3^6 = 729) in-flight messages per
 	// request. A forwarded (Hops>0) request therefore takes a SINGLE best path,
@@ -323,9 +322,9 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 	// Launch parallel probes — first response wins. probeResult carries
 	// the winning candidate so we can credit the right counter.
 	type probeResult struct {
-		resp     *pb.RPCResponse
-		err      error
-		winner   fwdCandidate
+		resp   *pb.RPCResponse
+		err    error
+		winner fwdCandidate
 		// originalTarget captures the target node before path-3 may have
 		// substituted a same-role peer; used to classify Path 1 vs Path 3.
 		originalTarget string
@@ -403,6 +402,32 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 func (f *runtimeForwarder) callOverMeshSession(ctx context.Context, session aether.Session, req *pb.RPCRequest) (*pb.RPCResponse, error) {
 	// Prefer BidiRPC on Stream 1 — avoids opening a dynamic stream.
 	remoteID := string(session.RemoteNodeID())
+
+	// 🔴 THE ONLY WRITER OF PER-PEER RPC TRAFFIC. updatePriorities' ladder and
+	// the connection scaler's TrafficWeight factor both read what
+	// ConnectionManager.RecordRPC writes; see its note in peer_connections.go.
+	//
+	// 🔑 WHY HERE AND NOWHERE ELSE. This function is the single funnel for
+	// every outbound RPC that crosses a peer session: both the BidiRPC branch
+	// below and the dynamic-stream fallback pass through it, and both Forward
+	// call sites (:86 fast path, :369 re-route probe) reach it. One call site
+	// keeps a single writer and makes it impossible for the two consumer
+	// counters to drift apart.
+	//
+	// Recorded BEFORE the call, not after: the counters measure OFFERED load on
+	// this peer connection, which is what both consumers want. Sizing a
+	// connection pool and prioritising against drain must both account for
+	// traffic that was attempted and failed — crediting only successes would
+	// shrink the pool of exactly the peer whose connections are struggling.
+	//
+	// ⚠ OUTBOUND ONLY, DELIBERATELY. Inbound RPCs served FOR a peer are that
+	// peer's demand on us; TrafficWeight sizes OUR connection target TO them,
+	// so our own offered load is the correct signal. Counting inbound here
+	// would inflate the target for a chatty client we never call.
+	if f.rt != nil && f.rt.connMgr != nil {
+		f.rt.connMgr.RecordRPC(remoteID)
+	}
+
 	if f.rt.connMgr != nil {
 		if bidi, ok := f.rt.connMgr.GetBidiRPC(remoteID); ok {
 			return bidi.Call(ctx, req)
@@ -423,7 +448,7 @@ func (f *runtimeForwarder) callOverMeshSession(ctx context.Context, session aeth
 	if err != nil {
 		return nil, fmt.Errorf("open RPC stream: %w", err)
 	}
-	// MESH-D03: close the dynamic stream when we're done. Returning without
+	// Close the dynamic stream when we're done. Returning without
 	// closing leaked one client-side stream per fallback forward, and left the
 	// responder's per-stream `go ServeMeshStream` goroutine blocked forever on
 	// its next Receive (the client never sent FIN) — a paired stream+goroutine
@@ -451,6 +476,20 @@ type nextHopCandidate struct {
 	transport string        // how the candidate connects to the target
 	rttMs     int64         // latency between candidate and target
 	age       time.Duration // how recently the connection was measured
+
+	// fromRoute marks a candidate produced by the route engine's signed path
+	// advertisements rather than derived from LAD latency heuristics.
+	//
+	// It is a separate field because it is a separate question. Carrying it by
+	// setting transport to the literal "route" feeds "route" to
+	// remoteTransportGradeForRanking — and "route" is not a transport name, so
+	// ParseProtocolStrict rejects it and the candidate scores GradeF. The origin
+	// that findNextHops documents as authoritative then ranks below every
+	// candidate whose transport string happens to
+	// parse. A provenance flag and a transport name do not belong in one value
+	// space; keeping them apart is what stops the ranker from grading one as the
+	// other.
+	fromRoute bool
 }
 
 // findNextHops returns peers that can forward RPC traffic toward the
@@ -471,10 +510,14 @@ func (f *runtimeForwarder) findNextHops(targetNodeID, selfID string) []nextHopCa
 				continue
 			}
 			candidates = append(candidates, nextHopCandidate{
-				nodeID:    string(p.NextHop),
-				transport: "route",
+				nodeID: string(p.NextHop),
+				// The route advertisement carries a next hop and an RTT sample,
+				// not the transport that hop will use, so this stays empty
+				// rather than naming a transport nobody measured.
+				transport: "",
 				rttMs:     int64(p.RTTSampleMs),
 				age:       0,
+				fromRoute: true,
 			})
 		}
 	}
@@ -505,25 +548,24 @@ func (f *runtimeForwarder) findNextHops(targetNodeID, selfID string) []nextHopCa
 	}
 
 	// Sort by composite end-to-end grade, then freshness, then RTT.
+	//
+	// 🔴 RANKING-LOCAL FAIL-CLOSED. The transport label comes
+	// straight off a gossip-published LAD record, so it is PEER-SUPPLIED. Grading
+	// an unparseable or absent label through ParseProtocol's lossy default gave
+	// it ProtoNoiseUDP — the zero value, and GradeA, the BEST grade — so a peer
+	// that published nothing outranked a peer that published honestly. That is an
+	// incentive inversion on hostile input: omitting a field was rewarded with
+	// best-hop selection, and `Transport` is `omitempty`, so absent is the
+	// ORDINARY wire case.
+	//
+	// Ranking-last is safe where a GATE would not be: if every candidate lacks a
+	// transport they all tie at worst and the ranker still returns them all. A
+	// ranker has no outage mode.
+	//
+	// Deliberately scoped to this call site — ParseProtocol's default is
+	// unchanged because five other callers depend on it.
 	sort.Slice(candidates, func(i, j int) bool {
-		// Local→candidate dispatch grade (our Aether connection quality to this peer)
-		iLocal := f.rt.peerGrade(candidates[i].nodeID)
-		jLocal := f.rt.peerGrade(candidates[j].nodeID)
-		// Candidate→target transport grade (from LAD latency record)
-		iRemote := GradeForProtocol(ParseProtocol(candidates[i].transport))
-		jRemote := GradeForProtocol(ParseProtocol(candidates[j].transport))
-		iScore := int(iLocal) + int(iRemote)
-		jScore := int(jLocal) + int(jRemote)
-		if iScore != jScore {
-			return iScore > jScore
-		}
-		// Then: prefer freshest measurement, then lowest RTT
-		iFresh := candidates[i].age < 2*time.Minute
-		jFresh := candidates[j].age < 2*time.Minute
-		if iFresh != jFresh {
-			return iFresh
-		}
-		return candidates[i].rttMs < candidates[j].rttMs
+		return f.nextHopLess(candidates[i], candidates[j])
 	})
 
 	// Deduplicate by nodeID (keep best per peer)
@@ -538,6 +580,60 @@ func (f *runtimeForwarder) findNextHops(targetNodeID, selfID string) []nextHopCa
 	}
 
 	return deduped
+}
+
+// nextHopLess is the forwarder's next-hop ordering, named so the ordering
+// itself can be exercised. Inlined in the sort it was reachable only through
+// findNextHops, which needs a loaded route engine and a populated LAD cache,
+// so a test could only re-implement the comparison and would then pass while
+// the production order said something else.
+func (f *runtimeForwarder) nextHopLess(a, b nextHopCandidate) bool {
+	// Route-engine provenance outranks every heuristic score. findNextHops
+	// documents the route engine as the authoritative source — dual-signed
+	// path advertisements with RFC2439 damping — and LAD latency records as
+	// the fallback for partitions no advertisement has reached. Ordering on
+	// the transport grade alone inverted that, because a route candidate
+	// names no transport and so scored below any candidate that did.
+	if a.fromRoute != b.fromRoute {
+		return a.fromRoute
+	}
+	// Local→candidate dispatch grade (our Aether connection quality to this peer)
+	iLocal := f.rt.peerGrade(a.nodeID)
+	jLocal := f.rt.peerGrade(b.nodeID)
+	// Candidate→target transport grade (from LAD latency record)
+	iRemote := remoteTransportGradeForRanking(a.transport)
+	jRemote := remoteTransportGradeForRanking(b.transport)
+	iScore := int(iLocal) + int(iRemote)
+	jScore := int(jLocal) + int(jRemote)
+	if iScore != jScore {
+		return iScore > jScore
+	}
+	// Then: prefer freshest measurement, then lowest RTT
+	iFresh := a.age < 2*time.Minute
+	jFresh := b.age < 2*time.Minute
+	if iFresh != jFresh {
+		return iFresh
+	}
+	return a.rttMs < b.rttMs
+}
+
+// remoteTransportGradeForRanking grades a candidate's LAD-reported transport
+// for RANKING ONLY, failing closed on anything it cannot recognise.
+//
+// The distinction ParseProtocol cannot express is "this really is
+// noise-udp" versus "I could not parse this at all" — both return
+// ProtoNoiseUDP, which grades A. ParseProtocolStrict reports which one it was,
+// and here an unrecognised or empty label is ranked WORST rather than best.
+//
+// GradeForProtocol's `default: GradeF` arm is unreachable through ParseProtocol
+// (it only ever returns one of the five named constants, each with an explicit
+// case), so GradeF is named directly. The defensive arm stays where it is.
+func remoteTransportGradeForRanking(transport string) Grade {
+	proto, known := ParseProtocolStrict(transport)
+	if !known {
+		return GradeF
+	}
+	return GradeForProtocol(proto)
 }
 
 // Compile-time interface check.

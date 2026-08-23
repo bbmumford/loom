@@ -7,6 +7,7 @@ package node
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/quality"
@@ -43,13 +44,24 @@ func StartMeshServices(ctx context.Context, connMgr *ConnectionManager) {
 	})
 	go streamGC.Start()
 
-	// Start adaptive CPU controller. aether AE-L-03: NewAdaptiveController is
+	// Start adaptive CPU controller. NewAdaptiveController is
 	// now parameterless — the controller degrades LIVE registered sessions
 	// rather than a by-value SessionOptions copy nothing read. Wiring session
 	// Register/Unregister on open/close (so it actually sheds load) is a
 	// tracked follow-up; instantiating + Starting it here is unchanged.
 	adaptive := aether.NewAdaptiveController()
 	go adaptive.Start()
+
+	// Both services own a ticker goroutine that runs until stopped. The ctx
+	// this function already accepts is the node's lifetime; without this the
+	// parameter is unused and the two goroutines outlive every Shutdown, so a
+	// Runtime torn down and rebuilt in one process accumulates them.
+	go func() {
+		<-ctx.Done()
+		streamGC.Stop()
+		adaptive.Stop()
+		log.Printf("[AETHER] Services stopped: StreamGC, AdaptiveController")
+	}()
 
 	// Initialise the per-address tracker. Only created here so existing
 	// tests and entry points that build a ConnectionManager without
@@ -83,7 +95,28 @@ func (m *ConnectionManager) RecordPathSuccess(nodeID string, proto Protocol, add
 	if m.addressTracker == nil {
 		return
 	}
-	_, rtt := session.Health().RTT()
+	// 🔴 A SESSION CAN REACH HERE BEFORE ITS HEALTH MONITOR IS INSTALLED, and
+	// health.Monitor.RTT takes m.mu with NO nil-receiver guard — so the
+	// unguarded `session.Health().RTT()` this replaced was a nil dereference on
+	// the connect path, not a theoretical one. mesh_connection.go:790
+	// nil-checks the very same opts.Session that :456 passes in here unguarded,
+	// and adaptive_timeouts_test.go's nilHealthSession exists for "the real
+	// race window between session construction and SetHealthMonitor".
+	//
+	// 🔑 REPORTING ABSENCE AS 0 IS SAFE HERE ONLY BECAUSE OF A GUARD IN ANOTHER
+	// MODULE: AddressTracker.RecordSuccess applies `if rtt > 0` before storing
+	// (aether@v0.0.111 quality/address_tracker.go:91), so a 0 credits the
+	// success — resetting ConsecutiveFailures and clearing DeadUntil, which is
+	// the part that matters — without recording a 0ms path. If that guard ever
+	// goes, this becomes "absent sorts as best": an unmeasured path would rank
+	// as the fastest one available. The success must still be credited, so
+	// skipping the call is not the alternative.
+	var rtt time.Duration
+	if session != nil {
+		if h := session.Health(); h != nil {
+			_, rtt = h.RTT()
+		}
+	}
 	m.addressTracker.RecordSuccess(nodeID, proto.String(), addr, rtt)
 	// [PATH-SCORE] every credit/debit is logged so an operator can see
 	// directly which transport+address is gaining ground for a peer.

@@ -8,18 +8,18 @@ import (
 	"context"
 	"fmt"
 
-	lad "github.com/bbmumford/ledger"
-	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/ORBTR/aether"
+	"github.com/ORBTR/aether/rpc/pb"
+	lad "github.com/bbmumford/ledger"
 )
 
 // FindSession resolves a role + handler to an Aether session.
 // Implements dispatch.SessionFinder interface.
 //
 // Path selection:
-//  1. Direct session to the target node (LAD role query → GetMeshSession)
-//  2. Any available session for mesh forwarding (GetAnyMeshSession)
-//  3. Error — no session available
+// 1. Direct session to the target node (LAD role query → GetMeshSession)
+// 2. Any available session for mesh forwarding (GetAnyMeshSession)
+// 3. Error — no session available
 func (m *ConnectionManager) FindSession(ctx context.Context, role, handler string) (aether.Session, error) {
 	if m == nil {
 		return nil, fmt.Errorf("mesh not initialized")
@@ -61,7 +61,6 @@ func (m *ConnectionManager) FindAnySession() (aether.Session, bool) {
 // better path available — without this, cold-start cross-region WS
 // sessions stick in the cache for the full 5-minute idle TTL even
 // after a same-region noise-UDP session arrives 30 seconds later.
-// L3 #7 fix.
 //
 // Implements dispatch.SessionFinder.IsSupersededByUpgrade.
 func (m *ConnectionManager) IsSupersededByUpgrade(session aether.Session) bool {
@@ -165,10 +164,10 @@ func (m *ConnectionManager) FindRoutes(ctx context.Context, role, handler string
 	// Route 1: Direct session to target (if available)
 	if session, ok := m.GetMeshSession(targetNodeID); ok && !session.IsClosed() {
 		routes = append(routes, aether.ProbeRoute{
-			Session: session,
-			NodeID:  targetNodeID,
-			TargetNodeID:    targetNodeID,
-			RouteList:       nil, // direct — no intermediate hops
+			Session:      session,
+			NodeID:       targetNodeID,
+			TargetNodeID: targetNodeID,
+			RouteList:    nil, // direct — no intermediate hops
 		})
 	}
 
@@ -205,10 +204,10 @@ func (m *ConnectionManager) FindRoutes(ctx context.Context, role, handler string
 			seen[r.nodeID] = true
 			session, _ := m.GetMeshSession(r.nodeID)
 			routes = append(routes, aether.ProbeRoute{
-				Session: session,
-				NodeID:  r.nodeID,
-				TargetNodeID:    targetNodeID,
-				RouteList:       []string{targetNodeID},
+				Session:      session,
+				NodeID:       r.nodeID,
+				TargetNodeID: targetNodeID,
+				RouteList:    []string{targetNodeID},
 			})
 			if len(routes) >= 3 {
 				break
@@ -222,10 +221,10 @@ func (m *ConnectionManager) FindRoutes(ctx context.Context, role, handler string
 		for id, session := range m.meshSessions {
 			if id != selfID && !session.IsClosed() {
 				routes = append(routes, aether.ProbeRoute{
-					Session: session,
-					NodeID:  id,
-					TargetNodeID:    targetNodeID,
-					RouteList:       []string{targetNodeID},
+					Session:      session,
+					NodeID:       id,
+					TargetNodeID: targetNodeID,
+					RouteList:    []string{targetNodeID},
 				})
 				if len(routes) >= 2 {
 					break
@@ -235,7 +234,7 @@ func (m *ConnectionManager) FindRoutes(ctx context.Context, role, handler string
 		m.dispatchMu.RUnlock()
 	}
 
-	// Cascade F fix (L3 #3): sort routes by composite score, not
+	// Sort routes by composite score, not
 	// positional order. Without this, a high-RTT cross-region direct
 	// path would be returned first; parallel probes in HWPCaller.Call
 	// would then let a low-RTT same-region relay beat the direct path,
@@ -308,7 +307,7 @@ func (m *ConnectionManager) findNodeForRole(ctx context.Context, role, handler s
 			bestNode = node.NodeID
 			bestGrade = m.rt.peerGrade(node.NodeID)
 		case rtt == 0 && bestRTT == 0:
-			// L3 #4 fix: neither node has a latency record. Previously
+			// Neither node has a latency record. Previously
 			// this fell through to bestNode=nodes[0] alphabetically;
 			// now we tiebreak on the locally-measured connection grade
 			// to that peer. A peer we're already connected to at

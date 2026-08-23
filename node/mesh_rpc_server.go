@@ -9,13 +9,17 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/ORBTR/aether"
+	"github.com/ORBTR/aether/rpc/pb"
 )
 
 // ServeMeshStream serves incoming RPC requests on an Aether stream.
 // Wire format: pb.RPCRequest/RPCResponse (protobuf binary encoding).
 func (s *RPCServer) ServeMeshStream(ctx context.Context, stream aether.Stream, remoteID aether.NodeID) {
+	// Scope this peer's dedup entries to itself. Without a caller
+	// identity every request on this stream shares one process-global
+	// namespace with every other peer's, keyed on a wire-supplied id.
+	ctx = withCallerNode(ctx, string(remoteID))
 	dbgRPC.Printf("serving Aether stream %d from %s", stream.StreamID(), remoteID.Short())
 	s.logger.Printf("[RPC-AETHER] Serving stream %d from %s", stream.StreamID(), remoteID.Short())
 
@@ -72,7 +76,7 @@ func (s *RPCServer) ServeMeshStream(ctx context.Context, stream aether.Stream, r
 	}
 }
 
-// MESH-D09: ServeMeshStreamBidirectional was removed. It had no callers, and as
+// ServeMeshStreamBidirectional was removed. It had no callers, and as
 // written it was broken as a bidirectional server — no request/response
 // correlation (any inbound response was logged "Unrecognized message" and
 // dropped, the exact order-based hazard the review flagged), no panic recovery,

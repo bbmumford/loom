@@ -16,8 +16,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/ORBTR/aether"
+	"github.com/ORBTR/aether/rpc/pb"
 )
 
 // Message type prefixes for bidirectional RPC on Stream 1.
@@ -44,8 +44,8 @@ const bidiServerSendTimeout = 5 * time.Second
 // Both sides can initiate requests. Responses are correlated by request ID.
 //
 // Wire format per message: [type:1][payload...]
-//   - type=0x10: payload is RPCRequest (binary TLV)
-//   - type=0x20: payload is RPCResponse (binary TLV)
+// - type=0x10: payload is RPCRequest (binary TLV)
+// - type=0x20: payload is RPCResponse (binary TLV)
 type BidiRPC struct {
 	stream   aether.Stream
 	remoteID aether.NodeID
@@ -77,9 +77,9 @@ type BidiRPC struct {
 	callID uint64
 
 	// wireIDPrefix makes wire IDs globally unique, not just unique within this
-	// BidiRPC (MESH-D01). Each BidiRPC previously stamped req.Id = "b"+counter
-	// with a counter that restarts at 0 per instance, so "b1"/"b2"… collided
-	// across every peer/session. The responder's single process-wide
+	// BidiRPC. Stamping req.Id = "b"+counter from a counter that restarts at 0
+	// per instance makes "b1"/"b2"… collide across every peer/session. The
+	// responder's single process-wide
 	// responseCache is keyed on that id, so Peer A's cached success was returned
 	// to Peer B's unrelated (cross-tenant) request. A random per-instance prefix
 	// keeps the id unique across bidis while local correlation (b.pending) is
@@ -107,7 +107,7 @@ type BidiRPC struct {
 	// inflightCalls is the current number of outbound Call() invocations
 	// waiting for a response. Incremented on Call entry, decremented on
 	// Call exit (response, ctx.Done, or bidi teardown). Read by
-	// InflightCalls() for the OBS-18 bidirpc_inflight_gauge metric.
+	// InflightCalls() for the bidirpc_inflight_gauge metric.
 	// Atomic so monitoring reads don't need to acquire the bidi lock.
 	inflightCalls atomic.Int64
 }
@@ -124,7 +124,7 @@ type BidiRPC struct {
 // context).
 func NewBidiRPC(stream aether.Stream, remoteID aether.NodeID, server *RPCServer, transport, scope string) *BidiRPC {
 	ctx, cancel := context.WithCancel(context.Background())
-	// MESH-D01: 5 random bytes → a per-instance wire-ID namespace so ids never
+	// 5 random bytes → a per-instance wire-ID namespace so ids never
 	// collide across bidis/peers in the responder's shared dedup cache.
 	var pfx [5]byte
 	_, _ = rand.Read(pfx[:])
@@ -136,10 +136,10 @@ func NewBidiRPC(stream aether.Stream, remoteID aether.NodeID, server *RPCServer,
 		scope:        scope,
 		wireIDPrefix: "b" + hex.EncodeToString(pfx[:]) + "-",
 		pending:      make(map[string]chan *pb.RPCResponse),
-		ctx:         ctx,
-		ctxCancel:   cancel,
-		done:        make(chan struct{}),
-		inflightSem: make(chan struct{}, bidiInflight),
+		ctx:          ctx,
+		ctxCancel:    cancel,
+		done:         make(chan struct{}),
+		inflightSem:  make(chan struct{}, bidiInflight),
 	}
 	go b.readLoop()
 	return b
@@ -163,7 +163,7 @@ func (b *BidiRPC) IsAlive() bool {
 }
 
 // InflightCalls returns the number of outbound Call() invocations currently
-// awaiting a response. Used by the OBS-18 bidirpc_inflight_gauge metric
+// awaiting a response. Used by the bidirpc_inflight_gauge metric
 // surface in MeshMetrics. Atomic load — safe to call from any goroutine.
 func (b *BidiRPC) InflightCalls() int64 {
 	return b.inflightCalls.Load()
@@ -176,7 +176,7 @@ func (b *BidiRPC) InflightCalls() int64 {
 // M-BidiPending-IDCollision finding.
 func (b *BidiRPC) nextWireID() string {
 	n := atomic.AddUint64(&b.callID, 1)
-	// MESH-D01: prefix with the per-instance namespace so the id is globally
+	// Prefix with the per-instance namespace so the id is globally
 	// unique (not just unique within this bidi). strconv is ~6x faster than
 	// fmt.Sprintf for hot paths.
 	return b.wireIDPrefix + strconv.FormatUint(n, 36)
@@ -192,7 +192,7 @@ func (b *BidiRPC) nextWireID() string {
 // pending-channel correlation — no two probes can collide on the same
 // pending slot regardless of what the caller's req.Id was.
 func (b *BidiRPC) Call(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse, error) {
-	// OBS-18 bidirpc_inflight_gauge: track how many outbound Call()
+	// bidirpc_inflight_gauge: track how many outbound Call()
 	// invocations are currently waiting for a response. The gauge is
 	// an atomic int64 — increment on entry, decrement when the call
 	// exits by any path (response received, ctx cancelled, bidi closed).
@@ -325,7 +325,7 @@ func (b *BidiRPC) readLoop() {
 	}()
 
 	for {
-		// MESH-D05: this framing relies on aether's Stream.Receive being
+		// This framing relies on aether's Stream.Receive being
 		// message-oriented — exactly one Send unit per Receive, boundaries
 		// preserved. That is aether's documented Stream contract for the
 		// ReliableOrdered stream this bidi rides (Stream 1), and the one
@@ -361,9 +361,9 @@ func (b *BidiRPC) readLoop() {
 			// outgoing Call() responses would queue in the underlying
 			// stream buffer, never demultiplexed, and every BidiRPC
 			// Caller would hang until ctx fires. That was the pattern
-			// observed 2026-05-31 across the fleet: BidiRPC stream 1
-			// shows inFlight grow, rack.fackAge climb to minutes, TLP
-			// probing fruitlessly. The v0.0.343 inline-acquire fix
+			// observed across the fleet: BidiRPC stream 1 shows inFlight
+			// grow, rack.fackAge climb to minutes, TLP probing
+			// fruitlessly. The inline-acquire fix
 			// solved request HOL but re-introduced response-side HOL.
 			//
 			// In-goroutine acquire decouples readLoop from handler
@@ -371,14 +371,14 @@ func (b *BidiRPC) readLoop() {
 			// may queue on the semaphore but readLoop keeps draining
 			// the stream, so msgTypeResponse messages flow even when
 			// every handler slot is busy. Worst case bounds:
-			//   - if N concurrent requests arrive: N goroutines spawn,
-			//     min(256, N) acquire immediately and run, rest park
-			//     on the semaphore. Memory cost per parked goroutine
-			//     is ~2KB stack + the payload slice; ~256 KB at full
-			//     saturation per BidiRPC. Acceptable vs the wedge.
-			//   - if peer is malicious + opens 100k streams at once:
-			//     bounded by aether-level stream caps + per-session
-			//     scheduler limits, not by us here.
+			// - if N concurrent requests arrive: N goroutines spawn,
+			// min(256, N) acquire immediately and run, rest park
+			// on the semaphore. Memory cost per parked goroutine
+			// is ~2KB stack + the payload slice; ~256 KB at full
+			// saturation per BidiRPC. Acceptable vs the wedge.
+			// - if peer is malicious + opens 100k streams at once:
+			// bounded by aether-level stream caps + per-session
+			// scheduler limits, not by us here.
 			go func(p []byte) {
 				select {
 				case b.inflightSem <- struct{}{}:
@@ -450,10 +450,11 @@ func (b *BidiRPC) handleIncomingRequest(payload []byte) {
 		// Derive the handler ctx from the bidi-scoped ctx so a session
 		// closing mid-handler propagates cancellation. Apply the
 		// request's TimeoutNs as a hard cap.
-		hctx := b.ctx
+		// The delivering peer scopes this request's dedup entry.
+		hctx := withCallerNode(b.ctx, string(b.remoteID))
 		if req.TimeoutNs > 0 {
 			var hcancel context.CancelFunc
-			hctx, hcancel = context.WithTimeout(b.ctx, time.Duration(req.TimeoutNs))
+			hctx, hcancel = context.WithTimeout(hctx, time.Duration(req.TimeoutNs))
 			defer hcancel()
 		}
 		resp = b.server.handleRequest(hctx, req)

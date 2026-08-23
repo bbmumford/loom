@@ -13,8 +13,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/ORBTR/aether"
+	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/bbmumford/loom/node/handlers"
 )
 
@@ -58,13 +58,13 @@ func (s *channelSession) Close() error {
 	return nil
 }
 
-func (s *channelSession) RemoteAddr() net.Addr          { return &net.UDPAddr{} }
-func (s *channelSession) RemoteNodeID() aether.NodeID   { return s.nodeID }
-func (s *channelSession) NetConn() net.Conn             { return nil }
-func (s *channelSession) Protocol() aether.Protocol     { return aether.ProtoNoise }
-func (s *channelSession) OnClose(_ func())              {}
+func (s *channelSession) RemoteAddr() net.Addr        { return &net.UDPAddr{} }
+func (s *channelSession) RemoteNodeID() aether.NodeID { return s.nodeID }
+func (s *channelSession) NetConn() net.Conn           { return nil }
+func (s *channelSession) Protocol() aether.Protocol   { return aether.ProtoNoise }
+func (s *channelSession) OnClose(_ func())            {}
 
-// newSessionPair creates a linked pair of sessions (client ↔ server).
+// newSessionPair() creates a linked pair of sessions (client ↔ server).
 func newSessionPair() (*channelSession, *channelSession) {
 	c2s := make(chan []byte, 10)
 	s2c := make(chan []byte, 10)
@@ -107,7 +107,7 @@ func (h *echoRPCHandler) Role() string                      { return "test" }
 func (h *echoRPCHandler) RequiresAuth() bool                { return false }
 func (h *echoRPCHandler) AllowedAuthTypes() []string        { return nil }
 func (h *echoRPCHandler) Scopes() []string                  { return nil }
-func (h *echoRPCHandler) TenantScope() handlers.TenantScope { return "" }
+func (h *echoRPCHandler) TenantScope() handlers.TenantScope { return handlers.TenantScopeNone }
 func (h *echoRPCHandler) AllowedTenants() []string          { return nil }
 
 func (h *echoRPCHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {

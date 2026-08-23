@@ -30,11 +30,11 @@ type ResponseCache struct {
 	ttl     time.Duration
 
 	// Metrics
-	hits       int64 // atomic
-	misses     int64 // atomic
-	sweeps     int64 // atomic — periodic + opportunistic combined
-	evictions  int64 // atomic — total entries dropped by TTL
-	highMark   int64 // atomic — times the high-water-mark triggered a sweep
+	hits      int64 // atomic
+	misses    int64 // atomic
+	sweeps    int64 // atomic — periodic + opportunistic combined
+	evictions int64 // atomic — total entries dropped by TTL
+	highMark  int64 // atomic — times the high-water-mark triggered a sweep
 }
 
 type cachedResponse struct {
@@ -64,7 +64,7 @@ func (rc *ResponseCache) Get(requestID string) *pb.RPCResponse {
 		return nil
 	}
 	atomic.AddInt64(&rc.hits, 1)
-	// MESH-D01: return a shallow clone. Callers (bidi / ServeMeshStream)
+	// Return a shallow clone. Callers (bidi / ServeMeshStream)
 	// overwrite resp.Id for correlation; handing out the shared cached pointer
 	// let concurrent hits race on that write and corrupted the cached Id for
 	// later dedup lookups. Payload is immutable post-cache, so sharing it is fine.
@@ -98,7 +98,7 @@ func (rc *ResponseCache) Put(requestID string, resp *pb.RPCResponse) {
 	if len(rc.entries) >= ResponseCacheHighWaterMark {
 		rc.sweepLocked(time.Now())
 		atomic.AddInt64(&rc.highMark, 1)
-		// MESH-D07: sweepLocked only drops TTL-expired entries. Under sustained
+		// SweepLocked only drops TTL-expired entries. Under sustained
 		// unique-id traffic faster than the TTL nothing is expired, so the map
 		// would grow past the mark unbounded. When the sweep frees nothing and
 		// we're still at the ceiling, shed ~10% of arbitrary entries to enforce a
@@ -115,7 +115,7 @@ func (rc *ResponseCache) Put(requestID string, resp *pb.RPCResponse) {
 			}
 		}
 	}
-	// MESH-D01: store a clone so a caller mutating the returned response (e.g.
+	// Store a clone so a caller mutating the returned response (e.g.
 	// resp.Id = req.Id before marshalling) can't race a concurrent Get or
 	// corrupt the cached copy.
 	rc.entries[requestID] = &cachedResponse{

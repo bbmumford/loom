@@ -123,24 +123,60 @@ func (rt *Runtime) AcceptIncomingMeshSession(ctx context.Context, conn net.Conn,
 // attrs or a bootstrap handshake response; drives the pre-publish of the
 // peer's Member record so it doesn't appear as "(unresolved)" while its own
 // gossip catches up.
+// ownsConnectingState distinguishes the one caller that put the peer into
+// PeerConnecting from the three that did not. connectPeer sets that state
+// immediately before handing off here, so only its dial may clear it on
+// failure; the upgrade walker, hole puncher and multipath dialer all reach
+// this function for peers whose connecting state, if any, belongs to a
+// concurrent connectPeer.
+type ownsConnectingState bool
+
+const (
+	dialOwnsConnectingState    ownsConnectingState = true
+	dialBorrowsConnectingState ownsConnectingState = false
+)
+
 func (rt *Runtime) DialAndAcceptMesh(ctx context.Context, conn net.Conn,
-	nodeID string, region string, proto Protocol, bootstrapHost string, serviceName, roles string) {
+	nodeID string, region string, proto Protocol, bootstrapHost string, serviceName, roles string,
+	owns ownsConnectingState) {
 
 	session, err := rt.SetupMeshSession(ctx, conn, nodeID, proto, true)
 	if err != nil {
 		log.Printf("[AETHER] Dial setup failed for %s: %v", truncID(nodeID), err)
 		conn.Close()
-		// MESH-B04: connectPeer set the peer to PeerConnecting before this async
-		// handoff; on setup failure reset it so scanAndConnect re-dials rather
-		// than leaving it wedged in PeerConnecting forever.
+		// connectPeer set the peer to PeerConnecting before this async handoff;
+		// on setup failure reset it so scanAndConnect re-dials rather than
+		// leaving it wedged in PeerConnecting forever.
+		//
+		// Gated on ownership because resetConnectingState checks the STATE, not
+		// who established it. A walker probe, hole punch or multipath dial that
+		// fails while connectPeer has concurrently marked the same peer
+		// PeerConnecting would otherwise clear a live connect attempt's state,
+		// and scanAndConnect would re-dial a peer already being dialled.
 		if rt.connMgr != nil {
-			rt.connMgr.resetConnectingState(nodeID)
+			// A completed transport dial that then fails its mesh handshake is
+			// still a failed path, and until this it recorded nothing. The dial
+			// sites credit recordDialSuccess the moment dialWithProtocol returns
+			// a conn (connectPeer and dialAdditionalPath both do), which clears
+			// the per-(peer, protocol) cooldown ladder. With no counterpart on
+			// this branch a peer that accepts connections but never completes a
+			// session had its ladder cleared on every attempt and was re-dialled
+			// at the base delay forever, so the back-off could not escalate.
+			//
+			// Recorded for every caller, not only the owning one: the handshake
+			// failed on this protocol to this peer whoever initiated it, and the
+			// ladder is keyed by that pair rather than by the dialer.
+			rt.connMgr.recordDialFailure(nodeID, proto)
+
+			if bool(owns) {
+				rt.connMgr.resetConnectingState(nodeID)
+			}
 		}
 		return
 	}
 
 	// SESSION RESUMPTION: the ordinary noise-UDP mesh dial DOES attempt aether's
-	// 0.5-RTT resume, contrary to what the TODO that used to sit here implied.
+	// 0.5-RTT resume, so no resume call belongs here.
 	// The chain is dialWithProtocol -> Runtime.dialNoiseUDP (runtime.go) ->
 	// tr.Dial -> NoiseTransport.Dial (aether/noise/transport.go:424), and
 	// tryResumeDial lives inside that function at :462. So by the time a conn
@@ -157,10 +193,8 @@ func (rt *Runtime) DialAndAcceptMesh(ctx context.Context, conn net.Conn,
 	// happened one layer UP, before the handoff. Follow a conn parameter back to
 	// its origin before concluding anything about what its dial did or did not do.
 	//
-	// ALL FOUR mesh dial sites are now traced, and every one of them reaches the
-	// resume-capable dial for noise-UDP. The earlier note here left the last two
-	// open; they are closed, and they close against the original claim rather
-	// than for it:
+	// ALL FOUR mesh dial sites are traced, and every one of them reaches the
+	// resume-capable dial for noise-UDP:
 	//
 	//   peer_connections.go:2940  <- dialWithProtocol
 	//   multipath_dial.go:345     <- dialWithProtocol
@@ -197,6 +231,14 @@ func (rt *Runtime) DialAndAcceptMesh(ctx context.Context, conn net.Conn,
 }
 
 // mapProtocol converts node.Protocol to aether.Protocol.
+// mapProtocol selects the aether transport adapter for a node protocol.
+//
+// 🔴 LOSSY BY DESIGN — DO NOT KEY PER-PROTOCOL STATE ON THE RESULT. ProtoTLS
+// and ProtoWebSocket both return aether.ProtoWebSocket because they share one
+// reliable-stream adapter, so the output cannot distinguish them. Used as a map
+// key it merges two dial paths into one bucket and a failure on either
+// suppresses both. Where a key is wanted, use the node Protocol directly —
+// dialKeyFor in multipath_dial.go is the shape to copy.
 func mapProtocol(p Protocol) aether.Protocol {
 	switch p {
 	case ProtoNoiseUDP:
@@ -213,4 +255,3 @@ func mapProtocol(p Protocol) aether.Protocol {
 		return aether.ProtoUnknown
 	}
 }
-
