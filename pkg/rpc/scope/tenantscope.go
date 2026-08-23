@@ -27,10 +27,12 @@
 // re-exports pick them up simultaneously.
 package scope
 
-// TenantScope controls tenant isolation enforcement at the handler
-// dispatch level. The underlying representation is string so scope values
-// survive JSON / protobuf / wire round-trips without a bespoke encoder.
-type TenantScope = string
+// TenantScope controls tenant isolation enforcement at the handler dispatch
+// level. It is deliberately a defined type: an arbitrary string must not be
+// assignable as a scope declaration, and its zero value must remain detectably
+// invalid. The string representation still survives JSON / protobuf / wire
+// round-trips without a bespoke encoder.
+type TenantScope string
 
 // Canonical scope constants. String values are load-bearing wire tokens —
 // they appear in proto descriptors, telemetry, and the reflection
@@ -41,9 +43,15 @@ type TenantScope = string
 // handlers.TenantScope{None,Platform,Tenant,Org,User,Profile,Unknown}.
 // Both surfaces MUST stay 1:1 with this list.
 const (
+	// Unset is the invalid zero value. It means no tenant-enforcement decision
+	// was made and MUST be rejected at registration. It is not re-exported as
+	// a caller-facing rpc.Scope* constant: callers must choose a real tier.
+	Unset TenantScope = ""
+
 	// None opts a handler out of tenant enforcement. Used for liveness,
-	// /heartbeat, OAuth init and other public unauthenticated surfaces.
-	None TenantScope = ""
+	// /heartbeat, OAuth init and other public unauthenticated surfaces. Its
+	// non-empty token makes that opt-out distinguishable from omission.
+	None TenantScope = "none"
 
 	// Platform restricts a handler to the HSTLES platform itself (tenant
 	// id is in the configured platform-tenants set). Non-platform tenants
@@ -82,3 +90,15 @@ const (
 	// make decay-to-None fail closed.
 	Unknown TenantScope = "unknown"
 )
+
+// IsDeclared reports whether s is a valid registration-time declaration.
+// Unknown is intentionally excluded: it is a fail-closed translation sentinel,
+// not a tier a registry may admit.
+func IsDeclared(s TenantScope) bool {
+	switch s {
+	case None, Platform, Tenant, Org, User, Profile:
+		return true
+	default:
+		return false
+	}
+}

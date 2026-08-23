@@ -111,9 +111,9 @@ func TestExecuteLocal_ScopeNone_Passes(t *testing.T) {
 // ctx (tenantId+userId) satisfies ScopeUser and the handler runs.
 func TestExecuteLocal_ScopeUser_StampedCtx_Passes(t *testing.T) {
 	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopeUser))
-	ctx := rpc.WithRPCContext(context.Background(), map[string]string{
-		"tenantId": "orbtr",
-		"userId":   "u-1",
+	ctx := rpc.WithAuthenticatedScopeIdentity(context.Background(), rpc.AuthenticatedScopeIdentity{
+		PlatformTenantID: "orbtr",
+		UserID:           "u-1",
 	})
 	out, err := bridge.executeLocal(newPostRequest(ctx), h, &structpb.Struct{})
 	if err != nil {
@@ -121,6 +121,45 @@ func TestExecuteLocal_ScopeUser_StampedCtx_Passes(t *testing.T) {
 	}
 	if len(out) == 0 {
 		t.Fatal("expected response body")
+	}
+}
+
+func TestExecuteLocal_ScopeOrg_IgnoresMutableWireHints(t *testing.T) {
+	var calls int
+	handler := stubHandler(rpc.ScopeOrg)
+	handler.Func = func(_ context.Context, req proto.Message) (proto.Message, error) {
+		calls++
+		return req, nil
+	}
+	bridge, h := newBridgeWithHandler(t, handler)
+
+	hints := map[string]string{
+		"tenantId":  "orbtr",
+		"tenant_id": "other",
+		"orgId":     "forged",
+		"org_id":    "also-forged",
+	}
+	hintOnly := rpc.WithRPCContext(context.Background(), hints)
+	hints["orgId"] = "mutated"
+	_, err := bridge.executeLocal(newPostRequest(hintOnly), h, &structpb.Struct{})
+	if !errors.Is(err, rpc.ErrScopeDenied) {
+		t.Fatalf("wire-only tenant+org hints must deny with ErrScopeDenied, got %v", err)
+	}
+	if calls != 0 {
+		t.Fatalf("handler ran on wire-only identity: calls=%d", calls)
+	}
+
+	exact := rpc.WithAuthenticatedScopeIdentity(hintOnly, rpc.AuthenticatedScopeIdentity{
+		PlatformTenantID: "orbtr",
+		OrganizationID:   "org-1",
+	})
+	hints["tenantId"] = "mutated-too"
+	hints["orgId"] = "conflicting"
+	if _, err := bridge.executeLocal(newPostRequest(exact), h, &structpb.Struct{}); err != nil {
+		t.Fatalf("typed tenant+org must pass despite mutable conflicting hints: %v", err)
+	}
+	if calls != 1 {
+		t.Fatalf("handler calls=%d, want 1", calls)
 	}
 }
 

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"sync"
+
+	"github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // Registry holds all registered handlers, indexed by FQN.
@@ -48,36 +50,93 @@ func (r *Registry) PlatformTenants() PlatformTenants {
 // caller's backing arrays. We copy them so a caller that later mutates
 // their own slice (e.g. `mw = append(mw, extra)`) cannot retroactively
 // modify what the registry hands out via Get/All/ByRole.
+// prepareStored validates the handler's tenant scope and returns its FQN, role,
+// and a defensively-copied stored Handler. It takes no lock and touches no map,
+// so it is the shared lock-free half of Register and the atomic batch core:
+// scope validation and the Middleware/Tags copy live here once. Collision
+// checks and the store happen under the caller's lock.
+func (r *Registry) prepareStored(h Handler) (fqn, role string, stored *Handler, err error) {
+	if !scope.IsDeclared(h.Scope) {
+		return "", "", nil, fmt.Errorf("handler %s has invalid tenant scope %q: declare one of the rpc.Scope* tiers explicitly", h.FQN(), h.Scope)
+	}
+	s := h
+	if len(h.Middleware) > 0 {
+		s.Middleware = append([]Middleware(nil), h.Middleware...)
+	}
+	if len(h.Tags) > 0 {
+		s.Tags = append([]string(nil), h.Tags...)
+	}
+	return h.FQN(), h.Role(), &s, nil
+}
+
 func (r *Registry) Register(h Handler) error {
+	fqn, role, stored, err := r.prepareStored(h)
+	if err != nil {
+		return err
+	}
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	fqn := h.FQN()
 	if _, exists := r.handlers[fqn]; exists {
 		return fmt.Errorf("handler %s already registered", fqn)
 	}
-
-	stored := h
-	if len(h.Middleware) > 0 {
-		stored.Middleware = append([]Middleware(nil), h.Middleware...)
-	}
-	if len(h.Tags) > 0 {
-		stored.Tags = append([]string(nil), h.Tags...)
-	}
-	r.handlers[fqn] = &stored
-	role := h.Role()
-	r.byRole[role] = append(r.byRole[role], &stored)
+	r.handlers[fqn] = stored
+	r.byRole[role] = append(r.byRole[role], stored)
 	return nil
 }
 
-// RegisterAll registers multiple handlers. Stops on first error.
-func (r *Registry) RegisterAll(handlers []Handler) error {
+// registerAllAtomic is the lock-scoped prepare/preflight/commit core for
+// RegisterAll and RegisterProxy. It prepares every handler lock-free — proxy
+// stripping when proxy is set, scope validation, defensive copies, and
+// within-batch duplicate detection in input order — then under one write lock
+// preflights every FQN against the live handlers map and commits handlers+byRole
+// only after all pass. Any failure returns the offending error with the registry
+// byte-unchanged, so Get/All/ByRole observe either the old state or the full new
+// batch and never a partial prefix. It does not call Register (r.mu is not
+// reentrant); the shared prepareStored keeps the two paths in one grammar.
+func (r *Registry) registerAllAtomic(handlers []Handler, proxy bool) error {
+	type prep struct {
+		fqn, role string
+		stored    *Handler
+	}
+	preps := make([]prep, 0, len(handlers))
+	seen := make(map[string]struct{}, len(handlers))
 	for _, h := range handlers {
-		if err := r.Register(h); err != nil {
+		if proxy {
+			h.Func = nil
+			h.Middleware = nil
+		}
+		fqn, role, stored, err := r.prepareStored(h)
+		if err != nil {
 			return err
 		}
+		if _, dup := seen[fqn]; dup {
+			return fmt.Errorf("handler %s duplicated within the same registration batch", fqn)
+		}
+		seen[fqn] = struct{}{}
+		preps = append(preps, prep{fqn: fqn, role: role, stored: stored})
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	for _, p := range preps {
+		if _, exists := r.handlers[p.fqn]; exists {
+			return fmt.Errorf("handler %s already registered", p.fqn)
+		}
+	}
+	for _, p := range preps {
+		r.handlers[p.fqn] = p.stored
+		r.byRole[p.role] = append(r.byRole[p.role], p.stored)
 	}
 	return nil
+}
+
+// RegisterAll registers multiple handlers atomically: either every handler is
+// stored or none is, so a failing member never leaves a partial prefix behind.
+func (r *Registry) RegisterAll(handlers []Handler) error {
+	return r.registerAllAtomic(handlers, false)
 }
 
 // Get retrieves a handler by FQN.
@@ -164,14 +223,7 @@ func (r *Registry) Count() int {
 // before storing — gateways apply their own gateway-tier middleware via
 // the HTTP bridge / per-route mounts.
 func (r *Registry) RegisterProxy(handlers []Handler) error {
-	for _, h := range handlers {
-		h.Func = nil
-		h.Middleware = nil
-		if err := r.Register(h); err != nil {
-			return err
-		}
-	}
-	return nil
+	return r.registerAllAtomic(handlers, true)
 }
 
 // MetadataFor returns the stored Handler for fqn with Func stripped — i.e. the

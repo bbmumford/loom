@@ -75,6 +75,7 @@ func TestDispatch(t *testing.T) {
 		Namespace: "hstles",
 		Domain:    "test",
 		Operation: "Echo",
+		Scope:     ScopeNone,
 		Func: func(ctx context.Context, req proto.Message) (proto.Message, error) {
 			return req, nil // echo
 		},
@@ -222,5 +223,95 @@ func TestStripFuncs(t *testing.T) {
 		if tg == "mutated" {
 			t.Error("StripFuncs returned Tags aliasing source — defensive-copy contract broken")
 		}
+	}
+}
+
+// atomicH builds a minimal valid handler under one role for the atomicity tests.
+func atomicH(op string) Handler {
+	return Handler{
+		Namespace: "hstles", Domain: "identity", Operation: op,
+		Scope:    ScopeNone,
+		Request:  (*emptypb.Empty)(nil),
+		Response: (*emptypb.Empty)(nil),
+	}
+}
+
+func withFunc(h Handler) Handler {
+	h.Func = func(ctx context.Context, req proto.Message) (proto.Message, error) { return req, nil }
+	return h
+}
+
+// TestRegisterAllAtomic_NoPartialPrefix is the hostile overlay for RegisterAll:
+// a batch whose MIDDLE member collides with an already-registered handler must
+// fail the whole call and leave the registry byte-unchanged — no earlier member
+// may survive. A non-atomic loop-Register stores the first member before the
+// middle fails, so this assertion kills that mutation.
+func TestRegisterAllAtomic_NoPartialPrefix(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Register(atomicH("Existing")); err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	batch := []Handler{atomicH("First"), atomicH("Existing"), atomicH("Third")}
+	if err := reg.RegisterAll(batch); err == nil {
+		t.Fatal("RegisterAll with a colliding member must fail")
+	}
+	if reg.Count() != 1 {
+		t.Errorf("partial prefix: Count = %d, want 1 (only the baseline)", reg.Count())
+	}
+	if _, ok := reg.Get("hstles.identity.First"); ok {
+		t.Error("First was committed before the collision — partial prefix leaked")
+	}
+	if _, ok := reg.Get("hstles.identity.Third"); ok {
+		t.Error("Third was committed despite the failed batch")
+	}
+}
+
+// TestRegisterProxyAtomic_NoPartialPrefix mirrors the overlay for RegisterProxy
+// (parity) and confirms Func is stripped on the success path.
+func TestRegisterProxyAtomic_NoPartialPrefix(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.Register(atomicH("Existing")); err != nil {
+		t.Fatalf("baseline: %v", err)
+	}
+	batch := []Handler{withFunc(atomicH("PFirst")), atomicH("Existing"), atomicH("PThird")}
+	if err := reg.RegisterProxy(batch); err == nil {
+		t.Fatal("RegisterProxy with a colliding member must fail")
+	}
+	if reg.Count() != 1 {
+		t.Errorf("RegisterProxy partial prefix: Count = %d, want 1", reg.Count())
+	}
+	if err := reg.RegisterProxy([]Handler{withFunc(atomicH("PA")), withFunc(atomicH("PB"))}); err != nil {
+		t.Fatalf("clean RegisterProxy: %v", err)
+	}
+	if reg.Count() != 3 {
+		t.Errorf("Count = %d, want 3", reg.Count())
+	}
+	pa, ok := reg.Get("hstles.identity.PA")
+	if !ok || pa.Func != nil {
+		t.Error("RegisterProxy must store the handler with Func stripped")
+	}
+}
+
+// TestRegisterAllAtomic_WithinBatchDuplicate: two members with the same FQN in
+// one batch reject atomically — neither is stored.
+func TestRegisterAllAtomic_WithinBatchDuplicate(t *testing.T) {
+	reg := NewRegistry()
+	batch := []Handler{atomicH("Dup"), atomicH("Other"), atomicH("Dup")}
+	if err := reg.RegisterAll(batch); err == nil {
+		t.Fatal("within-batch duplicate must fail")
+	}
+	if reg.Count() != 0 {
+		t.Errorf("within-batch dup left %d handlers; want 0 (atomic)", reg.Count())
+	}
+}
+
+// TestRegisterAllAtomic_Success: a clean batch stores every member.
+func TestRegisterAllAtomic_Success(t *testing.T) {
+	reg := NewRegistry()
+	if err := reg.RegisterAll([]Handler{atomicH("A"), atomicH("B"), atomicH("C")}); err != nil {
+		t.Fatalf("clean RegisterAll: %v", err)
+	}
+	if reg.Count() != 3 {
+		t.Errorf("Count = %d, want 3", reg.Count())
 	}
 }

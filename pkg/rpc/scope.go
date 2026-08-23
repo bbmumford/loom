@@ -7,9 +7,10 @@ package rpc
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strings"
+
+	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // rpcContextKey is the typed key used to stamp the RPCRequest.Context map
@@ -20,7 +21,13 @@ type rpcContextKey struct{}
 
 // WithRPCContext stamps the RPCRequest.Context map onto ctx so receivers
 // can read tenantId/userId/orgId/opClass via the *FromContext helpers
-// in this package — and so EnforceScope sees the wire-supplied identity.
+// in this package.
+//
+// This map is caller/wire data, not scope authority. EnforceScope deliberately
+// ignores it and reads only the typed identity installed through
+// WithAuthenticatedScopeIdentity. Keeping the two context surfaces separate
+// prevents a request body or forwarded map from manufacturing tenant,
+// organisation, or user presence.
 //
 // Empty / nil maps return ctx unchanged. Re-calling MERGES with the prior
 // value (later keys win) so middleware can layer additional fields without
@@ -50,8 +57,42 @@ func rpcContextMap(ctx context.Context) map[string]string {
 	return nil
 }
 
+// RPCContextValue reads one value stamped into the rpc context by WithRPCContext. It is the exported
+// read counterpart to WithRPCContext for a caller that threads a custom key across the mesh dispatch
+// (e.g. a surface session ticket the target's EnforceScope re-verifies); ok is false when the key is
+// absent. Unlike the tenant/user/org accessors this is a plain passthrough of author-set metadata and
+// confers no authority on its own — the reader must still validate whatever it finds.
+func RPCContextValue(ctx context.Context, key string) (string, bool) {
+	m := rpcContextMap(ctx)
+	if m == nil {
+		return "", false
+	}
+	v, ok := m[key]
+	return v, ok
+}
+
 // TenantFromContext extracts tenantId from the rpc context.
 // Returns "" when no tenant has been stamped.
+//
+// 🛑 THERE IS DELIBERATELY NO WRITE-SIDE COUNTERPART TO THIS, AND THAT
+// ABSENCE IS DOCUMENTED HERE BECAUSE THIS IS WHERE PEOPLE LOOK FOR IT
+// (#R-1598 ③).
+//
+// On the SEND side, dispatch stamps tenantId from the process-wide platform
+// tenant (HWPCaller.SetPlatformTenant) and copies ONLY scopes and userId out
+// of the caller's context — so a tenant placed in a ctx before an outgoing
+// call is SILENTLY IGNORED and the RPC goes out carrying the platform
+// identity. That is #R-782/#K-32's anti-spoof property, not an oversight: a
+// caller-supplied context must not be able to choose the authoritative
+// tenant.
+//
+// So the value this returns is the PLATFORM tenant, and it authenticates the
+// calling node — it is not the end user's org and must not be used as an
+// authorisation subject. The authenticated principal travels as userId +
+// scopes; per platform §4.2 (ruled #R-1598 ①) a handler that needs the
+// end-user tenant RESOLVES IT SERVER-SIDE from that principal, the same way
+// §4.6 requires ingress routing be a server-side lookup rather than a token
+// decode.
 func TenantFromContext(ctx context.Context) string {
 	return rpcContextMap(ctx)["tenantId"]
 }
@@ -64,6 +105,27 @@ func UserFromContext(ctx context.Context) string {
 // OrgFromContext extracts orgId (if set by upstream session middleware).
 func OrgFromContext(ctx context.Context) string {
 	return rpcContextMap(ctx)["orgId"]
+}
+
+// AuthenticatedScopeIdentity is the typed, server-established identity used by
+// EnforceScope. It aliases the leaf scope package so the legacy handlers
+// registry and this package consume the same value and evaluator without an
+// import cycle.
+type AuthenticatedScopeIdentity = tenantScope.AuthenticatedIdentity
+
+// WithAuthenticatedScopeIdentity stamps one complete authenticated identity
+// snapshot. Only trusted transport/session/product adapters may call this:
+// mutable RPC maps, request bodies and task metadata are not authority.
+func WithAuthenticatedScopeIdentity(
+	ctx context.Context,
+	identity AuthenticatedScopeIdentity,
+) context.Context {
+	return tenantScope.WithAuthenticatedIdentity(ctx, identity)
+}
+
+// AuthenticatedScopeIdentityFromContext reads the typed scope identity.
+func AuthenticatedScopeIdentityFromContext(ctx context.Context) AuthenticatedScopeIdentity {
+	return tenantScope.AuthenticatedIdentityFromContext(ctx)
 }
 
 // OpClassFromContext extracts opClass (set by the caller via
@@ -99,36 +161,17 @@ func ParseScopes(raw string) []string {
 // should use errors.Is at boundaries (e.g. HTTP bridge → 403, server-side
 // dispatch → 403 wire error). The wrapping error includes the FQN +
 // offending fields for diagnostic logging.
-var ErrScopeDenied = errors.New("rpc: scope denied")
+var ErrScopeDenied = tenantScope.ErrDenied
 
-// PlatformTenants is the set of tenantIds that satisfy ScopePlatform.
-// Registries inject this at construction time (typically on the node
-// endpoints that host platform-tier handlers). An empty set keeps
-// platform checks failing closed — safer than an "anyone goes" default.
-type PlatformTenants map[string]struct{}
+// PlatformTenants is the canonical set of tenantIds that satisfy
+// ScopePlatform. It aliases the dependency-free scope implementation so the
+// rpc and legacy handlers registries cannot drift. An empty set fails closed.
+type PlatformTenants = tenantScope.PlatformTenants
 
 // NewPlatformTenants builds a PlatformTenants set from a list of tenant ids.
 // Convenience constructor; duplicates collapse, empty strings are dropped.
 func NewPlatformTenants(ids ...string) PlatformTenants {
-	out := make(PlatformTenants, len(ids))
-	for _, id := range ids {
-		if id == "" {
-			continue
-		}
-		out[id] = struct{}{}
-	}
-	return out
-}
-
-// IsPlatform returns true when tenantID is in the platform set.
-// A nil receiver answers false — the safe default for an unconfigured
-// registry.
-func (p PlatformTenants) IsPlatform(tenantID string) bool {
-	if p == nil {
-		return false
-	}
-	_, ok := p[tenantID]
-	return ok
+	return tenantScope.NewPlatformTenants(ids...)
 }
 
 // EnforceScope rejects calls whose ctx fails the handler's declared
@@ -144,8 +187,8 @@ func (p PlatformTenants) IsPlatform(tenantID string) bool {
 //   - ScopeOrg      — caller has tenantId + orgId (tenant + organisation)
 //   - ScopeUser     — caller has tenantId + userId (per-user actions)
 //   - ScopeProfile  — caller has tenantId; profile membership is a
-//                     scope-string check at the middleware tier
-//                     (RequireScopesWithParam — Quorum ADR-0012)
+//     scope-string check at the middleware tier
+//     (RequireScopesWithParam — Quorum ADR-0012)
 //
 // Identity-establishing handlers (ValidateSession, OAuth callbacks,
 // MintSession) MUST use ScopeTenant — using ScopeUser deadlocks them
@@ -154,48 +197,35 @@ func EnforceScope(ctx context.Context, h *Handler, platforms PlatformTenants) er
 	if h == nil {
 		return fmt.Errorf("%w: nil handler", ErrScopeDenied)
 	}
-	switch h.Scope {
-	case ScopeNone:
+	identity := tenantScope.AuthenticatedIdentityFromContext(ctx)
+	switch tenantScope.CheckPresence(
+		h.Scope,
+		identity,
+		platforms.IsPlatform(identity.PlatformTenantID),
+	) {
+	case tenantScope.PresenceSatisfied:
 		return nil
-	case ScopePlatform:
-		t := TenantFromContext(ctx)
-		if !platforms.IsPlatform(t) {
-			return fmt.Errorf("%w: handler %s requires platform tier (tenant=%q)", ErrScopeDenied, h.FQN(), t)
+	case tenantScope.PresencePlatformRequired:
+		return fmt.Errorf(
+			"%w: handler %s requires platform tier (tenant=%q)",
+			ErrScopeDenied,
+			h.FQN(),
+			identity.PlatformTenantID,
+		)
+	case tenantScope.PresenceTenantRequired:
+		return fmt.Errorf("%w: handler %s requires authenticated platform tenant", ErrScopeDenied, h.FQN())
+	case tenantScope.PresenceOrganizationRequired:
+		return fmt.Errorf("%w: handler %s requires authenticated organisation", ErrScopeDenied, h.FQN())
+	case tenantScope.PresenceUserRequired:
+		return fmt.Errorf("%w: handler %s requires authenticated user", ErrScopeDenied, h.FQN())
+	case tenantScope.PresenceUnknownScope:
+		if h.Scope == ScopeUnknown {
+			// Fail-closed sentinel installed by mapProtoScope when a proto enum
+			// is not recognised.
+			return fmt.Errorf("%w: handler %s has fail-closed ScopeUnknown — add an explicit case in rpc/protoscan.go:mapProtoScope", ErrScopeDenied, h.FQN())
 		}
-	case ScopeTenant:
-		if TenantFromContext(ctx) == "" {
-			return fmt.Errorf("%w: handler %s requires tenantId", ErrScopeDenied, h.FQN())
-		}
-	case ScopeOrg:
-		if TenantFromContext(ctx) == "" {
-			return fmt.Errorf("%w: handler %s requires tenantId", ErrScopeDenied, h.FQN())
-		}
-		if OrgFromContext(ctx) == "" {
-			return fmt.Errorf("%w: handler %s requires orgId", ErrScopeDenied, h.FQN())
-		}
-	case ScopeUser:
-		if TenantFromContext(ctx) == "" {
-			return fmt.Errorf("%w: handler %s requires tenantId", ErrScopeDenied, h.FQN())
-		}
-		if UserFromContext(ctx) == "" {
-			return fmt.Errorf("%w: handler %s requires userId", ErrScopeDenied, h.FQN())
-		}
-	case ScopeProfile:
-		// Profile membership is enforced at the middleware tier
-		// (RequireScopesWithParam). At the dispatch tier we ensure the
-		// tenant prerequisite is present; the middleware decides whether
-		// the user belongs to the named billing profile.
-		if TenantFromContext(ctx) == "" {
-			return fmt.Errorf("%w: handler %s requires tenantId", ErrScopeDenied, h.FQN())
-		}
-	case ScopeUnknown:
-		// Fail-closed sentinel installed by mapProtoScope when a proto enum
-		// is not recognised. A handler bound to ScopeUnknown is structurally
-		// invalid — refuse every dispatch attempt with a clear diagnostic so
-		// the misconfiguration shows up in logs at the first call site.
-		return fmt.Errorf("%w: handler %s has fail-closed ScopeUnknown — add an explicit case in rpc/protoscan.go:mapProtoScope", ErrScopeDenied, h.FQN())
-	default:
 		return fmt.Errorf("%w: unknown scope %q on handler %s", ErrScopeDenied, h.Scope, h.FQN())
+	default:
+		return fmt.Errorf("%w: handler %s has fail-closed ScopeUnknown — add an explicit case in rpc/protoscan.go:mapProtoScope", ErrScopeDenied, h.FQN())
 	}
-	return nil
 }
