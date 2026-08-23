@@ -567,8 +567,16 @@ func (j *FileJournal) Close() error {
 	return j.f.Close()
 }
 
+// slotKey is the durable slot identity used by compaction: entries whose
+// watermark is not the latest for their slot are dropped.
+//
+// 🛑 Key IS PART OF THE IDENTITY. Without it, two records one node published
+// under different keys share a slotKey, and compaction deletes all but the
+// newest — silent, permanent loss of durable records that were never
+// superseded. The separator is repeated rather than concatenating raw fields
+// so ("a","b\x00c") and ("a\x00b","c") cannot alias.
 func slotKey(r ports.Record) string {
-	return string(r.Topic) + "\x00" + string(r.NodeID)
+	return string(r.Topic) + "\x00" + string(r.NodeID) + "\x00" + r.Key
 }
 
 var _ ports.DurableJournal = (*FileJournal)(nil)
