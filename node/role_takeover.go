@@ -348,6 +348,28 @@ type RoleTakeoverConfig struct {
 	// only when Policy.AuthorizeSecretRecipient admits THIS node for that role. Required —
 	// a nil Policy is fail-closed (takeover is not armed).
 	Policy ports.TrustPolicy
+
+	// ChainRung is this node's position in the ordered failover chain. rankClaims
+	// orders claims by rung before HLC, so a nearer (lower) rung outranks an
+	// earlier claim from a later rung: the chain descends only as far as needed.
+	// A rung is a GLOBAL class published verbatim on the claim record, comparable
+	// across nodes.
+	//
+	// 0 (the default) publishes ABSENT, which every peer ranks last, so an
+	// unconfigured node is the least-preferred candidate rather than the most.
+	// Give the most-preferred tier the lowest positive rung and each fallback a
+	// higher one.
+	ChainRung int
+	// ChainDepth bounds only this node's local "am I the last rung" log note; it
+	// is never published, negotiated, or used to clamp the wire rung. 0 (the
+	// default) means a flat single-rung chain where every node ranks equally on
+	// rung and HLC alone decides.
+	ChainDepth int
+	// MaxWinners caps how many claimants may activate a role at once — the N in
+	// "the claim-set prevents more than N simultaneous takeovers". 0 (the
+	// default) resolves to MinReplicas, so a role is covered exactly to its
+	// replica floor and no further.
+	MaxWinners int
 }
 
 // armRoleTakeover starts the takeover engine when Config.RoleTakeover is set. Called at the
@@ -382,6 +404,9 @@ func (rt *Runtime) armRoleTakeover() {
 	if _, err := rt.StartTakeover(TakeoverConfig{
 		Roles:       c.Roles,
 		MinReplicas: c.MinReplicas,
+		MaxWinners:  c.MaxWinners,
+		ChainRung:   c.ChainRung,
+		ChainDepth:  c.ChainDepth,
 		Entitled:    entitled,
 	}, opener); err != nil {
 		log.Printf("[TAKEOVER] not armed: %v", err)
