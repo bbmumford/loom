@@ -55,7 +55,7 @@ func TestInjectionsAreNoOpsUntilComputeAllHasPopulatedTheMap(t *testing.T) {
 	// This is exactly what feedReputationFromRTT does on its loop, and it is
 	// the ONLY thing production ever does to this tracker.
 	rt.InjectRTT(testNodeIDB, 20*time.Millisecond)
-	rt.InjectGradeInfo(testNodeIDB, time.Now().Add(-time.Hour), 1.0)
+	rt.InjectGradeInfo(testNodeIDB, time.Now().Add(-time.Hour), 1.0, time.Hour)
 
 	// ScoreFor returns a VALUE and answers "absent" with a zero-value struct
 	// carrying only NodeID — so absence and a measured-terrible peer are told
@@ -190,6 +190,51 @@ func TestGradeStabilityStepsRewardLongerStability(t *testing.T) {
 		t.Fatalf("an UNSET GradeStableSince scored %v but a 10s-old one scored "+
 			"%v — absent stability data must land on the same floor as newly "+
 			"established, not somewhere else", unset, fresh)
+	}
+}
+
+// The connection-duration grade-stability nudge is additive and bounded: a
+// longer unbroken connection raises the score monotonically, never by more than
+// gradeStabilityNudgeMax over the same peer with no duration, and a zero
+// duration leaves the pre-nudge score exactly intact.
+func TestConnectedDurationNudgesScoreWithinBounds(t *testing.T) {
+	scoreWith := func(dur time.Duration) float64 {
+		r := &PeerReputation{
+			UptimePercent: 0.5, AvgGrade: 0.5, DropFrequency: 1,
+			GradeStableSince: time.Now().Add(-5 * time.Minute), ConnectedDuration: dur,
+		}
+		r.ComputeScore()
+		return r.Score
+	}
+
+	none := scoreWith(0)
+	short := scoreWith(1 * time.Minute)
+	long := scoreWith(2 * time.Hour)
+
+	// Zero duration must not move the score: a peer scored with the field unset
+	// and one scored with an explicit zero must be identical, so wiring the
+	// nudge does not silently reprice every already-scored peer.
+	unset := &PeerReputation{
+		UptimePercent: 0.5, AvgGrade: 0.5, DropFrequency: 1,
+		GradeStableSince: time.Now().Add(-5 * time.Minute),
+	}
+	unset.ComputeScore()
+	if none != unset.Score {
+		t.Fatalf("a zero ConnectedDuration changed the score (%v vs %v) — the nudge is not "+
+			"neutral at zero, so every peer shifts the moment the feed is wired", none, unset.Score)
+	}
+
+	// Longer connection ⇒ strictly higher score.
+	if !(long > short && short > none) {
+		t.Fatalf("nudge is not monotonic in duration: none=%v short=%v long=%v — a longer "+
+			"stable connection did not raise reputation", none, short, long)
+	}
+
+	// The bonus is capped: it can never add more than gradeStabilityNudgeMax, so
+	// connection age cannot overturn uptime, grade, drop-stability or latency.
+	if long-none > gradeStabilityNudgeMax+1e-9 {
+		t.Fatalf("nudge added %v over the no-duration score, exceeding the %v ceiling — "+
+			"connection age is dominating the composite", long-none, gradeStabilityNudgeMax)
 	}
 }
 
