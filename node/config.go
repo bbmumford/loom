@@ -76,6 +76,18 @@ type Config struct {
 	// with the aether scheme (wired from this field) is the correct gate.
 	SwarmTrustMode string
 
+	// ShadowParityInterval, when > 0, paces a periodic comparison of the live
+	// LADDirectory (rt.liveDir) against the Swarm-backed trust-shadow
+	// projection and records any divergence into the shadow_parity_* mesh
+	// metrics plus a structured log. It is inert unless a trust shadow is also
+	// running (SwarmTrustMode="observe" builds it); with no shadow the pass
+	// finds nothing to compare and records nothing. 0 (the default) starts no
+	// comparison goroutine at all, so a default node adds zero readers of the
+	// live directory. Size it in the tens of seconds — each pass walks members,
+	// per-member reach and handler adverts on both sides, so a short interval
+	// multiplies those reads.
+	ShadowParityInterval time.Duration
+
 	// AdaptiveGossipCadence, when true, paces the gossip loop's adaptive
 	// interval from a live network profile (link type + measured peer RTT via
 	// GetPeerLatencies) instead of the built-in (GossipInterval, 2s, 60s)
