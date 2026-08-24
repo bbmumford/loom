@@ -431,6 +431,18 @@ type Runtime struct {
 		ledgerAppendErrors uint64
 	}
 
+	// Shadow-directory parity counters, written only by shadowParityPass and
+	// read only by MeshMetrics (surfaced as shadow_parity_*). shadowParityRuns
+	// counts completed comparison passes; shadowParityDiverged counts passes
+	// whose report was not in parity; shadowParityMismatches accumulates the
+	// individual mismatch lines those passes reported. All three stay at zero
+	// unless Config.ShadowParityInterval starts the comparison goroutine and a
+	// trust shadow supplies the second directory, so a default node never
+	// writes them.
+	shadowParityRuns       atomic.Uint64
+	shadowParityDiverged   atomic.Uint64
+	shadowParityMismatches atomic.Uint64
+
 	// Rate limiting for snapshots
 	snapshotRateLimitMu sync.Mutex
 	snapshotRateLimit   map[string]*rateLimitEntry
@@ -1048,6 +1060,13 @@ func Initialize(cfg Config) (*Runtime, error) {
 			// assignment visible to any goroutine started after it.
 			StartMeshServices(rt.ctx, rt.connMgr)
 			log.Printf("[NODE] Aether mesh services started")
+
+			// Start the shadow-directory parity comparison. Off unless
+			// Config.ShadowParityInterval is positive AND InitSwarm built a
+			// trust shadow (SwarmTrustMode="observe"); otherwise a no-op that
+			// starts no goroutine. Placed after InitSwarm so rt.swarm and its
+			// shadow are published, and after liveDir is wired above.
+			rt.startShadowParity()
 
 			// Poll the split-brain detector so clock divergence and silent-peer
 			// conditions are reported: this is Detect/LogStatus's only runtime
@@ -1960,6 +1979,14 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		m["lad_estimated_bytes"] = cs.TotalEstimatedBytes
 		m["lad_fingerprint"] = rt.cache.Fingerprint()
 	}
+
+	// Shadow-directory parity counters. Stay 0 unless the periodic comparison
+	// is running (Config.ShadowParityInterval > 0 with a trust shadow); a
+	// non-zero diverged/mismatch count means the Swarm shadow does not yet
+	// reproduce the live directory.
+	m["shadow_parity_runs"] = rt.shadowParityRuns.Load()
+	m["shadow_parity_diverged"] = rt.shadowParityDiverged.Load()
+	m["shadow_parity_mismatches"] = rt.shadowParityMismatches.Load()
 
 	// Aether session stats
 	m["sessions"] = rt.MeshSessionCount()

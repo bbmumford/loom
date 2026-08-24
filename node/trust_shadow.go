@@ -8,6 +8,7 @@ package node
 import (
 	"context"
 	"log"
+	"time"
 
 	"github.com/bbmumford/loom/directory"
 	"github.com/bbmumford/loom/journal"
@@ -134,4 +135,100 @@ func (s *TrustShadow) Stats() (checked, rejected, dropped uint64) {
 		return 0, 0, 0
 	}
 	return s.dir.Checked(), s.dir.Rejected(), s.dropped
+}
+
+// shadowParityScope names the tenant + role set the parity pass queries on both
+// directories. It reads the node's own configured tenant and roles: an empty
+// tenant selects records stored under the empty tenant (ports.Tenant is a
+// literal bucket key, not a wildcard), and the role list bounds the per-role
+// NodesByRole comparison to roles this node actually participates in.
+func (rt *Runtime) shadowParityScope() (ports.Tenant, []string) {
+	tenant := ports.Tenant("")
+	for _, tc := range rt.cfg.Tenants {
+		if tc.TenantID != "" {
+			tenant = ports.Tenant(tc.TenantID)
+			break
+		}
+	}
+	return tenant, rt.cfg.Roles
+}
+
+// startShadowParity launches the periodic directory-parity comparison and
+// reports whether it started. It is a TRUE no-op — starting no goroutine and
+// touching no counter — when Config.ShadowParityInterval is not positive or
+// when no shadow directory exists to compare against (rt.swarm/trustShadow or
+// rt.liveDir absent). When it does start, the ticker drives shadowParityPass
+// with rt.liveDir as the authoritative side and the trust shadow's projection
+// as the shadow side; the goroutine is enrolled in the runtime waitgroup and
+// stops on ctx cancellation.
+func (rt *Runtime) startShadowParity() bool {
+	interval := rt.cfg.ShadowParityInterval
+	if interval <= 0 {
+		return false
+	}
+	if rt.liveDir == nil || rt.swarm == nil || rt.swarm.trustShadow == nil {
+		return false
+	}
+	shadow := rt.swarm.trustShadow.Directory()
+	if shadow == nil {
+		return false
+	}
+	tenant, roles := rt.shadowParityScope()
+	log.Printf("[SHADOW-PARITY] periodic directory comparison started (interval=%v)", interval)
+	rt.GoCtx("shadow-parity", func(ctx context.Context) {
+		t := time.NewTicker(interval)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				rt.shadowParityPass(ctx, rt.liveDir, shadow, tenant, roles)
+			}
+		}
+	})
+	return true
+}
+
+// shadowParityPass runs one comparison between the authoritative directory and
+// the shadow projection and records divergence into the shadowParity* counters
+// plus a structured log. It is the body the ShadowParityInterval ticker drives,
+// factored out so a caller can perform a single pass without a live ticker.
+//
+// It first tries the cheap fingerprint check: two directories over the same
+// accepted set and the same record model agree byte-for-byte, so an equal
+// fingerprint proves parity without the per-capability walk. CompareFingerprints
+// refuses a cross-record-model pairing (the live directory and the Swarm shadow
+// project the same facts into different record shapes) with an error rather than
+// a false divergence — on that error, or on any fingerprint difference, the pass
+// escalates to the typed CompareDirectories walk, which is the comparison that
+// is meaningful across the two models. A report that is not InParity is the
+// evidence that the shadow does not yet reproduce the live directory.
+func (rt *Runtime) shadowParityPass(ctx context.Context, authoritative, shadow ports.LiveDirectory, tenant ports.Tenant, roles []string) {
+	if authoritative == nil || shadow == nil {
+		return
+	}
+	if equal, err := directory.CompareFingerprints(ctx, authoritative, shadow); err == nil && equal {
+		rt.shadowParityRuns.Add(1)
+		return
+	}
+	rep, err := directory.CompareDirectories(ctx, authoritative, shadow, tenant, roles)
+	if err != nil {
+		log.Printf("[SHADOW-PARITY] compare error: %v", err)
+		return
+	}
+	rt.shadowParityRuns.Add(1)
+	if rep.InParity() {
+		return
+	}
+	rt.shadowParityDiverged.Add(1)
+	rt.shadowParityMismatches.Add(uint64(len(rep.Mismatches)))
+	first := ""
+	if len(rep.Mismatches) > 0 {
+		first = rep.Mismatches[0]
+	}
+	log.Printf("[SHADOW-PARITY] divergence: %d mismatches, %d degraded axes "+
+		"(members=%d roles=%d reach=%d handlers=%d); first=%q",
+		len(rep.Mismatches), len(rep.Degraded),
+		rep.ComparedMembers, rep.ComparedRoles, rep.ComparedReach, rep.ComparedHandlers, first)
 }
