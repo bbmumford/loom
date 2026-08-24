@@ -43,6 +43,8 @@ github.com/bbmumford/route v0.0.3 h1:s8cX1QBQZnblT96bGLn959hFnv1C9r6PWZPU4qHAoMg
 github.com/bbmumford/route v0.0.3/go.mod h1:nHzeRgNtRqliH/afDIhzIdiX7Xm3Ms4bT3S3GGCA4fs=
 github.com/bbmumford/swarm v0.0.8 h1:MIBQdDalzaI/NgpvDYvU2FizCJ6howXI6SR2GDJMM48=
 github.com/bbmumford/swarm v0.0.8/go.mod h1:B1sQ2AQCxR0gPb0seE6KL2+QyXpxCcj81qVWdTfxkiM=
+github.com/bbmumford/swarm v0.0.9 h1:51Wlc/dFStNs8OBylNoFV100kEopiHCa4/fl05a47jo=
+github.com/bbmumford/swarm v0.0.9/go.mod h1:B1sQ2AQCxR0gPb0seE6KL2+QyXpxCcj81qVWdTfxkiM=
 github.com/bbmumford/tursoraft v0.0.6 h1:Pz41LDS4l1BUknSuOmBbkIUCgDPMb19AkS+28MFAcqM=
 github.com/bbmumford/tursoraft v0.0.6/go.mod h1:q1GeFxB1EcEIS8Y0sPfNVJrgjSt5InTL8lMxbLMr+/4=
 github.com/bbmumford/whisper v0.0.18 h1:p9C821P++ur8PtD91yV+IQerFHppJ2MCIV51fqC9WbY=

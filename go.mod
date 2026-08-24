@@ -10,7 +10,7 @@ require (
 	github.com/bbmumford/ledger v0.0.20
 	github.com/bbmumford/reach v0.0.14
 	github.com/bbmumford/route v0.0.3
-	github.com/bbmumford/swarm v0.0.8
+	github.com/bbmumford/swarm v0.0.9
 	github.com/bbmumford/tursoraft v0.0.6
 	github.com/bbmumford/whisper v0.0.18
 	github.com/go-chi/chi/v5 v5.3.1
