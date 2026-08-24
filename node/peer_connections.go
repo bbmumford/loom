@@ -4309,8 +4309,15 @@ func (m *ConnectionManager) feedReputationFromRTT() {
 		// Stability "since the current grade was established" devolves to
 		// "since the current connection was established" once congestion-
 		// driven demotion is gone — peer.lastConnected is the right
-		// timestamp, refreshed every successful gossip exchange.
-		m.reputationTracker.InjectGradeInfo(peer.nodeID, peer.lastConnected, gradeNorm)
+		// timestamp, refreshed every successful gossip exchange. The elapsed
+		// time since it is the connection duration that feeds ComputeScore's
+		// bounded grade-stability nudge; a zero (unset) timestamp feeds 0 so an
+		// unmeasured connection age never nudges the score.
+		var connectedDuration time.Duration
+		if !peer.lastConnected.IsZero() {
+			connectedDuration = time.Since(peer.lastConnected)
+		}
+		m.reputationTracker.InjectGradeInfo(peer.nodeID, peer.lastConnected, gradeNorm, connectedDuration)
 	}
 }
 

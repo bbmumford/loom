@@ -24,7 +24,24 @@ type PeerReputation struct {
 	Score            float64       // composite reputation score (0-1, higher is better)
 	GradeStableSince time.Time     // when the current grade was established (feeds stability factor)
 	EffectiveGrade   float64       // may differ from transport grade under sustained RTT bloat
+	// ConnectedDuration is how long the current connection to the peer has been
+	// unbroken, fed from peerConn.lastConnected via InjectGradeInfo. ComputeScore
+	// turns it into a small additive grade-stability nudge; a zero value adds
+	// nothing, so a never-measured peer scores exactly as it did before the
+	// nudge existed.
+	ConnectedDuration time.Duration
 }
+
+// gradeStabilityNudgeMax bounds the additive grade-stability nudge ComputeScore
+// derives from ConnectedDuration. Kept well below the smallest weighted
+// component (0.15) so a long-lived connection nudges rank without overturning
+// uptime, grade, drop-stability or latency.
+const gradeStabilityNudgeMax = 0.05
+
+// gradeStabilityNudgeHalfLife is the connection age at which the nudge reaches
+// half of gradeStabilityNudgeMax on its saturating curve. It sets how quickly
+// staying connected earns the bounded bonus.
+const gradeStabilityNudgeHalfLife = 10 * time.Minute
 
 // ComputeScore calculates the composite score from the individual metrics.
 //
@@ -72,7 +89,20 @@ func (r *PeerReputation) ComputeScore() {
 	}
 	latency := 1.0 / (1.0 + rttMs/50.0)
 
-	r.Score = 0.30*uptime + 0.30*grade + 0.25*stability + 0.15*latency
+	// Grade-stability nudge: an unbroken connection that has lasted a while is
+	// modest positive evidence a peer is steady, so it earns a small bounded
+	// bonus on top of the four weighted components. The curve saturates toward
+	// gradeStabilityNudgeMax, so no amount of uptime lets it dominate; a zero
+	// ConnectedDuration contributes exactly zero, leaving the pre-nudge score
+	// intact. The final clamp keeps Score within its documented 0-1 range once
+	// the additive term is included.
+	nudge := 0.0
+	if r.ConnectedDuration > 0 {
+		mins := r.ConnectedDuration.Minutes()
+		nudge = gradeStabilityNudgeMax * (mins / (mins + gradeStabilityNudgeHalfLife.Minutes()))
+	}
+
+	r.Score = clampFloat(0.30*uptime+0.30*grade+0.25*stability+0.15*latency+nudge, 0, 1)
 }
 
 // ReputationTracker computes peer reputation scores from a ConnectionEventLog.
@@ -300,9 +330,11 @@ func (rt *ReputationTracker) InjectRTT(nodeID string, rtt time.Duration) {
 	rep.ComputeScore()
 }
 
-// InjectGradeInfo updates the grade stability and effective grade for a peer.
-// Called with live data from peerConn since the event log doesn't carry these.
-func (rt *ReputationTracker) InjectGradeInfo(nodeID string, gradeStableSince time.Time, effectiveGrade float64) {
+// InjectGradeInfo updates the grade stability, effective grade and current
+// connection duration for a peer. Called with live data from peerConn since the
+// event log doesn't carry these. connectedDuration feeds the bounded
+// grade-stability nudge in ComputeScore; pass 0 to leave it out.
+func (rt *ReputationTracker) InjectGradeInfo(nodeID string, gradeStableSince time.Time, effectiveGrade float64, connectedDuration time.Duration) {
 	rt.mu.Lock()
 	defer rt.mu.Unlock()
 
@@ -312,6 +344,7 @@ func (rt *ReputationTracker) InjectGradeInfo(nodeID string, gradeStableSince tim
 	}
 	rep.GradeStableSince = gradeStableSince
 	rep.EffectiveGrade = effectiveGrade
+	rep.ConnectedDuration = connectedDuration
 	rep.ComputeScore()
 }
 
