@@ -347,6 +347,14 @@ func (r *HandlerRegistry) presencePolicy() scope.PresencePolicy {
 	return r.policy
 }
 
+// PresencePolicy returns the configured scope evaluator (or nil), letting an
+// out-of-package composition root confirm SetPresencePolicy seeded this mesh
+// registry. It reads the same field validateTenantScope consults, so a nil
+// return proves that path still fails closed. Mirrors rpc.Registry.PresencePolicy.
+func (r *HandlerRegistry) PresencePolicy() scope.PresencePolicy {
+	return r.presencePolicy()
+}
+
 // GetMiddleware returns global middleware followed by role-specific middleware.
 func (r *HandlerRegistry) GetMiddleware(role string) []Middleware {
 	r.mu.RLock()
