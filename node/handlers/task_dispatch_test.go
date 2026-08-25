@@ -105,7 +105,7 @@ func TestTaskScopeIgnoresMetadataIdentityHints(t *testing.T) {
 			return &TaskResult{TaskID: task.ID, Status: TaskStatusCompleted}, nil
 		},
 	}
-	registry := NewHandlerRegistry()
+	registry := newScopedRegistry()
 	registry.Use(&taskDispatchMiddleware{name: "scope-mw", events: &events})
 	if err := registry.RegisterTask(handler); err != nil {
 		t.Fatalf("RegisterTask: %v", err)
@@ -133,11 +133,7 @@ func TestTaskScopeIgnoresMetadataIdentityHints(t *testing.T) {
 		t.Fatalf("denied task reached handler/middleware: calls=%d events=%v", calls, events)
 	}
 
-	exact := tenantScope.WithAuthenticatedIdentity(platformOnly, tenantScope.AuthenticatedIdentity{
-		PlatformTenantID: "orbtr",
-		OrganizationID:   "org-1",
-		UserID:           "user-1",
-	})
+	exact := tenantScope.WithAuthenticatedIdentity(platformOnly, scopeIdentity("orbtr", "org-1", "user-1"))
 	result, err = registry.DispatchTask(exact, task)
 	if err != nil || result == nil || result.Status != TaskStatusCompleted {
 		t.Fatalf("exact authenticated DispatchTask=(%+v, %v)", result, err)

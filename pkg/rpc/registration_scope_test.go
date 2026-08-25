@@ -21,9 +21,15 @@ func TestTenantScopeHasInvalidZeroAndExplicitNone(t *testing.T) {
 	if ScopeNone == "" {
 		t.Fatal("ScopeNone is the empty string; the zero value is still permissive")
 	}
+	// The caller-facing alias is TenantScope; its canonical underlying defined
+	// type is scope.ScopeTag. What matters is that it is a DEFINED type (not a
+	// bare string), so an arbitrary string is not assignable as a scope.
 	typ := reflect.TypeOf(ScopeNone)
-	if typ.Name() != "TenantScope" {
-		t.Fatalf("TenantScope is not a defined type: reflect name = %q", typ.Name())
+	if typ.Name() != "ScopeTag" {
+		t.Fatalf("scope tag is not a defined type: reflect name = %q", typ.Name())
+	}
+	if typ.Kind() != reflect.String {
+		t.Fatalf("scope tag underlying kind = %v, want string", typ.Kind())
 	}
 }
 

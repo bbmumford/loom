@@ -59,7 +59,7 @@ var goldenHandlerRegistryMethods = []string{
 	"AllHandlers", "Count", "Dispatch", "DispatchStream", "DispatchTask",
 	"GetByRoleMeta", "GetMeta", "GetMiddleware", "Handlers", "IsRoleEnabled",
 	"List", "RegisterHandler", "RegisterRPC", "RegisterStream",
-	"RegisterTask", "SetEnabledRoles", "SetPlatformTenants", "Use",
+	"RegisterTask", "SetEnabledRoles", "SetPresencePolicy", "Use",
 	"UseForRole",
 }
 

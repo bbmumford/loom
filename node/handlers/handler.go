@@ -31,9 +31,9 @@ import (
 // rpc.TenantScope + rpc.Scope*; this handlers-side alias remains only so
 // the ~434 legacy call sites continue to compile during the migration.
 //
-// Do NOT add new constants HERE — declare them in rpc/scope/tenantscope.go
+// Do NOT add new constants HERE — declare them in rpc/scope/scopetag.go
 // and forward them from both re-exports. Finding rev-069.
-type TenantScope = scope.TenantScope
+type TenantScope = scope.ScopeTag
 
 // TenantScope* forwards to the canonical constants in rpc/scope. Because
 // each constant is a direct forward, drift between handlers.TenantScope*
@@ -44,16 +44,16 @@ type TenantScope = scope.TenantScope
 // for new code. These symbols remain to avoid a big-bang rename in ~434
 // legacy call sites, but will be deleted once migration completes.
 const (
-	TenantScopeNone     = scope.None     // Explicitly opts out of tenant restriction. Mirrors rpc.ScopeNone.
-	TenantScopePlatform = scope.Platform // HSTLES internal only. Mirrors rpc.ScopePlatform.
-	TenantScopeTenant   = scope.Tenant   // Requires valid tenant_id. Mirrors rpc.ScopeTenant.
-	TenantScopeOrg      = scope.Org      // Requires tenant + org membership. Mirrors rpc.ScopeOrg.
-	TenantScopeUser     = scope.User     // Requires tenant + own user data only. Mirrors rpc.ScopeUser.
-	TenantScopeProfile  = scope.Profile  // Requires tenant + billing-profile membership. Mirrors rpc.ScopeProfile (per Quorum ADR-0012).
+	TenantScopeNone     = scope.ScopeNone     // Opts out of scope enforcement. Mirrors rpc.ScopeNone.
+	TenantScopePlatform = scope.ScopePlatform // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopePlatform.
+	TenantScopeTenant   = scope.ScopeTenant   // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeTenant.
+	TenantScopeOrg      = scope.ScopeOrg      // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeOrg.
+	TenantScopeUser     = scope.ScopeUser     // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeUser.
+	TenantScopeProfile  = scope.ScopeProfile  // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeProfile.
 	// TenantScopeUnknown is the fail-closed sentinel, mirroring rpc.ScopeUnknown.
-	// validateTenantScope's default arm rejects any handler bound to this scope.
+	// validateTenantScope rejects any handler bound to this scope.
 	// Never set it manually — it exists so decay-to-empty-string cannot fail open.
-	TenantScopeUnknown = scope.Unknown
+	TenantScopeUnknown = scope.ScopeUnknown
 )
 
 // HandlerMeta contains metadata common to all handler types.
@@ -244,7 +244,7 @@ type HandlerRegistry struct {
 	enabledRoles       map[string]bool
 	roleMiddleware     map[string][]Middleware // per-role middleware
 	globalMiddleware   []Middleware            // runs for all handlers
-	platformTenants    scope.PlatformTenants   // exact, fail-closed platform allowlist
+	policy             scope.PresencePolicy    // consumer-supplied scope evaluator (nil fails closed)
 	registrationScopes map[*registrationScopeToken]*registrationScopeState
 	pendingHandlers    map[string]*registrationEntry
 	nextScopeID        uint64
@@ -326,21 +326,25 @@ func (r *HandlerRegistry) Use(mw Middleware) {
 	r.globalMiddleware = append(r.globalMiddleware, mw)
 }
 
-// SetPlatformTenants configures which tenant IDs are considered platform tenants.
-// Handlers with TenantScopePlatform will only accept requests from these tenants.
-// Each endpoint should call this at init, e.g. registry.SetPlatformTenants([]string{"hstles"}).
-func (r *HandlerRegistry) SetPlatformTenants(tenants []string) {
+// SetPresencePolicy configures the consumer-supplied evaluator that decides,
+// for every declared scope other than TenantScopeNone, whether the
+// server-established identity satisfies it. loom carries the opaque scope tag
+// and identity but interprets neither. A nil policy fails closed:
+// validateTenantScope denies every non-None handler when no policy is set.
+// Each endpoint should install its policy at init, e.g.
+// registry.SetPresencePolicy(myPolicy).
+func (r *HandlerRegistry) SetPresencePolicy(p scope.PresencePolicy) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.platformTenants = scope.NewPlatformTenants(tenants...)
+	r.policy = p
 }
 
-// isPlatformTenant delegates to the same canonical fail-closed evaluator used
-// by rpc.EnforceScope. An unset or empty allowlist authorizes nobody.
-func (r *HandlerRegistry) isPlatformTenant(tenantID string) bool {
+// presencePolicy returns the configured scope evaluator (or nil). A nil policy
+// fails closed at validateTenantScope for every non-None handler.
+func (r *HandlerRegistry) presencePolicy() scope.PresencePolicy {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.platformTenants.IsPlatform(tenantID)
+	return r.policy
 }
 
 // GetMiddleware returns global middleware followed by role-specific middleware.
@@ -820,49 +824,36 @@ func getUserIDFromContext(ctx context.Context) string {
 // organisation, or user identity.
 func (r *HandlerRegistry) validateTenantScope(ctx context.Context, h HandlerMeta) error {
 	declared := h.TenantScope()
-	identity := scope.AuthenticatedIdentityFromContext(ctx)
-	tenantID := identity.PlatformTenantID
-	switch scope.CheckPresence(declared, identity, r.isPlatformTenant(tenantID)) {
-	case scope.PresenceSatisfied:
-		// Continue through allowlist and transport reconciliation.
-	case scope.PresencePlatformRequired:
-		return fmt.Errorf("%w: handler %s requires authenticated platform access, got tenant: %q", scope.ErrDenied, h.Name(), tenantID)
-	case scope.PresenceTenantRequired:
-		return fmt.Errorf("%w: handler %s requires authenticated platform tenant context", scope.ErrDenied, h.Name())
-	case scope.PresenceOrganizationRequired:
-		return fmt.Errorf("%w: handler %s requires authenticated organisation context", scope.ErrDenied, h.Name())
-	case scope.PresenceUserRequired:
-		return fmt.Errorf("%w: handler %s requires authenticated user context", scope.ErrDenied, h.Name())
-	case scope.PresenceUnknownScope:
-		if declared == TenantScopeUnknown {
-			return fmt.Errorf("%w: handler %s has fail-closed TenantScopeUnknown — add an explicit scope declaration", scope.ErrDenied, h.Name())
-		}
-		return fmt.Errorf("%w: handler %s declares unknown tenant scope %q — reject to preserve isolation guarantee", scope.ErrDenied, h.Name(), declared)
-	default:
-		return fmt.Errorf("%w: handler %s declares unknown tenant scope %q — reject to preserve isolation guarantee", scope.ErrDenied, h.Name(), declared)
-	}
-
-	if declared == TenantScopeNone {
+	if declared == scope.ScopeNone {
+		// Explicit opt-out — the one tag loom admits without a policy.
 		return nil
 	}
+	if declared == scope.ScopeUnset {
+		return fmt.Errorf("%w: handler %s has an undeclared tenant scope (ScopeUnset) — declare a scope tier explicitly", scope.ErrDenied, h.Name())
+	}
 
-	allowed := h.AllowedTenants()
-	if len(allowed) > 0 {
-		found := false
-		for _, a := range allowed {
-			if a == tenantID {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return fmt.Errorf("%w: tenant %q not authorized for handler %s", scope.ErrDenied, tenantID, h.Name())
-		}
+	identity := scope.AuthenticatedIdentityFromContext(ctx)
+
+	// loom delegates ALL scope semantics to the consumer-supplied policy. A
+	// nil policy fails CLOSED: without an evaluator loom cannot judge presence
+	// for a handler that opted into enforcement, and the failure mode of this
+	// core is a silent fail-OPEN. This also rejects ScopeUnknown (not a
+	// declarable tag) via the policy, which must report it unsatisfied.
+	policy := r.presencePolicy()
+	if policy == nil {
+		return fmt.Errorf("%w: handler %s requires a presence policy but none is configured", scope.ErrDenied, h.Name())
+	}
+	if ok, reason := policy.CheckPresence(declared, identity); !ok {
+		return fmt.Errorf("%w: handler %s denied by presence policy: %s", scope.ErrDenied, h.Name(), reason)
 	}
 
 	// Transport-level verification: if the session arrived on a tenant-specific
-	// transport (dedicated or shared preamble), the request's tenant_id must match.
-	// "default" transport (single-tenant fallback) allows any request tenant.
+	// transport (dedicated or shared preamble), the request's platform-tenant
+	// axis must match. "default" transport (single-tenant fallback) allows any
+	// request tenant. This reconciliation does not interpret the scope tag; it
+	// checks the transport binding against the identity's platform-tenant axis,
+	// which WithTransportTenant established from the same server-resolved value.
+	tenantID := identity.Scope(scope.AxisPlatformTenant)
 	transportTenant := TransportTenantFromContext(ctx)
 	if transportTenant != "" && transportTenant != "default" && tenantID != "" {
 		if transportTenant != tenantID {
@@ -1370,7 +1361,7 @@ type transportTenantCtxKey struct{}
 // tenant-aware listener.
 func WithTransportTenant(ctx context.Context, tenantID string) context.Context {
 	ctx = context.WithValue(ctx, transportTenantCtxKey{}, tenantID)
-	return scope.WithAuthenticatedPlatformTenant(ctx, tenantID)
+	return scope.WithAuthenticatedScope(ctx, scope.AxisPlatformTenant, tenantID)
 }
 
 // TransportTenantFromContext extracts the transport-level tenant ID from context.

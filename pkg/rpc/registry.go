@@ -11,10 +11,10 @@ import (
 // Registry holds all registered handlers, indexed by FQN.
 // Thread-safe for concurrent registration during init.
 type Registry struct {
-	mu        sync.RWMutex
-	handlers  map[string]*Handler   // FQN → Handler
-	byRole    map[string][]*Handler // "namespace.domain" → handlers
-	platforms PlatformTenants       // set of tenantIds that satisfy ScopePlatform
+	mu       sync.RWMutex
+	handlers map[string]*Handler   // FQN → Handler
+	byRole   map[string][]*Handler // "namespace.domain" → handlers
+	policy   scope.PresencePolicy  // consumer-supplied scope evaluator (nil fails closed)
 }
 
 // NewRegistry creates an empty handler registry.
@@ -25,23 +25,24 @@ func NewRegistry() *Registry {
 	}
 }
 
-// SetPlatformTenants configures the set of tenantIds whose calls satisfy
-// ScopePlatform handlers. Must be called before Dispatch / HandleRPC starts
-// accepting traffic. Pass nil (the zero value) to keep platform checks
-// failing closed — the safer default for any registry where the platform
-// set is genuinely unknown.
-func (r *Registry) SetPlatformTenants(t PlatformTenants) {
+// SetPresencePolicy configures the consumer-supplied evaluator that decides,
+// for every declared scope other than ScopeNone, whether the server-established
+// identity satisfies it. Must be called before Dispatch / HandleRPC starts
+// accepting traffic. Pass nil (the zero value) to keep scope enforcement
+// failing closed — the safer default for any registry that has not adopted a
+// policy: EnforceScope denies every non-None handler when the policy is nil.
+func (r *Registry) SetPresencePolicy(p scope.PresencePolicy) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.platforms = t
+	r.policy = p
 }
 
-// PlatformTenants returns the configured platform set (or nil).
-// Read-only — callers must not mutate the returned map.
-func (r *Registry) PlatformTenants() PlatformTenants {
+// PresencePolicy returns the configured scope evaluator (or nil). A nil policy
+// fails closed at EnforceScope for every non-None handler.
+func (r *Registry) PresencePolicy() scope.PresencePolicy {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	return r.platforms
+	return r.policy
 }
 
 // Register adds a handler to the registry.

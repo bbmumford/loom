@@ -29,13 +29,14 @@ func AuthenticatedIdentityFromContext(ctx context.Context) AuthenticatedIdentity
 	return identity
 }
 
-// WithAuthenticatedPlatformTenant installs a new platform-only identity
-// snapshot. The mesh transport uses this when it binds a session to its
-// server-resolved ScopeID. It must not retain organisation or user components
-// from an earlier platform snapshot: those components are valid only when a
-// trusted adapter establishes the complete identity together.
-func WithAuthenticatedPlatformTenant(ctx context.Context, tenantID string) context.Context {
+// WithAuthenticatedScope installs a new single-axis identity snapshot carrying
+// exactly one named axis. The mesh transport uses this when it binds a session
+// to its server-resolved ScopeID (name=AxisPlatformTenant). It REPLACES any
+// earlier snapshot rather than merging: additional axes are valid only when a
+// trusted adapter establishes the complete identity together, so a single-axis
+// bind must not retain other components from an earlier snapshot.
+func WithAuthenticatedScope(ctx context.Context, name, value string) context.Context {
 	return WithAuthenticatedIdentity(ctx, AuthenticatedIdentity{
-		PlatformTenantID: tenantID,
+		Scopes: []ScopeValue{{Name: name, Value: value}},
 	})
 }

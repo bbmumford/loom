@@ -14,10 +14,15 @@ import (
 )
 
 func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing.T) {
+	identity := tenantScope.AuthenticatedIdentity{
+		Scopes: []tenantScope.ScopeValue{
+			{Name: tenantScope.AxisPlatformTenant, Value: "orbtr"},
+			{Name: tenantScope.AxisCustomerOrg, Value: "org-A"},
+		},
+		Subject: "user-A",
+	}
 	principal, err := tenantScope.NewAuthenticatedPrincipal(
-		"orbtr",
-		"org-A",
-		"user-A",
+		identity,
 		[]string{"orbtr.io.plugins.read", "orbtr.io.plugins.publish"},
 	)
 	if err != nil {
@@ -60,12 +65,14 @@ func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing
 }
 
 func TestBuildRPCRequestCtxDoesNotRewritePrincipalToCallerPlatform(t *testing.T) {
-	principal, err := tenantScope.NewAuthenticatedPrincipal(
-		"foreign-platform",
-		"org-A",
-		"user-A",
-		nil,
-	)
+	identity := tenantScope.AuthenticatedIdentity{
+		Scopes: []tenantScope.ScopeValue{
+			{Name: tenantScope.AxisPlatformTenant, Value: "foreign-platform"},
+			{Name: tenantScope.AxisCustomerOrg, Value: "org-A"},
+		},
+		Subject: "user-A",
+	}
+	principal, err := tenantScope.NewAuthenticatedPrincipal(identity, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

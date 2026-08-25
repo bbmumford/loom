@@ -966,11 +966,15 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 	}
 	var wirePrincipal *pb.AuthenticatedPrincipal
 	if principal, ok := tenantScope.AuthenticatedPrincipalFromContext(ctx); ok {
+		// Map loom's opaque identity axes onto the deployed proto fields
+		// (unchanged wire): the platform-tenant/customer-org axes and the
+		// subject travel in PlatformTenantId/CustomerOrgId/UserId, the grants
+		// in Scopes. An axis that was never established reads back "".
 		identity := principal.Identity()
 		wirePrincipal = &pb.AuthenticatedPrincipal{
-			PlatformTenantId: identity.PlatformTenantID,
-			CustomerOrgId:    identity.OrganizationID,
-			UserId:           identity.UserID,
+			PlatformTenantId: identity.Scope(tenantScope.AxisPlatformTenant),
+			CustomerOrgId:    identity.Scope(tenantScope.AxisCustomerOrg),
+			UserId:           identity.Subject,
 			Scopes:           principal.Scopes(),
 		}
 	}

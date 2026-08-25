@@ -19,7 +19,73 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/bbmumford/loom/pkg/rpc"
+	"github.com/bbmumford/loom/pkg/rpc/scope"
 )
+
+// refPolicy is a CONSUMER-side reference PresencePolicy that reproduces the
+// platform's historical presence semantics so the bridge's enforcement can be
+// exercised. loom itself no longer contains this logic — the bridge delegates
+// to whatever policy the registry carries; a nil policy fails closed.
+func refPolicy(platforms ...string) scope.PresencePolicyFunc {
+	allow := make(map[string]struct{}, len(platforms))
+	for _, p := range platforms {
+		if p != "" {
+			allow[p] = struct{}{}
+		}
+	}
+	return func(declared scope.ScopeTag, id scope.AuthenticatedIdentity) (bool, string) {
+		tenant := id.Scope(scope.AxisPlatformTenant)
+		switch declared {
+		case scope.ScopeNone:
+			return true, ""
+		case scope.ScopePlatform:
+			if tenant == "" {
+				return false, "platform tenant required"
+			}
+			if _, ok := allow[tenant]; !ok {
+				return false, "tenant not in platform allowlist"
+			}
+		case scope.ScopeTenant:
+			if tenant == "" {
+				return false, "tenant required"
+			}
+		case scope.ScopeOrg:
+			if tenant == "" {
+				return false, "tenant required"
+			}
+			if id.Scope(scope.AxisCustomerOrg) == "" {
+				return false, "organisation required"
+			}
+		case scope.ScopeUser:
+			if tenant == "" {
+				return false, "tenant required"
+			}
+			if id.Subject == "" {
+				return false, "user required"
+			}
+		case scope.ScopeProfile:
+			if tenant == "" {
+				return false, "tenant required"
+			}
+		default:
+			return false, "unknown scope"
+		}
+		return true, ""
+	}
+}
+
+// idAxes builds an opaque identity from the deployed axes, omitting any empty
+// axis (an absent axis must stay absent).
+func idAxes(tenant, org, user string) rpc.AuthenticatedScopeIdentity {
+	id := rpc.AuthenticatedScopeIdentity{Subject: user}
+	if tenant != "" {
+		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisPlatformTenant, Value: tenant})
+	}
+	if org != "" {
+		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisCustomerOrg, Value: org})
+	}
+	return id
+}
 
 // Finding rev-081 tests — the HTTP bridge's executeLocal and executeProxy
 // MUST mirror Registry.Dispatch's pre-handler gates:
@@ -50,6 +116,10 @@ func stubHandler(scope rpc.TenantScope) rpc.Handler {
 func newBridgeWithHandler(t *testing.T, h rpc.Handler) (*Bridge, *rpc.Handler) {
 	t.Helper()
 	reg := rpc.NewRegistry()
+	// Install a reference policy so declared scopes evaluate under realistic
+	// semantics; without one, EnforceScope fails closed on every non-None
+	// handler (exercised separately by the nil-policy tests).
+	reg.SetPresencePolicy(refPolicy("orbtr", "hstles"))
 	if err := reg.Register(h); err != nil {
 		t.Fatalf("register: %v", err)
 	}
@@ -111,10 +181,7 @@ func TestExecuteLocal_ScopeNone_Passes(t *testing.T) {
 // ctx (tenantId+userId) satisfies ScopeUser and the handler runs.
 func TestExecuteLocal_ScopeUser_StampedCtx_Passes(t *testing.T) {
 	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopeUser))
-	ctx := rpc.WithAuthenticatedScopeIdentity(context.Background(), rpc.AuthenticatedScopeIdentity{
-		PlatformTenantID: "orbtr",
-		UserID:           "u-1",
-	})
+	ctx := rpc.WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "", "u-1"))
 	out, err := bridge.executeLocal(newPostRequest(ctx), h, &structpb.Struct{})
 	if err != nil {
 		t.Fatalf("stamped ctx must satisfy ScopeUser, got %v", err)
@@ -149,10 +216,7 @@ func TestExecuteLocal_ScopeOrg_IgnoresMutableWireHints(t *testing.T) {
 		t.Fatalf("handler ran on wire-only identity: calls=%d", calls)
 	}
 
-	exact := rpc.WithAuthenticatedScopeIdentity(hintOnly, rpc.AuthenticatedScopeIdentity{
-		PlatformTenantID: "orbtr",
-		OrganizationID:   "org-1",
-	})
+	exact := rpc.WithAuthenticatedScopeIdentity(hintOnly, idAxes("orbtr", "org-1", ""))
 	hints["tenantId"] = "mutated-too"
 	hints["orgId"] = "conflicting"
 	if _, err := bridge.executeLocal(newPostRequest(exact), h, &structpb.Struct{}); err != nil {
@@ -163,12 +227,43 @@ func TestExecuteLocal_ScopeOrg_IgnoresMutableWireHints(t *testing.T) {
 	}
 }
 
-// TestExecuteProxy_ScopePlatform_NilPlatforms_Allowed — a thin gateway
-// (no SetPlatformTenants) MUST NOT 403 a ScopePlatform proxy handler; the
-// destination registry runs the real enforcement. Reviewer concern C3.
-func TestExecuteProxy_ScopePlatform_NilPlatforms_Allowed(t *testing.T) {
+// TestExecuteProxy_NilPolicy_FailsClosed — a gateway with no PresencePolicy
+// MUST fail closed on a proxy handler that declares a scope. The old fail-OPEN
+// carve-out (a thin gateway with nil platforms was allowed to forward a
+// ScopePlatform proxy unenforced) is deliberately gone: the proxy path now runs
+// EnforceScope with the registry's policy exactly as the local path does, and a
+// nil policy denies. A gateway that proxies scoped handlers must install a
+// policy.
+func TestExecuteProxy_NilPolicy_FailsClosed(t *testing.T) {
+	for _, s := range []rpc.TenantScope{rpc.ScopePlatform, rpc.ScopeTenant, rpc.ScopeOrg} {
+		reg := rpc.NewRegistry() // no SetPresencePolicy → nil policy
+		h := rpc.Handler{
+			Namespace: "test",
+			Domain:    "rev081",
+			Operation: "Op",
+			Request:   (*structpb.Struct)(nil),
+			Response:  (*structpb.Struct)(nil),
+			Scope:     s,
+		}
+		if err := reg.Register(h); err != nil {
+			t.Fatalf("register %q: %v", s, err)
+		}
+		bridge := NewBridge(reg)
+		stored, _ := reg.Get(h.FQN())
+		_, err := bridge.executeProxy(newPostRequest(context.Background()), stored, &structpb.Struct{})
+		if !errors.Is(err, rpc.ErrScopeDenied) {
+			t.Fatalf("nil-policy gateway must 403 scoped proxy %q, got %v", s, err)
+		}
+	}
+}
+
+// TestExecuteProxy_Policy_PlatformSatisfied_ReachesMesh — with a policy that
+// admits the platform tenant, a ScopePlatform proxy passes scope enforcement
+// and proceeds to mesh dispatch; the resulting error is a mesh/caller error,
+// NOT ErrScopeDenied.
+func TestExecuteProxy_Policy_PlatformSatisfied_ReachesMesh(t *testing.T) {
 	reg := rpc.NewRegistry()
-	// Proxy handler: Func nil, ScopePlatform.
+	reg.SetPresencePolicy(refPolicy("orbtr"))
 	h := rpc.Handler{
 		Namespace: "test",
 		Domain:    "rev081",
@@ -183,14 +278,10 @@ func TestExecuteProxy_ScopePlatform_NilPlatforms_Allowed(t *testing.T) {
 	bridge := NewBridge(reg)
 	stored, _ := reg.Get(h.FQN())
 
-	// PlatformTenants is nil — IsPlatform always false. Without the C3
-	// guard this would 403 before mesh dispatch. With the guard, scope
-	// is skipped and we proceed to mesh — proto.Marshal succeeds, then
-	// rpc.CallRaw is invoked. We expect a mesh error (no caller wired),
-	// NOT a scope error.
-	_, err := bridge.executeProxy(newPostRequest(context.Background()), stored, &structpb.Struct{})
+	ctx := rpc.WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "", ""))
+	_, err := bridge.executeProxy(newPostRequest(ctx), stored, &structpb.Struct{})
 	if errors.Is(err, rpc.ErrScopeDenied) {
-		t.Fatalf("thin gateway must not 403 ScopePlatform proxy, got ErrScopeDenied")
+		t.Fatalf("policy-admitted platform tenant must pass scope on proxy path, got ErrScopeDenied")
 	}
 }
 
@@ -198,6 +289,7 @@ func TestExecuteProxy_ScopePlatform_NilPlatforms_Allowed(t *testing.T) {
 // on the proxy path so malformed callers fail before wasting mesh dispatch.
 func TestExecuteProxy_ScopeTenant_Denied(t *testing.T) {
 	reg := rpc.NewRegistry()
+	reg.SetPresencePolicy(refPolicy())
 	h := rpc.Handler{
 		Namespace: "test",
 		Domain:    "rev081",

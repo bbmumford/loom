@@ -17,6 +17,32 @@ import (
 	"github.com/bbmumford/loom/ports"
 )
 
+// customerScopePolicy is a CONSUMER-side reference PresencePolicy admitting a
+// customer-org principal. loom no longer contains presence semantics — the
+// receive path reconstructs the opaque identity and this policy judges it.
+func customerScopePolicy() tenantScope.PresencePolicyFunc {
+	return func(declared handlers.TenantScope, id tenantScope.AuthenticatedIdentity) (bool, string) {
+		tenant := id.Scope(tenantScope.AxisPlatformTenant)
+		switch declared {
+		case handlers.TenantScopeNone:
+			return true, ""
+		case handlers.TenantScopeOrg:
+			if tenant == "" {
+				return false, "authenticated platform tenant context required"
+			}
+			if id.Scope(tenantScope.AxisCustomerOrg) == "" {
+				return false, "authenticated organisation context required"
+			}
+			return true, ""
+		default:
+			if tenant == "" {
+				return false, "authenticated platform tenant context required"
+			}
+			return true, ""
+		}
+	}
+}
+
 type customerPrincipalProbe struct {
 	calls int32
 	got   tenantScope.AuthenticatedPrincipal
@@ -79,6 +105,7 @@ func customerPrincipalRequest() *pb.RPCRequest {
 
 func TestRPCServerBindsTypedPrincipalFromTenantTransport(t *testing.T) {
 	registry := handlers.NewHandlerRegistry()
+	registry.SetPresencePolicy(customerScopePolicy())
 	probe := &customerPrincipalProbe{}
 	if err := registry.RegisterRPC(probe); err != nil {
 		t.Fatal(err)
@@ -95,11 +122,9 @@ func TestRPCServerBindsTypedPrincipalFromTenantTransport(t *testing.T) {
 	if got := atomic.LoadInt32(&probe.calls); got != 1 {
 		t.Fatalf("handler calls = %d", got)
 	}
-	if identity := probe.got.Identity(); identity != (tenantScope.AuthenticatedIdentity{
-		PlatformTenantID: "orbtr",
-		OrganizationID:   "org-A",
-		UserID:           "user-A",
-	}) {
+	if identity := probe.got.Identity(); identity.Scope(tenantScope.AxisPlatformTenant) != "orbtr" ||
+		identity.Scope(tenantScope.AxisCustomerOrg) != "org-A" ||
+		identity.Subject != "user-A" {
 		t.Fatalf("handler identity = %#v", identity)
 	}
 	if got := probe.got.Scopes(); len(got) != 2 ||
@@ -191,6 +216,7 @@ func TestRPCServerRejectsPrincipalTamperingBeforeHandler(t *testing.T) {
 
 func TestRPCServerMutableContextCannotCreateCustomerPrincipal(t *testing.T) {
 	registry := handlers.NewHandlerRegistry()
+	registry.SetPresencePolicy(customerScopePolicy())
 	probe := &customerPrincipalProbe{}
 	if err := registry.RegisterRPC(probe); err != nil {
 		t.Fatal(err)

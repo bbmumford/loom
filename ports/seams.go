@@ -31,11 +31,12 @@ import (
 // metrics schema is unchanged.
 type MeshFallbackStatsFunc func() (hits, misses uint64)
 
-// TenantScope is the tenant-isolation level of a handler. It aliases the one
-// canonical defined type in pkg/rpc/scope, so SecureHandler remains
-// structurally satisfied by registry metadata without permitting arbitrary
-// strings or creating a second scope identity.
-type TenantScope = scope.TenantScope
+// TenantScope is the opaque scope label of a handler. It keeps the historical
+// name but aliases the one canonical defined type (scope.ScopeTag) in
+// pkg/rpc/scope, so SecureHandler remains structurally satisfied by registry
+// metadata without permitting arbitrary strings or creating a second scope
+// identity.
+type TenantScope = scope.ScopeTag
 
 // SecureHandler is the handler metadata surface AuthValidator judges.
 // It mirrors platform/security/helpers.SecureHandler method-for-method

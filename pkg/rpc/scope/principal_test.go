@@ -10,15 +10,30 @@ import (
 	"testing"
 )
 
+func customerIdentity() AuthenticatedIdentity {
+	return AuthenticatedIdentity{
+		Scopes: []ScopeValue{
+			{Name: AxisPlatformTenant, Value: "orbtr"},
+			{Name: AxisCustomerOrg, Value: "org-A"},
+		},
+		Subject: "user-A",
+	}
+}
+
 func TestAuthenticatedPrincipalIsDefensivelyCopied(t *testing.T) {
 	inputScopes := []string{"orbtr.io.plugins.read", "orbtr.io.plugins.publish"}
-	principal, err := NewAuthenticatedPrincipal("orbtr", "org-A", "user-A", inputScopes)
+	identity := customerIdentity()
+	principal, err := NewAuthenticatedPrincipal(identity, inputScopes)
 	if err != nil {
 		t.Fatalf("NewAuthenticatedPrincipal: %v", err)
 	}
 	ctx := WithAuthenticatedPrincipal(context.Background(), principal)
 
+	// Mutate BOTH inputs after construction: neither the grants slice nor the
+	// identity axis slice may reach the stored snapshot.
 	inputScopes[0] = "forged.input"
+	identity.Scopes[0].Value = "forged.axis"
+
 	first, ok := AuthenticatedPrincipalFromContext(ctx)
 	if !ok {
 		t.Fatal("authenticated principal missing from context")
@@ -33,55 +48,43 @@ func TestAuthenticatedPrincipalIsDefensivelyCopied(t *testing.T) {
 	if got := second.Scopes(); got[0] != "orbtr.io.plugins.read" || got[1] != "orbtr.io.plugins.publish" {
 		t.Fatalf("stored scopes mutated through retained slice: %v", got)
 	}
-	if got := AuthenticatedIdentityFromContext(ctx); got != (AuthenticatedIdentity{
-		PlatformTenantID: "orbtr",
-		OrganizationID:   "org-A",
-		UserID:           "user-A",
-	}) {
+	got := AuthenticatedIdentityFromContext(ctx)
+	if got.Scope(AxisPlatformTenant) != "orbtr" ||
+		got.Scope(AxisCustomerOrg) != "org-A" ||
+		got.Subject != "user-A" {
 		t.Fatalf("scope identity = %#v", got)
 	}
 }
 
-func TestAuthenticatedPrincipalRejectsNonCanonicalAuthority(t *testing.T) {
+// TestAuthenticatedPrincipalRejectsNonCanonicalGrants proves loom still
+// validates the ONE thing it copies literally — the grant strings — even
+// though it treats the identity axes as opaque.
+func TestAuthenticatedPrincipalRejectsNonCanonicalGrants(t *testing.T) {
 	tests := []struct {
-		name     string
-		platform string
-		org      string
-		user     string
-		scopes   []string
+		name   string
+		grants []string
 	}{
-		{name: "missing platform"},
-		{name: "padded platform", platform: " orbtr"},
-		{name: "padded org", platform: "orbtr", org: "org-A "},
-		{name: "padded user", platform: "orbtr", user: " user-A"},
-		{name: "empty scope", platform: "orbtr", scopes: []string{""}},
-		{name: "padded scope", platform: "orbtr", scopes: []string{"scope.read "}},
+		{name: "empty scope", grants: []string{""}},
+		{name: "padded scope", grants: []string{"scope.read "}},
+		{name: "leading space scope", grants: []string{" scope.read"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewAuthenticatedPrincipal(
-				tc.platform,
-				tc.org,
-				tc.user,
-				tc.scopes,
-			); err == nil {
-				t.Fatal("NewAuthenticatedPrincipal unexpectedly accepted invalid authority")
+			if _, err := NewAuthenticatedPrincipal(customerIdentity(), tc.grants); err == nil {
+				t.Fatal("NewAuthenticatedPrincipal unexpectedly accepted non-canonical grants")
 			}
 		})
 	}
 }
 
 func TestAuthenticatedPrincipalReplacementDoesNotMergeAxes(t *testing.T) {
-	customer, err := NewAuthenticatedPrincipal(
-		"orbtr",
-		"org-A",
-		"user-A",
-		[]string{"org.read"},
-	)
+	customer, err := NewAuthenticatedPrincipal(customerIdentity(), []string{"org.read"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	platformOnly, err := NewAuthenticatedPrincipal("orbtr", "", "", nil)
+	platformOnly, err := NewAuthenticatedPrincipal(AuthenticatedIdentity{
+		Scopes: []ScopeValue{{Name: AxisPlatformTenant, Value: "orbtr"}},
+	}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -93,10 +96,27 @@ func TestAuthenticatedPrincipalReplacementDoesNotMergeAxes(t *testing.T) {
 	if !ok {
 		t.Fatal("replacement principal missing")
 	}
-	if identity := got.Identity(); identity.OrganizationID != "" || identity.UserID != "" {
+	if identity := got.Identity(); identity.Scope(AxisCustomerOrg) != "" || identity.Subject != "" {
 		t.Fatalf("replacement retained prior axes: %#v", identity)
 	}
 	if scopes := got.Scopes(); len(scopes) != 0 {
 		t.Fatalf("replacement retained prior scopes: %v", scopes)
+	}
+}
+
+// TestEmptyPrincipalIsNotStamped proves an identity with no axes and no subject
+// confers no authority: it is not Valid and WithAuthenticatedPrincipal leaves
+// the context without a principal.
+func TestEmptyPrincipalIsNotStamped(t *testing.T) {
+	empty, err := NewAuthenticatedPrincipal(AuthenticatedIdentity{}, nil)
+	if err != nil {
+		t.Fatalf("NewAuthenticatedPrincipal(empty): %v", err)
+	}
+	if empty.Valid() {
+		t.Fatal("empty principal reported Valid")
+	}
+	ctx := WithAuthenticatedPrincipal(context.Background(), empty)
+	if _, ok := AuthenticatedPrincipalFromContext(ctx); ok {
+		t.Fatal("empty principal was stamped onto context")
 	}
 }
