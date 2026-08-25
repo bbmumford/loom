@@ -259,7 +259,7 @@ func (b *Bridge) dispatch(w http.ResponseWriter, r *http.Request, h *rpc.Handler
 // ErrWebhookSignatureInvalid / ErrWebhookSecretUnset → 401, keeping
 // status-code shaping single-sourced.
 func (b *Bridge) executeLocal(r *http.Request, h *rpc.Handler, req proto.Message) ([]byte, error) {
-	if err := rpc.EnforceScope(r.Context(), h, b.registry.PlatformTenants()); err != nil {
+	if err := rpc.EnforceScope(r.Context(), h, b.registry.PresencePolicy()); err != nil {
 		return nil, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()}
 	}
 	if h.WebhookSignature != nil {
@@ -283,36 +283,20 @@ func (b *Bridge) executeLocal(r *http.Request, h *rpc.Handler, req proto.Message
 // route failures (only "session closed before send" qualifies — see
 // errmap.go for why other "all probes failed" returns can't safely retry).
 //
-// Scope enforcement caveat (finding rev-081, reviewer concern C3): gateway
-// endpoints (app.orbtr.io, bootstrap.hstles.com — see
-// project_v0_0_301_swarm_address_bridge) do NOT call SetPlatformTenants
-// on their proxy registry. PlatformTenants() therefore returns nil, and
-// IsPlatform always answers false. A ScopePlatform handler that is
-// legitimately reachable at the destination would 403 on the gateway
-// before the request ever crossed the mesh.
-//
-// We resolve this by NOT enforcing scope on the proxy path when the
-// handler is ScopePlatform AND the proxy registry has no platforms
-// configured — verification is the destination's responsibility, which
-// always runs Registry.Dispatch and always enforces. Webhook-signature
-// verification is also deferred to the destination (the gateway typically
-// doesn't carry the secret env var; running it here would fail-closed on
-// every signed event passing through a thin gateway).
-//
-// All non-Platform scopes (Tenant/Org/User/Profile) ARE enforced here —
-// those tiers only need the wire-stamped ctx fields, which the gateway
-// has after tenantInjector ran, and enforcing fail-closes a malformed
-// ctx before we waste mesh bandwidth on a doomed call.
+// Scope enforcement fails CLOSED here for every non-nil handler: EnforceScope
+// runs with this registry's PresencePolicy exactly as the local path does. A
+// gateway that proxies handlers declaring a scope MUST install a PresencePolicy
+// (typically one that defers the axis-bearing tags to the destination while
+// still validating the wire-stamped presence it can see); with a nil policy
+// EnforceScope denies every non-None handler rather than silently forwarding an
+// unevaluated call — the fail-OPEN carve-out for the old ScopePlatform/nil-set
+// case is deliberately gone. Webhook-signature verification is still deferred
+// to the destination (the gateway typically doesn't carry the secret env var;
+// running it here would fail-closed on every signed event passing through a
+// thin gateway), which always runs Registry.Dispatch and always enforces.
 func (b *Bridge) executeProxy(r *http.Request, h *rpc.Handler, req proto.Message) ([]byte, error) {
-	if h != nil && h.Scope != rpc.ScopePlatform {
-		if err := rpc.EnforceScope(r.Context(), h, b.registry.PlatformTenants()); err != nil {
-			return nil, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()}
-		}
-	} else if h != nil && b.registry.PlatformTenants() != nil {
-		// ScopePlatform AND this registry knows the platform set — enforce.
-		// (Node endpoints that proxy ScopePlatform handlers DO configure
-		// platforms; only the thin gateways with nil set are exempted.)
-		if err := rpc.EnforceScope(r.Context(), h, b.registry.PlatformTenants()); err != nil {
+	if h != nil {
+		if err := rpc.EnforceScope(r.Context(), h, b.registry.PresencePolicy()); err != nil {
 			return nil, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()}
 		}
 	}

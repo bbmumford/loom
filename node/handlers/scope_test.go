@@ -31,6 +31,80 @@ func (s *stubMeta) Scopes() []string           { return nil }
 func (s *stubMeta) TenantScope() TenantScope   { return s.scope }
 func (s *stubMeta) AllowedTenants() []string   { return s.allowed }
 
+// scopeRefPolicy is a CONSUMER-side reference PresencePolicy reproducing the
+// platform's historical presence semantics. loom no longer contains this
+// logic — validateTenantScope delegates every declared (non-None) tag to
+// whatever policy the registry carries; a nil policy fails closed. The reason
+// strings mirror the diagnostics these tests characterise.
+func scopeRefPolicy(platforms ...string) tenantScope.PresencePolicyFunc {
+	allow := make(map[string]struct{}, len(platforms))
+	for _, p := range platforms {
+		if p != "" {
+			allow[p] = struct{}{}
+		}
+	}
+	return func(declared TenantScope, id tenantScope.AuthenticatedIdentity) (bool, string) {
+		tenant := id.Scope(tenantScope.AxisPlatformTenant)
+		switch declared {
+		case TenantScopeNone:
+			return true, ""
+		case TenantScopePlatform:
+			if tenant == "" {
+				return false, "authenticated platform access required"
+			}
+			if _, ok := allow[tenant]; !ok {
+				return false, "tenant not in platform allowlist"
+			}
+		case TenantScopeTenant:
+			if tenant == "" {
+				return false, "authenticated platform tenant context required"
+			}
+		case TenantScopeOrg:
+			if tenant == "" {
+				return false, "authenticated platform tenant context required"
+			}
+			if id.Scope(tenantScope.AxisCustomerOrg) == "" {
+				return false, "authenticated organisation context required"
+			}
+		case TenantScopeUser:
+			if tenant == "" {
+				return false, "authenticated platform tenant context required"
+			}
+			if id.Subject == "" {
+				return false, "authenticated user context required"
+			}
+		case TenantScopeProfile:
+			if tenant == "" {
+				return false, "authenticated platform tenant context required"
+			}
+		default:
+			return false, "unknown tenant scope (fail-closed sentinel)"
+		}
+		return true, ""
+	}
+}
+
+// newScopedRegistry builds a registry with the reference policy installed so
+// declared scopes evaluate under realistic semantics.
+func newScopedRegistry(platforms ...string) *HandlerRegistry {
+	r := NewHandlerRegistry()
+	r.SetPresencePolicy(scopeRefPolicy(platforms...))
+	return r
+}
+
+// scopeIdentity builds an opaque identity from the deployed axes, omitting any
+// empty axis (an absent axis must stay absent).
+func scopeIdentity(tenant, org, user string) tenantScope.AuthenticatedIdentity {
+	id := tenantScope.AuthenticatedIdentity{Subject: user}
+	if tenant != "" {
+		id.Scopes = append(id.Scopes, tenantScope.ScopeValue{Name: tenantScope.AxisPlatformTenant, Value: tenant})
+	}
+	if org != "" {
+		id.Scopes = append(id.Scopes, tenantScope.ScopeValue{Name: tenantScope.AxisCustomerOrg, Value: org})
+	}
+	return id
+}
+
 // ctxWithRPC builds a Go context carrying the RPC context map that
 // GetTenantIDFromContext / getUserIDFromContext read from.
 func ctxWithRPC(m map[string]interface{}) context.Context {
@@ -43,7 +117,7 @@ func ctxWithRPC(m map[string]interface{}) context.Context {
 // default (fall-through) — profile-scoped handlers were effectively
 // unenforced when declared via the handlers package.
 func TestValidateTenantScope_Profile_MissingTenantFailsClosed(t *testing.T) {
-	r := NewHandlerRegistry()
+	r := newScopedRegistry()
 	h := &stubMeta{name: "billing.getProfile", scope: TenantScopeProfile}
 
 	err := r.validateTenantScope(ctxWithRPC(nil), h)
@@ -60,12 +134,10 @@ func TestValidateTenantScope_Profile_MissingTenantFailsClosed(t *testing.T) {
 // enforcement is handled at the middleware tier (RequireScopesWithParam)
 // per Quorum ADR-0012 — the dispatch tier only checks the tenant prerequisite.
 func TestValidateTenantScope_Profile_WithTenantPasses(t *testing.T) {
-	r := NewHandlerRegistry()
+	r := newScopedRegistry()
 	h := &stubMeta{name: "billing.getProfile", scope: TenantScopeProfile}
 
-	ctx := tenantScope.WithAuthenticatedIdentity(context.Background(), tenantScope.AuthenticatedIdentity{
-		PlatformTenantID: "acme",
-	})
+	ctx := tenantScope.WithAuthenticatedIdentity(context.Background(), scopeIdentity("acme", "", ""))
 	err := r.validateTenantScope(ctx, h)
 	if err != nil {
 		t.Fatalf("expected TenantScopeProfile with tenant to pass; got %v", err)
@@ -77,7 +149,7 @@ func TestValidateTenantScope_Profile_WithTenantPasses(t *testing.T) {
 // ScopeUnknown branch — a handler bound to this scope is structurally invalid
 // and MUST NOT be dispatched.
 func TestValidateTenantScope_Unknown_FailsClosed(t *testing.T) {
-	r := NewHandlerRegistry()
+	r := newScopedRegistry()
 	h := &stubMeta{name: "misconfigured.op", scope: TenantScopeUnknown}
 
 	// Even with a fully-populated tenant/user context, the Unknown sentinel
@@ -101,7 +173,7 @@ func TestValidateTenantScope_Unknown_FailsClosed(t *testing.T) {
 // (fail-open), which meant a mis-typed scope value ("tennant") accepted any
 // caller including anonymous ones.
 func TestValidateTenantScope_GarbageScope_FailsClosed(t *testing.T) {
-	r := NewHandlerRegistry()
+	r := newScopedRegistry()
 	h := &stubMeta{name: "typo.op", scope: TenantScope("tennant")}
 
 	err := r.validateTenantScope(ctxWithRPC(map[string]interface{}{
@@ -132,7 +204,7 @@ func TestValidateTenantScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing
 	identity := func(tenantID string) context.Context {
 		return tenantScope.WithAuthenticatedIdentity(
 			context.Background(),
-			tenantScope.AuthenticatedIdentity{PlatformTenantID: tenantID},
+			scopeIdentity(tenantID, "", ""),
 		)
 	}
 	tests := []struct {
@@ -149,9 +221,9 @@ func TestValidateTenantScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			r := NewHandlerRegistry()
-			if test.set != nil {
-				r.SetPlatformTenants(test.set)
-			}
+			// The platform allowlist now lives in the CONSUMER policy, not in
+			// loom. An empty/nil allowlist admits nobody — fail closed.
+			r.SetPresencePolicy(scopeRefPolicy(test.set...))
 			err := r.validateTenantScope(identity(test.tenant), h)
 			if test.wantErr {
 				if !errors.Is(err, tenantScope.ErrDenied) {
@@ -178,7 +250,7 @@ func TestValidateTenantScope_LegacyScopes_StillEnforce(t *testing.T) {
 		{name: "Org", scope: TenantScopeOrg, want: "tenant context"},
 		{name: "User", scope: TenantScopeUser, want: "tenant context"},
 	}
-	r := NewHandlerRegistry()
+	r := newScopedRegistry()
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			h := &stubMeta{name: "op." + c.name, scope: c.scope}
@@ -257,7 +329,7 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 		{name: "empty_skips", transport: "", wantErr: ""},
 		{name: "unstamped_skips", noStamp: true, wantErr: ""},
 	}
-	r := NewHandlerRegistry()
+	r := newScopedRegistry()
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			h := &stubMeta{name: "tenant.op", scope: TenantScopeTenant}
@@ -265,9 +337,7 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 			if !c.noStamp {
 				ctx = WithTransportTenant(ctx, c.transport)
 			}
-			ctx = tenantScope.WithAuthenticatedIdentity(ctx, tenantScope.AuthenticatedIdentity{
-				PlatformTenantID: reqTenant,
-			})
+			ctx = tenantScope.WithAuthenticatedIdentity(ctx, scopeIdentity(reqTenant, "", ""))
 			err := r.validateTenantScope(ctx, h)
 			if c.wantErr == "" {
 				if err != nil {
@@ -289,7 +359,7 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 }
 
 func TestValidateTenantScope_OrganizationIgnoresMutableHints(t *testing.T) {
-	r := NewHandlerRegistry()
+	r := newScopedRegistry()
 	h := &stubMeta{name: "org.read", scope: TenantScopeOrg}
 
 	for _, body := range []map[string]interface{}{
@@ -308,10 +378,7 @@ func TestValidateTenantScope_OrganizationIgnoresMutableHints(t *testing.T) {
 		"tenant_id": "evil",
 		"orgId":     "evil",
 	}), "orbtr")
-	ctx = tenantScope.WithAuthenticatedIdentity(ctx, tenantScope.AuthenticatedIdentity{
-		PlatformTenantID: "orbtr",
-		OrganizationID:   "acme",
-	})
+	ctx = tenantScope.WithAuthenticatedIdentity(ctx, scopeIdentity("orbtr", "acme", ""))
 	if err := r.validateTenantScope(ctx, h); err != nil {
 		t.Fatalf("exact authenticated organisation must satisfy ScopeOrg despite body hints: %v", err)
 	}

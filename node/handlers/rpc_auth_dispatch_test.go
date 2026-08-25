@@ -101,7 +101,7 @@ func TestResolvedRPCWithAuthPinsExactRegistrationAcrossReplacement(t *testing.T)
 }
 
 func TestAuthenticatedRPCScopeIgnoresRequestIdentityHints(t *testing.T) {
-	registry := NewHandlerRegistry()
+	registry := newScopedRegistry()
 	handler := &resolvedRPCProbe{name: "rpc.org", scope: TenantScopeOrg}
 	var events []string
 	registry.Use(&taskDispatchMiddleware{name: "scope-mw", events: &events})
@@ -134,11 +134,7 @@ func TestAuthenticatedRPCScopeIgnoresRequestIdentityHints(t *testing.T) {
 		t.Fatalf("middleware ran before scope denial: %v", events)
 	}
 
-	exact := tenantScope.WithAuthenticatedIdentity(platformOnly, tenantScope.AuthenticatedIdentity{
-		PlatformTenantID: "orbtr",
-		OrganizationID:   "org-1",
-		UserID:           "user-1",
-	})
+	exact := tenantScope.WithAuthenticatedIdentity(platformOnly, scopeIdentity("orbtr", "org-1", "user-1"))
 	resp, err = registry.DispatchRPCWithAuth(exact, req, auth)
 	if err != nil || resp == nil || !resp.Success {
 		t.Fatalf("exact authenticated DispatchRPCWithAuth=(%+v, %v)", resp, err)

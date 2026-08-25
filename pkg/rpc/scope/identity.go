@@ -5,109 +5,55 @@
 
 package scope
 
-// AuthenticatedIdentity is the identity presence that a trusted server-side
+// ScopeValue is one opaque, named identity axis a trusted server-side
+// transport, session middleware, or product adapter established. loom carries
+// Name and Value without interpreting either; the consuming project assigns
+// meaning to Name. loom never derives one axis from another.
+type ScopeValue struct {
+	Name  string
+	Value string
+}
+
+// AuthenticatedIdentity is the opaque identity presence a trusted server-side
 // transport, session middleware, or product adapter established before scope
-// enforcement. PlatformTenantID identifies the calling application/platform
-// tenant. OrganizationID is a separate customer-organisation presence proof;
-// Loom never derives it from PlatformTenantID. UserID is the authenticated
-// principal subject.
+// enforcement. Scopes is an ordered set of named axes; Subject is the
+// authenticated principal subject. loom interprets neither a Name nor the
+// Subject: a consumer's PresencePolicy decides what a handler's declared
+// ScopeTag requires of them.
 //
 // Request bodies, RPCRequest.Context maps, task Metadata and other mutable
-// caller fields MUST NOT be copied into this value. Product code that needs to
-// establish customer organisation authority resolves it from its private
-// tenancy store first, then supplies the resulting presence to the dispatch
-// adapter.
+// caller fields MUST NOT be copied into this value. A consuming project that
+// needs an axis (e.g. a customer organisation) resolves it from its own store
+// first, then supplies the resulting presence to the dispatch adapter.
 type AuthenticatedIdentity struct {
-	PlatformTenantID string
-	OrganizationID   string
-	UserID           string
+	Scopes  []ScopeValue
+	Subject string
 }
 
-// PlatformTenants is the canonical allowlist used to decide whether an
-// authenticated platform-tenant identity may satisfy ScopePlatform. Keeping
-// this evaluator in the dependency-free scope package lets the rpc and legacy
-// handlers registries consume exactly the same fail-closed rule.
-//
-// The zero value is deliberately safe: nil and empty sets authorize nobody.
-type PlatformTenants map[string]struct{}
-
-// NewPlatformTenants builds a platform-tenant allowlist. Empty identities are
-// not authority and are discarded; duplicates collapse naturally.
-func NewPlatformTenants(ids ...string) PlatformTenants {
-	out := make(PlatformTenants, len(ids))
-	for _, id := range ids {
-		if id != "" {
-			out[id] = struct{}{}
+// Scope returns the value of the named axis, or "" when the axis is absent.
+func (a AuthenticatedIdentity) Scope(name string) string {
+	for i := range a.Scopes {
+		if a.Scopes[i].Name == name {
+			return a.Scopes[i].Value
 		}
 	}
+	return ""
+}
+
+// Has reports whether the named axis is present with a non-empty value.
+func (a AuthenticatedIdentity) Has(name string) bool {
+	return a.Scope(name) != ""
+}
+
+// clone returns a defensive copy of the identity's axis slice.
+func (a AuthenticatedIdentity) clone() AuthenticatedIdentity {
+	if len(a.Scopes) == 0 {
+		return AuthenticatedIdentity{Subject: a.Subject}
+	}
+	out := AuthenticatedIdentity{
+		Scopes:  make([]ScopeValue, len(a.Scopes)),
+		Subject: a.Subject,
+	}
+	copy(out.Scopes, a.Scopes)
 	return out
-}
-
-// IsPlatform reports whether tenantID is an exact member of the allowlist.
-// Nil, empty, empty-identity and foreign-identity checks all fail closed.
-func (p PlatformTenants) IsPlatform(tenantID string) bool {
-	if tenantID == "" {
-		return false
-	}
-	_, ok := p[tenantID]
-	return ok
-}
-
-// PresenceVerdict is the single canonical result vocabulary shared by the rpc
-// and legacy handlers dispatch surfaces. Callers add handler-specific
-// diagnostics and public sentinel errors at their own boundary.
-type PresenceVerdict uint8
-
-const (
-	PresenceSatisfied PresenceVerdict = iota
-	PresencePlatformRequired
-	PresenceTenantRequired
-	PresenceOrganizationRequired
-	PresenceUserRequired
-	PresenceUnknownScope
-)
-
-// CheckPresence is a dependency-free pure evaluator. It accepts no context,
-// mutable map, handler or product resolver. Product authorisation remains
-// outside Loom: OrganizationID being present is not proof that a resource
-// belongs to it. isPlatform must be computed from the registry's configured
-// allowlist against identity.PlatformTenantID.
-func CheckPresence(
-	declared TenantScope,
-	identity AuthenticatedIdentity,
-	isPlatform bool,
-) PresenceVerdict {
-	switch declared {
-	case None:
-		return PresenceSatisfied
-	case Platform:
-		if !isPlatform {
-			return PresencePlatformRequired
-		}
-	case Tenant:
-		if identity.PlatformTenantID == "" {
-			return PresenceTenantRequired
-		}
-	case Org:
-		if identity.PlatformTenantID == "" {
-			return PresenceTenantRequired
-		}
-		if identity.OrganizationID == "" {
-			return PresenceOrganizationRequired
-		}
-	case User:
-		if identity.PlatformTenantID == "" {
-			return PresenceTenantRequired
-		}
-		if identity.UserID == "" {
-			return PresenceUserRequired
-		}
-	case Profile:
-		if identity.PlatformTenantID == "" {
-			return PresenceTenantRequired
-		}
-	default:
-		return PresenceUnknownScope
-	}
-	return PresenceSatisfied
 }

@@ -25,6 +25,26 @@ import (
 type executorTenantKey struct{}
 type executorPrincipalKey struct{}
 
+// newExecutorRegistry builds a handler registry with a CONSUMER-side reference
+// PresencePolicy that admits a tenant-bound identity. loom no longer contains
+// presence semantics; the executor's DispatchTaskWithAuth delegates to this
+// policy, and a nil policy would fail closed on the tenant-scoped probes.
+func newExecutorRegistry() *handlers.HandlerRegistry {
+	reg := handlers.NewHandlerRegistry()
+	reg.SetPresencePolicy(scope.PresencePolicyFunc(
+		func(declared handlers.TenantScope, id scope.AuthenticatedIdentity) (bool, string) {
+			if declared == handlers.TenantScopeNone {
+				return true, ""
+			}
+			if id.Scope(scope.AxisPlatformTenant) == "" {
+				return false, "authenticated platform tenant context required"
+			}
+			return true, ""
+		},
+	))
+	return reg
+}
+
 type executorPrincipal struct {
 	owner      ports.ExecutionOwnerKey
 	tenant     string
@@ -42,7 +62,9 @@ func (p *executorPrincipal) AuthorizeExecution(
 		ctx = context.WithValue(ctx, executorTenantKey{}, p.tenant)
 		ctx = scope.WithAuthenticatedIdentity(
 			ctx,
-			scope.AuthenticatedIdentity{PlatformTenantID: p.tenant},
+			scope.AuthenticatedIdentity{Scopes: []scope.ScopeValue{
+				{Name: scope.AxisPlatformTenant, Value: p.tenant},
+			}},
 		)
 	}
 	return ctx, func() {}, nil
@@ -72,7 +94,9 @@ func (p *leasedExecutorPrincipal) AuthorizeExecution(
 	ctx = context.WithValue(ctx, executorTenantKey{}, p.tenant)
 	ctx = scope.WithAuthenticatedIdentity(
 		ctx,
-		scope.AuthenticatedIdentity{PlatformTenantID: p.tenant},
+		scope.AuthenticatedIdentity{Scopes: []scope.ScopeValue{
+			{Name: scope.AxisPlatformTenant, Value: p.tenant},
+		}},
 	)
 	return ctx, func() {
 		if call == 2 {
@@ -199,7 +223,7 @@ func (m *executorMiddlewareProbe) After(
 
 func TestExecutorUsesCanonicalTaskDispatchPipeline(t *testing.T) {
 	var events []string
-	reg := handlers.NewHandlerRegistry()
+	reg := newExecutorRegistry()
 	reg.Use(&executorMiddlewareProbe{events: &events})
 	h := &executorTaskProbe{events: &events}
 	if err := reg.RegisterTask(h); err != nil {
@@ -248,7 +272,7 @@ func TestExecutorUsesCanonicalTaskDispatchPipeline(t *testing.T) {
 
 func TestExecutorDoesNotTreatMutableTaskTenantAsOwnerIdentity(t *testing.T) {
 	var events []string
-	reg := handlers.NewHandlerRegistry()
+	reg := newExecutorRegistry()
 	reg.Use(&executorMiddlewareProbe{events: &events})
 	h := &executorTaskProbe{events: &events}
 	if err := reg.RegisterTask(h); err != nil {
@@ -287,7 +311,7 @@ func TestExecutorDoesNotTreatMutableTaskTenantAsOwnerIdentity(t *testing.T) {
 
 func TestExecutorRejectsMissingExecutionPrincipalBeforePipeline(t *testing.T) {
 	var events []string
-	reg := handlers.NewHandlerRegistry()
+	reg := newExecutorRegistry()
 	reg.Use(&executorMiddlewareProbe{events: &events})
 	h := &executorTaskProbe{events: &events}
 	if err := reg.RegisterTask(h); err != nil {
@@ -341,7 +365,7 @@ func (a *executorAuthWithoutTenantReader) WithTenantID(
 
 func TestExecutorRejectsValidatorWithoutExecutionPrincipalReader(t *testing.T) {
 	var events []string
-	reg := handlers.NewHandlerRegistry()
+	reg := newExecutorRegistry()
 	reg.Use(&executorMiddlewareProbe{events: &events})
 	h := &executorTaskProbe{events: &events}
 	if err := reg.RegisterTask(h); err != nil {
@@ -383,7 +407,7 @@ func TestExecutorRejectsValidatorWithoutExecutionPrincipalReader(t *testing.T) {
 
 func TestExecutorCarriesExactGatewayPrincipalFromBackgroundContext(t *testing.T) {
 	var events []string
-	reg := handlers.NewHandlerRegistry()
+	reg := newExecutorRegistry()
 	reg.Use(&executorMiddlewareProbe{events: &events})
 	h := &executorTaskProbe{events: &events}
 	if err := reg.RegisterTask(h); err != nil {
@@ -521,7 +545,7 @@ func TestExecutorCarriesExactGatewayPrincipalFromBackgroundContext(t *testing.T)
 }
 
 func TestExecutorRetainsAuthorizationLeaseThroughHandlerDispatch(t *testing.T) {
-	reg := handlers.NewHandlerRegistry()
+	reg := newExecutorRegistry()
 	handlerRelease := make(chan struct{})
 	handler := &blockingExecutorTaskProbe{
 		entered: make(chan struct{}),

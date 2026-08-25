@@ -32,31 +32,31 @@ const (
 // This allows each app to compose its own auth/rate-limit/scope stack.
 type Middleware = func(http.Handler) http.Handler
 
-// TenantScope controls tenant isolation enforcement at the handler dispatch
-// level. It aliases the canonical declaration in the rpc/scope subpackage —
-// the handlers package (mesh/node/handlers) aliases the SAME underlying
-// type, so a scope value round-trips between the two surfaces with no
-// possibility of drift. See rpc/scope/tenantscope.go for the semantics
-// of each tier and finding rev-069 for the collapse-to-one-source rationale.
-type TenantScope = scope.TenantScope
+// TenantScope controls scope enforcement at the handler dispatch level. It
+// keeps the historical name but now aliases the opaque ScopeTag label in the
+// rpc/scope subpackage — the handlers package (mesh/node/handlers) aliases the
+// SAME underlying type, so a scope value round-trips between the two surfaces
+// with no possibility of drift. loom carries the tag opaquely; a consumer's
+// PresencePolicy decides what each tag requires. See rpc/scope/scopetag.go.
+type TenantScope = scope.ScopeTag
 
-// Scope* forwards to the canonical constants in rpc/scope. Callers should
+// Scope* forwards to the canonical opaque tags in rpc/scope. Callers should
 // import "github.com/bbmumford/loom/pkg/rpc" and use rpc.Scope* directly — the
-// scope subpackage is an implementation detail. New tiers MUST be added
-// in rpc/scope/tenantscope.go so both re-exports pick them up together.
+// scope subpackage is an implementation detail. New tags MUST be added
+// in rpc/scope/scopetag.go so both re-exports pick them up together.
 const (
-	ScopeNone     = scope.None     // No tenant restriction
-	ScopePlatform = scope.Platform // HSTLES internal only
-	ScopeTenant   = scope.Tenant   // Requires valid tenantId
-	ScopeOrg      = scope.Org      // Requires tenant + org membership
-	ScopeUser     = scope.User     // Requires tenant + own user data only
-	ScopeProfile  = scope.Profile  // Requires tenant + billing-profile membership (per Quorum ADR-0012)
+	ScopeNone     = scope.ScopeNone     // Opts out of scope enforcement
+	ScopePlatform = scope.ScopePlatform // Opaque label; a PresencePolicy assigns meaning
+	ScopeTenant   = scope.ScopeTenant   // Opaque label; a PresencePolicy assigns meaning
+	ScopeOrg      = scope.ScopeOrg      // Opaque label; a PresencePolicy assigns meaning
+	ScopeUser     = scope.ScopeUser     // Opaque label; a PresencePolicy assigns meaning
+	ScopeProfile  = scope.ScopeProfile  // Opaque label; a PresencePolicy assigns meaning
 	// ScopeUnknown is the fail-closed sentinel installed by mapProtoScope
 	// when it sees a proto enum it does not recognise (including an explicit
-	// TENANT_SCOPE_UNSPECIFIED in a .proto file). EnforceScope's default
-	// branch rejects any handler bound to this scope. NEVER set this
-	// scope manually — it exists only to make decay-to-ScopeNone fail closed.
-	ScopeUnknown = scope.Unknown
+	// TENANT_SCOPE_UNSPECIFIED in a .proto file). It is not a declarable tag;
+	// EnforceScope fails closed on it. NEVER set this scope manually — it
+	// exists only to make decay-to-ScopeNone fail closed.
+	ScopeUnknown = scope.ScopeUnknown
 )
 
 // HandlerFunc is the generic handler function signature.

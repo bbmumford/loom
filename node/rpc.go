@@ -831,12 +831,26 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 		return ctx, fmt.Errorf("request/scope candidate mismatch")
 	}
 
-	principal, err := tenantScope.NewAuthenticatedPrincipal(
-		wire.PlatformTenantId,
-		wire.CustomerOrgId,
-		wire.UserId,
-		wire.Scopes,
-	)
+	// Reconstruct the opaque identity from the deployed proto fields: append
+	// the platform-tenant/customer-org axes ONLY when the wire carried a
+	// non-empty value (an absent axis must stay absent, not become an empty
+	// presence), and take the subject from UserId. The gates above still read
+	// the wire fields directly — they are the load-bearing reconciliation
+	// surface — while the reconstructed identity is what dispatch enforces on.
+	identity := tenantScope.AuthenticatedIdentity{Subject: wire.UserId}
+	if wire.PlatformTenantId != "" {
+		identity.Scopes = append(identity.Scopes, tenantScope.ScopeValue{
+			Name:  tenantScope.AxisPlatformTenant,
+			Value: wire.PlatformTenantId,
+		})
+	}
+	if wire.CustomerOrgId != "" {
+		identity.Scopes = append(identity.Scopes, tenantScope.ScopeValue{
+			Name:  tenantScope.AxisCustomerOrg,
+			Value: wire.CustomerOrgId,
+		})
+	}
+	principal, err := tenantScope.NewAuthenticatedPrincipal(identity, wire.Scopes)
 	if err != nil {
 		return ctx, err
 	}

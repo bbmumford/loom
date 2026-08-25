@@ -46,7 +46,7 @@ func TestScopeAlias_HandlersEqualsRPC(t *testing.T) {
 }
 
 // TestScopeAlias_TypeIdentity asserts that rpc.TenantScope, handlers.TenantScope,
-// and scope.TenantScope are the SAME type identity — not merely compatible
+// and scope.ScopeTag are the SAME type identity — not merely compatible
 // via structural string aliasing. If someone reverts one of them to a
 // standalone type, the assignment round-trip below breaks at compile time.
 // All three aliases must retain the canonical defined type's exact identity.
@@ -55,7 +55,7 @@ func TestScopeAlias_TypeIdentity(t *testing.T) {
 	// aliases diverge, the assignments fail to compile.
 	var s TenantScope = handlers.TenantScopeProfile
 	var h handlers.TenantScope = ScopeProfile
-	var c scope.TenantScope = ScopeProfile
+	var c scope.ScopeTag = ScopeProfile
 	if s != h || h != c || c != ScopeProfile {
 		t.Fatalf("Profile scope failed identity round-trip: rpc=%q handlers=%q scope=%q", s, h, c)
 	}
@@ -69,11 +69,13 @@ func TestScopeAlias_TypeIdentity(t *testing.T) {
 // missing-tenant input rather than one silently accepting.
 func TestScopeAlias_ProfileEnforceScopeParity(t *testing.T) {
 	// rpc.EnforceScope side: a ScopeProfile handler with an empty ctx
-	// (no tenantId stamped) must be denied with ErrScopeDenied.
+	// (no platform-tenant axis) must be denied with ErrScopeDenied under the
+	// reference policy — mirroring what validateTenantScope does on the
+	// handlers side with the same policy.
 	h := &Handler{Namespace: "app", Domain: "billing", Operation: "GetProfile", Scope: ScopeProfile}
-	err := EnforceScope(t.Context(), h, nil)
+	err := EnforceScope(t.Context(), h, refPolicy())
 	if err == nil {
-		t.Fatalf("EnforceScope(ScopeProfile, empty ctx) unexpectedly passed — Profile tier must require tenantId")
+		t.Fatalf("EnforceScope(ScopeProfile, empty ctx) unexpectedly passed — Profile tier must require a tenant axis")
 	}
 	// handlers.validateTenantScope side is exercised in
 	// mesh/node/handlers/scope_test.go:TestValidateTenantScope_Profile_MissingTenantFailsClosed.

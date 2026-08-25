@@ -12,84 +12,60 @@ import (
 )
 
 // AuthenticatedPrincipal is one immutable, server-established caller snapshot.
-// It couples presence identity with the exact scopes granted to that identity.
-// The fields are deliberately private: callers construct and read snapshots
-// through copying accessors, so a slice retained by middleware cannot mutate
-// authority after the principal has entered a dispatch context.
+// It couples the opaque presence identity with the exact grants (scope
+// strings) granted to that identity. The fields are deliberately private:
+// callers construct and read snapshots through copying accessors, so a slice
+// retained by middleware cannot mutate authority after the principal has
+// entered a dispatch context.
 type AuthenticatedPrincipal struct {
 	identity AuthenticatedIdentity
-	scopes   []string
+	grants   []string
 }
 
 type authenticatedPrincipalContextKey struct{}
 
-// NewAuthenticatedPrincipal builds a complete authority snapshot. Platform
-// tenant is mandatory because it is reconciled with the authenticated mesh
-// session on receipt. Customer organisation and user are optional axes: their
-// absence is meaningful and causes org/user-scoped handlers to fail closed.
+// NewAuthenticatedPrincipal builds a complete authority snapshot from an opaque
+// identity and its granted scope strings. loom copies and validates the grants
+// (each trimmed non-empty) but interprets neither the identity axes nor the
+// grants: their meaning is the consumer's PresencePolicy's decision. The
+// identity is taken as established — which axes it must carry for a given
+// handler is the policy's call, not loom's.
 func NewAuthenticatedPrincipal(
-	platformTenantID string,
-	customerOrgID string,
-	userID string,
-	scopes []string,
+	identity AuthenticatedIdentity,
+	grants []string,
 ) (AuthenticatedPrincipal, error) {
-	if err := validatePrincipalID("platform tenant", platformTenantID, true); err != nil {
-		return AuthenticatedPrincipal{}, err
-	}
-	if err := validatePrincipalID("customer organisation", customerOrgID, false); err != nil {
-		return AuthenticatedPrincipal{}, err
-	}
-	if err := validatePrincipalID("user", userID, false); err != nil {
-		return AuthenticatedPrincipal{}, err
-	}
-
-	scopeCopy := make([]string, len(scopes))
-	for i, granted := range scopes {
+	grantCopy := make([]string, len(grants))
+	for i, granted := range grants {
 		if granted == "" || strings.TrimSpace(granted) != granted {
 			return AuthenticatedPrincipal{}, fmt.Errorf(
 				"authenticated principal scope %d is empty or not canonical",
 				i,
 			)
 		}
-		scopeCopy[i] = granted
+		grantCopy[i] = granted
 	}
 
 	return AuthenticatedPrincipal{
-		identity: AuthenticatedIdentity{
-			PlatformTenantID: platformTenantID,
-			OrganizationID:   customerOrgID,
-			UserID:           userID,
-		},
-		scopes: scopeCopy,
+		identity: identity.clone(),
+		grants:   grantCopy,
 	}, nil
 }
 
-func validatePrincipalID(name string, value string, required bool) error {
-	if value == "" {
-		if required {
-			return fmt.Errorf("authenticated principal %s is required", name)
-		}
-		return nil
-	}
-	if strings.TrimSpace(value) != value {
-		return fmt.Errorf("authenticated principal %s is not canonical", name)
-	}
-	return nil
-}
-
-// Identity returns the principal's value-only presence identity.
+// Identity returns a defensive copy of the principal's opaque presence identity.
 func (p AuthenticatedPrincipal) Identity() AuthenticatedIdentity {
-	return p.identity
+	return p.identity.clone()
 }
 
 // Scopes returns a defensive copy of the principal's granted scopes.
 func (p AuthenticatedPrincipal) Scopes() []string {
-	return append([]string(nil), p.scopes...)
+	return append([]string(nil), p.grants...)
 }
 
-// Valid reports whether p was created from a nonempty platform identity.
+// Valid reports whether p carries any established presence: at least one
+// identity axis or a non-empty subject. An empty snapshot confers no authority
+// and is not stamped onto a context.
 func (p AuthenticatedPrincipal) Valid() bool {
-	return p.identity.PlatformTenantID != ""
+	return len(p.identity.Scopes) > 0 || p.identity.Subject != ""
 }
 
 // WithAuthenticatedPrincipal replaces the complete authority snapshot on ctx.
@@ -106,8 +82,8 @@ func WithAuthenticatedPrincipal(
 		return ctx
 	}
 	sealed := AuthenticatedPrincipal{
-		identity: principal.identity,
-		scopes:   principal.Scopes(),
+		identity: principal.identity.clone(),
+		grants:   principal.Scopes(),
 	}
 	ctx = context.WithValue(ctx, authenticatedPrincipalContextKey{}, sealed)
 	return WithAuthenticatedIdentity(ctx, sealed.identity)
@@ -125,6 +101,7 @@ func AuthenticatedPrincipalFromContext(
 	if !ok || !principal.Valid() {
 		return AuthenticatedPrincipal{}, false
 	}
-	principal.scopes = principal.Scopes()
+	principal.identity = principal.identity.clone()
+	principal.grants = principal.Scopes()
 	return principal, true
 }

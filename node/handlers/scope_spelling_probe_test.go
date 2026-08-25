@@ -20,7 +20,7 @@ const probeTenant = "orbtr"
 
 // TestSpellingProbe_MeshShapedArrivalIsDenied covers the camelCase wire shape.
 func TestSpellingProbe_MeshShapedArrivalIsDenied(t *testing.T) {
-	r := NewHandlerRegistry()
+	r := newScopedRegistry()
 
 	for _, scope := range []TenantScope{TenantScopeTenant, TenantScopeOrg, TenantScopeProfile} {
 		h := &stubMeta{name: "probe.meshArrival", scope: scope}
@@ -47,7 +47,7 @@ func TestSpellingProbe_MeshShapedArrivalIsDenied(t *testing.T) {
 // TestSpellingProbe_ReaderShapedArrivalIsDenied proves the old snake_case
 // accidental admission is gone. Neither spelling is scope authority.
 func TestSpellingProbe_ReaderShapedArrivalIsDenied(t *testing.T) {
-	r := NewHandlerRegistry()
+	r := newScopedRegistry()
 
 	for _, scope := range []TenantScope{TenantScopeTenant, TenantScopeOrg, TenantScopeProfile} {
 		h := &stubMeta{name: "probe.readerShape", scope: scope}
@@ -64,7 +64,7 @@ func TestSpellingProbe_ReaderShapedArrivalIsDenied(t *testing.T) {
 // boundary: map spelling is irrelevant, while the canonical typed identity
 // admits the exact same platform tenant.
 func TestSpellingProbe_TypedIdentityIsTheOnlyAdmissionPath(t *testing.T) {
-	r := NewHandlerRegistry()
+	r := newScopedRegistry()
 	h := &stubMeta{name: "probe.control", scope: TenantScopeTenant}
 
 	camelErr := r.validateTenantScope(ctxWithRPC(map[string]interface{}{"tenantId": probeTenant}), h)
@@ -77,7 +77,7 @@ func TestSpellingProbe_TypedIdentityIsTheOnlyAdmissionPath(t *testing.T) {
 	ctx := tenantScope.WithAuthenticatedIdentity(ctxWithRPC(map[string]interface{}{
 		"tenantId":  probeTenant,
 		"tenant_id": probeTenant,
-	}), tenantScope.AuthenticatedIdentity{PlatformTenantID: probeTenant})
+	}), scopeIdentity(probeTenant, "", ""))
 	if err := r.validateTenantScope(ctx, h); err != nil {
 		t.Errorf("typed authenticated platform tenant should admit: %v", err)
 	}

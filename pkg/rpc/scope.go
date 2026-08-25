@@ -163,69 +163,40 @@ func ParseScopes(raw string) []string {
 // offending fields for diagnostic logging.
 var ErrScopeDenied = tenantScope.ErrDenied
 
-// PlatformTenants is the canonical set of tenantIds that satisfy
-// ScopePlatform. It aliases the dependency-free scope implementation so the
-// rpc and legacy handlers registries cannot drift. An empty set fails closed.
-type PlatformTenants = tenantScope.PlatformTenants
-
-// NewPlatformTenants builds a PlatformTenants set from a list of tenant ids.
-// Convenience constructor; duplicates collapse, empty strings are dropped.
-func NewPlatformTenants(ids ...string) PlatformTenants {
-	return tenantScope.NewPlatformTenants(ids...)
-}
-
 // EnforceScope rejects calls whose ctx fails the handler's declared
-// TenantScope. Returns nil for ScopeNone (the only "anyone goes" tier).
-// For every other scope a missing or wrong tier-field surfaces as
-// ErrScopeDenied wrapped with the handler FQN and the offending field
-// name — callers should use errors.Is(err, ErrScopeDenied) at boundaries.
+// TenantScope. loom itself decides only three things and delegates the rest:
 //
-// Scope semantics (see rpc/handler.go for the canonical declarations):
-//   - ScopeNone     — no check (used for liveness, /heartbeat, OAuth init)
-//   - ScopePlatform — caller is the HSTLES platform itself (tenant ∈ platforms)
-//   - ScopeTenant   — caller has stamped some tenantId (any valid app)
-//   - ScopeOrg      — caller has tenantId + orgId (tenant + organisation)
-//   - ScopeUser     — caller has tenantId + userId (per-user actions)
-//   - ScopeProfile  — caller has tenantId; profile membership is a
-//     scope-string check at the middleware tier
-//     (RequireScopesWithParam — Quorum ADR-0012)
+//   - ScopeNone admits unconditionally — it is the handler's explicit opt-out
+//     of scope enforcement (liveness, /heartbeat, OAuth init).
+//   - ScopeUnset (the undeclared zero value) fails CLOSED: a handler must
+//     choose a tag.
+//   - a nil policy fails CLOSED for every other tag: without a consumer
+//     evaluator loom cannot judge presence, and the failure mode of this
+//     core is a silent fail-OPEN, so absence denies.
 //
-// Identity-establishing handlers (ValidateSession, OAuth callbacks,
-// MintSession) MUST use ScopeTenant — using ScopeUser deadlocks them
-// against the chicken-and-egg requirement of carrying their own user_id.
-func EnforceScope(ctx context.Context, h *Handler, platforms PlatformTenants) error {
+// For every other tag loom hands the opaque declared tag and the opaque
+// server-established identity to the consumer-supplied PresencePolicy and
+// denies when it reports unsatisfied. The wrapped error carries the handler
+// FQN and the policy's reason; callers should use errors.Is(err,
+// ErrScopeDenied) at boundaries.
+func EnforceScope(ctx context.Context, h *Handler, policy tenantScope.PresencePolicy) error {
 	if h == nil {
 		return fmt.Errorf("%w: nil handler", ErrScopeDenied)
 	}
-	identity := tenantScope.AuthenticatedIdentityFromContext(ctx)
-	switch tenantScope.CheckPresence(
-		h.Scope,
-		identity,
-		platforms.IsPlatform(identity.PlatformTenantID),
-	) {
-	case tenantScope.PresenceSatisfied:
+	if h.Scope == ScopeNone {
 		return nil
-	case tenantScope.PresencePlatformRequired:
-		return fmt.Errorf(
-			"%w: handler %s requires platform tier (tenant=%q)",
-			ErrScopeDenied,
-			h.FQN(),
-			identity.PlatformTenantID,
-		)
-	case tenantScope.PresenceTenantRequired:
-		return fmt.Errorf("%w: handler %s requires authenticated platform tenant", ErrScopeDenied, h.FQN())
-	case tenantScope.PresenceOrganizationRequired:
-		return fmt.Errorf("%w: handler %s requires authenticated organisation", ErrScopeDenied, h.FQN())
-	case tenantScope.PresenceUserRequired:
-		return fmt.Errorf("%w: handler %s requires authenticated user", ErrScopeDenied, h.FQN())
-	case tenantScope.PresenceUnknownScope:
-		if h.Scope == ScopeUnknown {
-			// Fail-closed sentinel installed by mapProtoScope when a proto enum
-			// is not recognised.
-			return fmt.Errorf("%w: handler %s has fail-closed ScopeUnknown — add an explicit case in rpc/protoscan.go:mapProtoScope", ErrScopeDenied, h.FQN())
-		}
-		return fmt.Errorf("%w: unknown scope %q on handler %s", ErrScopeDenied, h.Scope, h.FQN())
-	default:
-		return fmt.Errorf("%w: handler %s has fail-closed ScopeUnknown — add an explicit case in rpc/protoscan.go:mapProtoScope", ErrScopeDenied, h.FQN())
 	}
+	if h.Scope == tenantScope.ScopeUnset {
+		return fmt.Errorf("%w: handler %s has an undeclared scope (ScopeUnset) — declare a scope tier explicitly", ErrScopeDenied, h.FQN())
+	}
+	if policy == nil {
+		// Fail CLOSED: no evaluator means loom cannot judge presence for a
+		// handler that opted into enforcement.
+		return fmt.Errorf("%w: handler %s requires a presence policy but none is configured", ErrScopeDenied, h.FQN())
+	}
+	ok, reason := policy.CheckPresence(h.Scope, tenantScope.AuthenticatedIdentityFromContext(ctx))
+	if !ok {
+		return fmt.Errorf("%w: handler %s denied by presence policy: %s", ErrScopeDenied, h.FQN(), reason)
+	}
+	return nil
 }

@@ -1,0 +1,94 @@
+/*
+ * Copyright (c) 2026 HSTLES / ORBTR Pty Ltd. All Rights Reserved.
+ * Queries: licensing@hstles.com
+ */
+
+// Package scope holds the single canonical ScopeTag label shared by the rpc
+// package (rpc.TenantScope, rpc.Scope*) and the legacy handlers package
+// (mesh/node/handlers.TenantScope, handlers.TenantScope*). Both surfaces
+// re-export the symbols declared here via Go type aliases and constant
+// forwards, so a value round-trips between the two packages without any
+// possibility of drift.
+//
+// loom treats a ScopeTag as an OPAQUE label. It records which tag a handler
+// declared and hands that tag, unread, to the consumer-supplied
+// PresencePolicy at enforcement time. loom itself decides nothing about what
+// a tag requires — the only tag it interprets structurally is ScopeNone (the
+// enforcement opt-out) and the two non-declarable sentinels (ScopeUnset /
+// ScopeUnknown), which it refuses to admit or, at dispatch, fails closed on.
+//
+// The value constants are retained (rather than collapsed to a single opaque
+// string) to avoid a 434-site consumer churn: existing call sites keep
+// naming rpc.ScopeTenant / handlers.TenantScopeOrg and keep compiling.
+package scope
+
+// ScopeTag is the opaque tenant/scope label a handler declares at registration.
+// It is deliberately a defined type: an arbitrary string must not be assignable
+// as a scope declaration, and its zero value must remain detectably invalid.
+// The string representation still survives JSON / protobuf / wire round-trips
+// without a bespoke encoder. loom never interprets a tag's meaning; a
+// consumer's PresencePolicy does.
+type ScopeTag string
+
+// Canonical scope tags. String values are load-bearing wire tokens — they
+// appear in proto descriptors, telemetry, and the reflection registry, so they
+// MUST NOT change without a coordinated redeploy. loom carries them as opaque
+// labels; only a consumer's PresencePolicy assigns them meaning.
+//
+// The rpc package re-exports these as rpc.Scope{None,Platform,Tenant,Org,
+// User,Profile,Unknown}; the handlers package re-exports them as
+// handlers.TenantScope{None,Platform,Tenant,Org,User,Profile,Unknown}.
+// Both surfaces MUST stay 1:1 with this list.
+const (
+	// ScopeUnset is the invalid zero value. It means no scope decision was
+	// made and MUST be rejected at registration and fail closed at dispatch.
+	// It is not re-exported as a caller-facing rpc.Scope* constant: callers
+	// must choose a real tag.
+	ScopeUnset ScopeTag = ""
+
+	// ScopeNone opts a handler out of scope enforcement. Used for liveness,
+	// /heartbeat, OAuth init and other public unauthenticated surfaces. Its
+	// non-empty token makes that opt-out distinguishable from omission, and it
+	// is the ONE tag loom admits without consulting a PresencePolicy.
+	ScopeNone ScopeTag = "none"
+
+	// ScopePlatform is an opaque label a PresencePolicy may treat as
+	// "restricted to the platform itself". loom assigns it no meaning.
+	ScopePlatform ScopeTag = "platform"
+
+	// ScopeTenant is an opaque label a PresencePolicy may treat as "requires a
+	// tenant-bound caller". loom assigns it no meaning.
+	ScopeTenant ScopeTag = "tenant"
+
+	// ScopeOrg is an opaque label a PresencePolicy may treat as "requires a
+	// customer-organisation-bound caller". loom assigns it no meaning.
+	ScopeOrg ScopeTag = "org"
+
+	// ScopeUser is an opaque label a PresencePolicy may treat as "requires a
+	// user-bound caller". loom assigns it no meaning.
+	ScopeUser ScopeTag = "user"
+
+	// ScopeProfile is an opaque label a PresencePolicy may treat as "requires
+	// a billing-profile-bound caller". loom assigns it no meaning.
+	ScopeProfile ScopeTag = "profile"
+
+	// ScopeUnknown is the fail-closed sentinel installed by rpc.mapProtoScope
+	// when it sees a proto enum it does not recognise (including an explicit
+	// TENANT_SCOPE_UNSPECIFIED in a .proto file). It is not a declarable tag:
+	// registration rejects it and dispatch fails closed. NEVER set it
+	// manually — it exists only to make decay-to-None fail closed.
+	ScopeUnknown ScopeTag = "unknown"
+)
+
+// IsDeclared reports whether s is a valid registration-time declaration.
+// ScopeUnknown is intentionally excluded: it is a fail-closed translation
+// sentinel, not a tag a registry may admit. ScopeUnset (the zero value) is
+// likewise not declarable.
+func IsDeclared(s ScopeTag) bool {
+	switch s {
+	case ScopeNone, ScopePlatform, ScopeTenant, ScopeOrg, ScopeUser, ScopeProfile:
+		return true
+	default:
+		return false
+	}
+}

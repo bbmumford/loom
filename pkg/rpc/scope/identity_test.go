@@ -10,90 +10,80 @@ import (
 	"testing"
 )
 
-func TestCheckPresence(t *testing.T) {
-	full := AuthenticatedIdentity{
-		PlatformTenantID: "orbtr",
-		OrganizationID:   "org-1",
-		UserID:           "user-1",
-	}
-	tests := []struct {
-		name       string
-		declared   TenantScope
-		identity   AuthenticatedIdentity
-		isPlatform bool
-		want       PresenceVerdict
-	}{
-		{name: "none anonymous", declared: None, want: PresenceSatisfied},
-		{name: "platform missing", declared: Platform, want: PresencePlatformRequired},
-		{name: "platform not allowlisted", declared: Platform, identity: full, want: PresencePlatformRequired},
-		{name: "platform exact", declared: Platform, identity: full, isPlatform: true, want: PresenceSatisfied},
-		{name: "tenant missing", declared: Tenant, want: PresenceTenantRequired},
-		{name: "tenant exact", declared: Tenant, identity: full, want: PresenceSatisfied},
-		{name: "org missing tenant", declared: Org, want: PresenceTenantRequired},
-		{
-			name:     "org platform only",
-			declared: Org,
-			identity: AuthenticatedIdentity{PlatformTenantID: "orbtr"},
-			want:     PresenceOrganizationRequired,
+func TestAuthenticatedIdentityAxisLookup(t *testing.T) {
+	id := AuthenticatedIdentity{
+		Scopes: []ScopeValue{
+			{Name: AxisPlatformTenant, Value: "orbtr"},
+			{Name: AxisCustomerOrg, Value: "org-1"},
 		},
-		{name: "org exact", declared: Org, identity: full, want: PresenceSatisfied},
-		{name: "user missing tenant", declared: User, want: PresenceTenantRequired},
-		{
-			name:     "user platform only",
-			declared: User,
-			identity: AuthenticatedIdentity{PlatformTenantID: "orbtr"},
-			want:     PresenceUserRequired,
-		},
-		{name: "user exact", declared: User, identity: full, want: PresenceSatisfied},
-		{name: "profile missing tenant", declared: Profile, want: PresenceTenantRequired},
-		{name: "profile exact", declared: Profile, identity: full, want: PresenceSatisfied},
-		{name: "unknown", declared: Unknown, identity: full, isPlatform: true, want: PresenceUnknownScope},
-		{name: "unset", declared: Unset, identity: full, isPlatform: true, want: PresenceUnknownScope},
-		{name: "garbage", declared: TenantScope("garbage"), identity: full, isPlatform: true, want: PresenceUnknownScope},
+		Subject: "user-1",
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := CheckPresence(test.declared, test.identity, test.isPlatform); got != test.want {
-				t.Fatalf("CheckPresence() = %v, want %v", got, test.want)
-			}
-		})
+	if got := id.Scope(AxisPlatformTenant); got != "orbtr" {
+		t.Fatalf("Scope(platform) = %q, want orbtr", got)
+	}
+	if got := id.Scope(AxisCustomerOrg); got != "org-1" {
+		t.Fatalf("Scope(org) = %q, want org-1", got)
+	}
+	if got := id.Scope("absent"); got != "" {
+		t.Fatalf("Scope(absent) = %q, want empty", got)
+	}
+	if !id.Has(AxisPlatformTenant) {
+		t.Fatal("Has(platform) = false, want true")
+	}
+	if id.Has("absent") {
+		t.Fatal("Has(absent) = true, want false")
 	}
 }
 
-func TestPlatformTenantsFailClosedAndMatchExactly(t *testing.T) {
-	tests := []struct {
-		name     string
-		allowed  PlatformTenants
-		tenantID string
-		want     bool
-	}{
-		{name: "unset", tenantID: "hstles"},
-		{name: "empty", allowed: NewPlatformTenants(), tenantID: "hstles"},
-		{name: "empty identity", allowed: NewPlatformTenants("hstles")},
-		{name: "foreign", allowed: NewPlatformTenants("hstles"), tenantID: "hstles-dev"},
-		{name: "exact", allowed: NewPlatformTenants("hstles"), tenantID: "hstles", want: true},
+func TestAuthenticatedIdentityCloneIsDefensive(t *testing.T) {
+	id := AuthenticatedIdentity{
+		Scopes:  []ScopeValue{{Name: AxisPlatformTenant, Value: "orbtr"}},
+		Subject: "user-1",
 	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := test.allowed.IsPlatform(test.tenantID); got != test.want {
-				t.Fatalf("IsPlatform(%q) = %v, want %v", test.tenantID, got, test.want)
-			}
-		})
+	clone := id.clone()
+	id.Scopes[0].Value = "forged"
+	if got := clone.Scope(AxisPlatformTenant); got != "orbtr" {
+		t.Fatalf("clone shares backing array: Scope(platform) = %q, want orbtr", got)
 	}
 }
 
-func TestWithAuthenticatedPlatformTenantReplacesWholeSnapshot(t *testing.T) {
+// TestIsDeclaredFailsClosed is a registration-time fail-closed proof: the two
+// sentinels (ScopeUnset zero value, ScopeUnknown proto-decay marker) and any
+// unrecognised tag are NOT declarable, so a registry refuses to admit them.
+func TestIsDeclaredFailsClosed(t *testing.T) {
+	declarable := []ScopeTag{ScopeNone, ScopePlatform, ScopeTenant, ScopeOrg, ScopeUser, ScopeProfile}
+	for _, s := range declarable {
+		if !IsDeclared(s) {
+			t.Fatalf("IsDeclared(%q) = false, want true", s)
+		}
+	}
+	notDeclarable := []ScopeTag{ScopeUnset, ScopeUnknown, ScopeTag("garbage")}
+	for _, s := range notDeclarable {
+		if IsDeclared(s) {
+			t.Fatalf("IsDeclared(%q) = true, want false (must fail closed)", s)
+		}
+	}
+}
+
+func TestWithAuthenticatedScopeReplacesWholeSnapshot(t *testing.T) {
 	ctx := WithAuthenticatedIdentity(context.Background(), AuthenticatedIdentity{
-		PlatformTenantID: "old-platform",
-		OrganizationID:   "old-org",
-		UserID:           "old-user",
+		Scopes: []ScopeValue{
+			{Name: AxisPlatformTenant, Value: "old-platform"},
+			{Name: AxisCustomerOrg, Value: "old-org"},
+		},
+		Subject: "old-user",
 	})
 
 	got := AuthenticatedIdentityFromContext(
-		WithAuthenticatedPlatformTenant(ctx, "new-platform"),
+		WithAuthenticatedScope(ctx, AxisPlatformTenant, "new-platform"),
 	)
-	want := (AuthenticatedIdentity{PlatformTenantID: "new-platform"})
-	if got != want {
-		t.Fatalf("platform rebind retained stale identity fields: got %+v want %+v", got, want)
+	if got.Scope(AxisPlatformTenant) != "new-platform" {
+		t.Fatalf("scope rebind lost the new axis: %+v", got)
+	}
+	if got.Scope(AxisCustomerOrg) != "" || got.Subject != "" {
+		t.Fatalf("scope rebind retained stale identity fields: %+v", got)
+	}
+	if len(got.Scopes) != 1 {
+		t.Fatalf("scope rebind must carry exactly one axis, got %d", len(got.Scopes))
 	}
 }
