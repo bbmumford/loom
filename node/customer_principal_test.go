@@ -268,3 +268,78 @@ func TestRPCServerForwardingPreservesTypedPrincipal(t *testing.T) {
 		t.Fatalf("forwarded customer org = %q", got)
 	}
 }
+
+// platformOnlyProbe is a platform-tier-scoped handler (TenantScopeTenant): the
+// presence policy admits it only when the platform axis is present. It counts
+// invocations so a test can assert it was NOT reached.
+type platformOnlyProbe struct{ calls int32 }
+
+func (h *platformOnlyProbe) Name() string                      { return "orbtr.test.PlatformOnly" }
+func (h *platformOnlyProbe) Role() string                      { return "orbtr.test" }
+func (h *platformOnlyProbe) RequiresAuth() bool                { return false }
+func (h *platformOnlyProbe) AllowedAuthTypes() []string        { return nil }
+func (h *platformOnlyProbe) Scopes() []string                  { return nil }
+func (h *platformOnlyProbe) TenantScope() handlers.TenantScope { return handlers.TenantScopeTenant }
+func (h *platformOnlyProbe) AllowedTenants() []string          { return nil }
+func (h *platformOnlyProbe) ExecuteRPC(
+	ctx context.Context,
+	_ *handlers.RPCRequest,
+) (*handlers.RPCResponse, error) {
+	atomic.AddInt32(&h.calls, 1)
+	return &handlers.RPCResponse{Success: true}, nil
+}
+
+// stampingTenantValidator's WithTenantID ACTUALLY stamps platform authority (unlike
+// customerPrincipalValidator's no-op). It exists so this test can discriminate the
+// removed req.Context["tenantId"] fallback: only a validator that stamps on
+// WithTenantID makes the fallback's authority-minting observable.
+type stampingTenantValidator struct{}
+
+func (stampingTenantValidator) ValidateExecutionAuth(context.Context, ports.SecureHandler) error {
+	return nil
+}
+func (stampingTenantValidator) WithTenantID(ctx context.Context, tenantID string) context.Context {
+	return tenantScope.WithAuthenticatedScope(ctx, tenantScope.AxisPlatformTenant, tenantID)
+}
+func (stampingTenantValidator) WithAuthenticatedPrincipal(
+	ctx context.Context,
+	principal tenantScope.AuthenticatedPrincipal,
+) context.Context {
+	return tenantScope.WithAuthenticatedPrincipal(ctx, principal)
+}
+
+// TestRPCServerRejectsWireTenantWithoutAuthenticatedTransport is the mutation-
+// discriminating proof that node/rpc.go does NOT mint platform authority from the
+// mutable req.Context["tenantId"] map. The request carries tenantId ONLY in that map
+// (no authenticated transport, no typed Principal), and the validator would stamp
+// platform authority if WithTenantID were called. With the fallback removed, nothing
+// calls WithTenantID, so the platform axis stays empty and the platform-scoped
+// handler is DENIED (calls==0). Restoring the deleted
+// `else if tid := req.Context["tenantId"]; tid != "" { WithTenantID }` branch turns
+// this RED: WithTenantID stamps the platform tenant and the handler is invoked.
+func TestRPCServerRejectsWireTenantWithoutAuthenticatedTransport(t *testing.T) {
+	registry := handlers.NewHandlerRegistry()
+	registry.SetPresencePolicy(customerScopePolicy())
+	probe := &platformOnlyProbe{}
+	if err := registry.RegisterRPC(probe); err != nil {
+		t.Fatal(err)
+	}
+	server := NewRPCServer(registry)
+	server.SetAuthValidator(stampingTenantValidator{})
+
+	// Deliberately NO handlers.WithTransportTenant: the only tenant signal is the
+	// mutable req.Context map, which must never establish authority.
+	req := &pb.RPCRequest{
+		Id:      "wire-tenant-no-transport",
+		Handler: "orbtr.test.PlatformOnly",
+		Context: map[string]string{"tenantId": "orbtr"},
+	}
+	resp := server.handleRequest(context.Background(), req)
+
+	if got := atomic.LoadInt32(&probe.calls); got != 0 {
+		t.Fatalf("platform-scoped handler invoked with no authenticated transport — req.Context tenantId minted authority (the removed fallback regressed): calls=%d", got)
+	}
+	if resp.Success {
+		t.Fatalf("request succeeded on a mutable-map tenant with no authenticated transport: %s", resp.Error)
+	}
+}
