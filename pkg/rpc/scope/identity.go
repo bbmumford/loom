@@ -5,6 +5,11 @@
 
 package scope
 
+import (
+	"fmt"
+	"strings"
+)
+
 // ScopeValue is one opaque, named identity axis a trusted server-side
 // transport, session middleware, or product adapter established. loom carries
 // Name and Value without interpreting either; the consuming project assigns
@@ -57,3 +62,56 @@ func (a AuthenticatedIdentity) clone() AuthenticatedIdentity {
 	copy(out.Scopes, a.Scopes)
 	return out
 }
+
+// NewCompleteIdentity is the validating constructor for an authoritative identity
+// snapshot: a subject plus zero or more axes, each with a non-empty canonical
+// Name and a non-empty Value, and no duplicate Name. It returns a defensively
+// cloned identity so a slice the caller retains cannot mutate stamped authority.
+// A trusted ingress resolves each axis (platform tenant from transport/config,
+// customer org from session/store, …) and assembles ONE complete identity here,
+// rather than stamping raw single axes that would replace each other's snapshot.
+func NewCompleteIdentity(subject string, axes ...ScopeValue) (AuthenticatedIdentity, error) {
+	if err := validateAxes(axes); err != nil {
+		return AuthenticatedIdentity{}, err
+	}
+	return AuthenticatedIdentity{Scopes: cloneAxes(axes), Subject: subject}, nil
+}
+
+// validateAxes enforces the deterministic exact-one-axis invariant: every axis
+// name is non-empty and canonical (no surrounding space), every value is
+// non-empty, and no name repeats. Duplicate names would make Scope(name)
+// order-dependent (it returns the first match), silently shadowing an axis —
+// the alias hazard the constructor exists to close. An empty axis list is valid
+// (a subject-only or absent-axis presence); Scope reports "" for an absent axis.
+func validateAxes(axes []ScopeValue) error {
+	seen := make(map[string]struct{}, len(axes))
+	for i, a := range axes {
+		if a.Name == "" || strings.TrimSpace(a.Name) != a.Name {
+			return fmt.Errorf("scope: axis %d name is empty or non-canonical", i)
+		}
+		if a.Value == "" {
+			return fmt.Errorf("scope: axis %q has an empty value", a.Name)
+		}
+		if _, dup := seen[a.Name]; dup {
+			return fmt.Errorf("scope: duplicate axis name %q", a.Name)
+		}
+		seen[a.Name] = struct{}{}
+	}
+	return nil
+}
+
+// cloneAxes copies the axis slice so no caller-retained backing array aliases a
+// stamped identity.
+func cloneAxes(axes []ScopeValue) []ScopeValue {
+	if len(axes) == 0 {
+		return nil
+	}
+	out := make([]ScopeValue, len(axes))
+	copy(out, axes)
+	return out
+}
+
+// validate reports whether the identity's axes satisfy the canonical invariant.
+// The context stampers call it so an unvalidated raw struct literal (which the
+// exported fields still permit while HSTLES compiles) cannot enter authority.
+func (a AuthenticatedIdentity) validate() error { return validateAxes(a.Scopes) }

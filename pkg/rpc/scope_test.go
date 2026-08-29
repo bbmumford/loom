@@ -82,6 +82,24 @@ func idAxes(tenant, org, user string) AuthenticatedScopeIdentity {
 	return id
 }
 
+// TestWithAuthenticatedScopeIdentity_FailsClosedOnInvalid confirms the rpc-layer
+// stamper inherits the leaf validation: a duplicate-axis identity is not admitted
+// and does not leave a poisoned prior snapshot readable.
+func TestWithAuthenticatedScopeIdentity_FailsClosedOnInvalid(t *testing.T) {
+	base := WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "acme", "u1"))
+	if AuthenticatedScopeIdentityFromContext(base).Scope(scope.AxisPlatformTenant) != "orbtr" {
+		t.Fatal("precondition: prior valid identity must be present")
+	}
+	dup := AuthenticatedScopeIdentity{Scopes: []scope.ScopeValue{
+		{Name: scope.AxisPlatformTenant, Value: "orbtr"},
+		{Name: scope.AxisPlatformTenant, Value: "evil"},
+	}}
+	got := AuthenticatedScopeIdentityFromContext(WithAuthenticatedScopeIdentity(base, dup))
+	if got.Scope(scope.AxisPlatformTenant) != "" {
+		t.Fatalf("duplicate-axis identity was admitted through the rpc wrapper: %q", got.Scope(scope.AxisPlatformTenant))
+	}
+}
+
 func TestEnforceScope_None(t *testing.T) {
 	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopeNone}
 	// ScopeNone admits even with a nil policy — it is the handler's explicit
