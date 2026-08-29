@@ -643,12 +643,10 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 	transportTenant := handlers.TransportTenantFromContext(ctx)
 	if transportTenant != "" && transportTenant != "default" {
 		ctx = s.authValidator.WithTenantID(ctx, transportTenant)
-	} else if tid := req.Context["tenantId"]; tid != "" {
-		// Compatibility for dedicated transports that have no ScopeID. Such a
-		// context may satisfy legacy platform-only handlers, but a typed
-		// customer principal below is refused without a bound transport.
-		ctx = s.authValidator.WithTenantID(ctx, tid)
 	}
+	// No req.Context["tenantId"] fallback: RPCRequest.Context is mutable wire
+	// metadata and must never mint platform authority. Only an authenticated
+	// transport ScopeID establishes the platform tenant.
 	typedPrincipal := false
 	if req.Principal != nil {
 		var err error
@@ -837,18 +835,22 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 	// presence), and take the subject from UserId. The gates above still read
 	// the wire fields directly — they are the load-bearing reconciliation
 	// surface — while the reconstructed identity is what dispatch enforces on.
-	identity := tenantScope.AuthenticatedIdentity{Subject: wire.UserId}
+	var axes []tenantScope.ScopeValue
 	if wire.PlatformTenantId != "" {
-		identity.Scopes = append(identity.Scopes, tenantScope.ScopeValue{
+		axes = append(axes, tenantScope.ScopeValue{
 			Name:  tenantScope.AxisPlatformTenant,
 			Value: wire.PlatformTenantId,
 		})
 	}
 	if wire.CustomerOrgId != "" {
-		identity.Scopes = append(identity.Scopes, tenantScope.ScopeValue{
+		axes = append(axes, tenantScope.ScopeValue{
 			Name:  tenantScope.AxisCustomerOrg,
 			Value: wire.CustomerOrgId,
 		})
+	}
+	identity, err := tenantScope.NewCompleteIdentity(wire.UserId, axes...)
+	if err != nil {
+		return ctx, err
 	}
 	principal, err := tenantScope.NewAuthenticatedPrincipal(identity, wire.Scopes)
 	if err != nil {

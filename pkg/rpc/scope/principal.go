@@ -34,6 +34,9 @@ func NewAuthenticatedPrincipal(
 	identity AuthenticatedIdentity,
 	grants []string,
 ) (AuthenticatedPrincipal, error) {
+	if err := identity.validate(); err != nil {
+		return AuthenticatedPrincipal{}, err
+	}
 	grantCopy := make([]string, len(grants))
 	for i, granted := range grants {
 		if granted == "" || strings.TrimSpace(granted) != granted {
@@ -78,15 +81,19 @@ func WithAuthenticatedPrincipal(
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if !principal.Valid() {
-		return ctx
+	// Fail closed: an empty or invalid principal confers no authority and must not
+	// leave a poisoned prior identity/principal live.
+	if !principal.Valid() || principal.identity.validate() != nil {
+		return failClosed(ctx)
 	}
 	sealed := AuthenticatedPrincipal{
 		identity: principal.identity.clone(),
 		grants:   principal.Scopes(),
 	}
 	ctx = context.WithValue(ctx, authenticatedPrincipalContextKey{}, sealed)
-	return WithAuthenticatedIdentity(ctx, sealed.identity)
+	// stampIdentityOnly (not WithAuthenticatedIdentity) so this atomic install does
+	// NOT clear the principal it just stamped — the two projections stay coherent.
+	return stampIdentityOnly(ctx, sealed.identity)
 }
 
 // AuthenticatedPrincipalFromContext returns a defensive copy of the complete

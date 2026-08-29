@@ -87,3 +87,53 @@ func TestWithAuthenticatedScopeReplacesWholeSnapshot(t *testing.T) {
 		t.Fatalf("scope rebind must carry exactly one axis, got %d", len(got.Scopes))
 	}
 }
+
+// TestNewCompleteIdentityValidates pins the axis invariant: duplicate names,
+// empty/non-canonical names and empty values are rejected; a well-formed
+// two-axis identity is accepted and defensively cloned from the caller's input.
+func TestNewCompleteIdentityValidates(t *testing.T) {
+	bad := []struct {
+		name string
+		axes []ScopeValue
+	}{
+		{"duplicate-name", []ScopeValue{{Name: AxisPlatformTenant, Value: "a"}, {Name: AxisPlatformTenant, Value: "b"}}},
+		{"empty-name", []ScopeValue{{Name: "", Value: "v"}}},
+		{"noncanonical-name", []ScopeValue{{Name: " x", Value: "v"}}},
+		{"empty-value", []ScopeValue{{Name: AxisPlatformTenant, Value: ""}}},
+	}
+	for _, c := range bad {
+		if _, err := NewCompleteIdentity("u", c.axes...); err == nil {
+			t.Errorf("%s: expected rejection, got nil error", c.name)
+		}
+	}
+	in := []ScopeValue{{Name: AxisPlatformTenant, Value: "orbtr"}, {Name: AxisCustomerOrg, Value: "acme"}}
+	id, err := NewCompleteIdentity("user-1", in...)
+	if err != nil {
+		t.Fatalf("well-formed two-axis identity rejected: %v", err)
+	}
+	in[0].Value = "evil" // mutate caller input after construction
+	if id.Scope(AxisPlatformTenant) != "orbtr" {
+		t.Fatal("NewCompleteIdentity did not clone its axis input")
+	}
+}
+
+// TestNewCompleteIdentityPeerAndAbsentAxes: both peer axes are readable together,
+// and an absent axis reads empty (an empty axis list is a valid subject-only
+// presence).
+func TestNewCompleteIdentityPeerAndAbsentAxes(t *testing.T) {
+	id, err := NewCompleteIdentity("u",
+		ScopeValue{Name: AxisPlatformTenant, Value: "orbtr"},
+		ScopeValue{Name: AxisCustomerOrg, Value: "acme"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id.Scope(AxisPlatformTenant) != "orbtr" || id.Scope(AxisCustomerOrg) != "acme" {
+		t.Fatalf("peer axes must both be readable: %+v", id.Scopes)
+	}
+	if id.Scope("no-such-axis") != "" {
+		t.Fatal("absent axis must read empty")
+	}
+	if _, err := NewCompleteIdentity("subject-only"); err != nil {
+		t.Fatalf("subject-only (zero-axis) identity must be valid: %v", err)
+	}
+}
