@@ -33,6 +33,12 @@ type ScopeValue struct {
 type AuthenticatedIdentity struct {
 	Scopes  []ScopeValue
 	Subject string
+	// owner is the opaque server-established partition ("whose data") a store
+	// selector keys on. loom stores and returns it without interpreting it; the
+	// consuming project's injected identity policy (the trusted ingress that
+	// resolved it) sets it via WithOwner. loom knows no notion of which data is
+	// the owner.
+	owner string
 }
 
 // Scope returns the value of the named axis, or "" when the axis is absent.
@@ -50,14 +56,34 @@ func (a AuthenticatedIdentity) Has(name string) bool {
 	return a.Scope(name) != ""
 }
 
+// OwnerScope returns the server-established owner partition: the opaque "whose
+// data" binding a store selector keys on (the plan's OwnerScope, section 16.1).
+// The consuming project's injected policy resolved which of the identity's data
+// is the owner and set it via WithOwner; loom returns it without naming or
+// interpreting any axis, so a reader carries no tenancy vocabulary. "" when
+// unset — fail-closed at the read (an absent partition denies, never grants).
+func (a AuthenticatedIdentity) OwnerScope() string { return a.owner }
+
+// WithOwner returns a copy of the identity with the opaque owner partition set.
+// The consuming project's injected identity policy (the trusted ingress that
+// resolved "whose data") calls it; loom bakes in no notion of which data is the
+// owner. A defensive copy of the axis slice is taken so the returned value
+// shares no mutable state with the receiver.
+func (a AuthenticatedIdentity) WithOwner(owner string) AuthenticatedIdentity {
+	out := a.clone()
+	out.owner = owner
+	return out
+}
+
 // clone returns a defensive copy of the identity's axis slice.
 func (a AuthenticatedIdentity) clone() AuthenticatedIdentity {
 	if len(a.Scopes) == 0 {
-		return AuthenticatedIdentity{Subject: a.Subject}
+		return AuthenticatedIdentity{Subject: a.Subject, owner: a.owner}
 	}
 	out := AuthenticatedIdentity{
 		Scopes:  make([]ScopeValue, len(a.Scopes)),
 		Subject: a.Subject,
+		owner:   a.owner,
 	}
 	copy(out.Scopes, a.Scopes)
 	return out
