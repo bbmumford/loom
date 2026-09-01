@@ -58,7 +58,7 @@ func (r *Registry) PresencePolicy() scope.PresencePolicy {
 // checks and the store happen under the caller's lock.
 func (r *Registry) prepareStored(h Handler) (fqn, role string, stored *Handler, err error) {
 	if !scope.IsDeclared(h.Scope) {
-		return "", "", nil, fmt.Errorf("handler %s has invalid tenant scope %q: declare one of the rpc.Scope* tiers explicitly", h.FQN(), h.Scope)
+		return "", "", nil, fmt.Errorf("handler %s has a non-declarable scope %q: declare a concrete scope tag (the ScopeUnset zero value and the ScopeUnknown proto-decay sentinel are refused)", h.FQN(), h.Scope)
 	}
 	s := h
 	if len(h.Middleware) > 0 {

@@ -47,20 +47,28 @@ func TestAuthenticatedIdentityCloneIsDefensive(t *testing.T) {
 	}
 }
 
-// TestIsDeclaredFailsClosed is a registration-time fail-closed proof: the two
-// sentinels (ScopeUnset zero value, ScopeUnknown proto-decay marker) and any
-// unrecognised tag are NOT declarable, so a registry refuses to admit them.
-func TestIsDeclaredFailsClosed(t *testing.T) {
-	declarable := []ScopeTag{ScopeNone, ScopePlatform, ScopeTenant, ScopeOrg, ScopeUser, ScopeProfile}
+// TestIsDeclaredAdmitsOpaqueRejectsSentinels proves loom's admission is
+// taxonomy-agnostic: the blessed level constants AND any consumer-defined
+// opaque axis (e.g. a partition tag) are declarable, while ONLY the two
+// non-declarable sentinels (ScopeUnset zero value, ScopeUnknown proto-decay
+// marker) are refused. loom no longer enumerates a fixed ladder at
+// registration — a tag it does not recognise is admitted and left to fail
+// CLOSED at EnforceScope via the consumer PresencePolicy (proven in the rpc
+// package's enforcement tests), never fail open.
+func TestIsDeclaredAdmitsOpaqueRejectsSentinels(t *testing.T) {
+	declarable := []ScopeTag{
+		ScopeNone, ScopePlatform, ScopeTenant, ScopeOrg, ScopeUser, ScopeProfile,
+		ScopeTag("partition"), ScopeTag("consumer-defined-axis"),
+	}
 	for _, s := range declarable {
 		if !IsDeclared(s) {
-			t.Fatalf("IsDeclared(%q) = false, want true", s)
+			t.Fatalf("IsDeclared(%q) = false, want true (opaque consumer axis must admit)", s)
 		}
 	}
-	notDeclarable := []ScopeTag{ScopeUnset, ScopeUnknown, ScopeTag("garbage")}
+	notDeclarable := []ScopeTag{ScopeUnset, ScopeUnknown}
 	for _, s := range notDeclarable {
 		if IsDeclared(s) {
-			t.Fatalf("IsDeclared(%q) = true, want false (must fail closed)", s)
+			t.Fatalf("IsDeclared(%q) = true, want false (sentinels must fail closed)", s)
 		}
 	}
 }

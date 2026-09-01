@@ -81,14 +81,17 @@ const (
 )
 
 // IsDeclared reports whether s is a valid registration-time declaration.
-// ScopeUnknown is intentionally excluded: it is a fail-closed translation
-// sentinel, not a tag a registry may admit. ScopeUnset (the zero value) is
-// likewise not declarable.
+// loom admits ANY tag except the two non-declarable sentinels: ScopeUnset (the
+// zero value — no scope decision was made) and ScopeUnknown (the fail-closed
+// proto-decay marker). It does NOT enumerate a fixed ladder of levels: loom
+// assigns a tag no meaning, so it has no basis to reject a consumer-defined
+// opaque axis (e.g. a partition tag) at registration. This mirrors EnforceScope,
+// which already delegates every non-sentinel tag to the consumer's
+// PresencePolicy and denies when the policy reports it unsatisfied — so a tag
+// loom's admission does not recognise still fails CLOSED at enforcement (an
+// unconfigured policy denies every non-None handler). The blessed ScopePlatform
+// /Tenant/Org/User/Profile constants remain as consumer conveniences, not as
+// loom's admissible set.
 func IsDeclared(s ScopeTag) bool {
-	switch s {
-	case ScopeNone, ScopePlatform, ScopeTenant, ScopeOrg, ScopeUser, ScopeProfile:
-		return true
-	default:
-		return false
-	}
+	return s != ScopeUnset && s != ScopeUnknown
 }

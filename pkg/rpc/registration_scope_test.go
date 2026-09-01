@@ -33,14 +33,19 @@ func TestTenantScopeHasInvalidZeroAndExplicitNone(t *testing.T) {
 	}
 }
 
-func TestRegistryRejectsUndeclaredTenantScopeBeforeMutation(t *testing.T) {
+// TestRegistryRejectsSentinelScopeBeforeMutation proves loom refuses ONLY the
+// two non-declarable sentinels at registration — the ScopeUnset zero value and
+// the ScopeUnknown proto-decay marker — and does so before mutating any index.
+// A consumer-defined opaque axis is NOT a sentinel and is admitted (see
+// TestRegistryAcceptsOpaqueConsumerAxis); loom no longer enumerates a fixed
+// ladder here.
+func TestRegistryRejectsSentinelScopeBeforeMutation(t *testing.T) {
 	cases := []struct {
 		name  string
 		scope TenantScope
 	}{
 		{name: "zero"},
 		{name: "unknown", scope: ScopeUnknown},
-		{name: "garbage", scope: TenantScope("tennant")},
 	}
 
 	for _, tc := range cases {
@@ -53,10 +58,10 @@ func TestRegistryRejectsUndeclaredTenantScopeBeforeMutation(t *testing.T) {
 				Scope:     tc.scope,
 			})
 			if err == nil {
-				t.Fatalf("Register accepted undeclared scope %q", tc.scope)
+				t.Fatalf("Register accepted sentinel scope %q", tc.scope)
 			}
-			if !strings.Contains(err.Error(), "tenant scope") {
-				t.Fatalf("Register error = %q, want tenant-scope diagnostic", err)
+			if !strings.Contains(err.Error(), "non-declarable scope") {
+				t.Fatalf("Register error = %q, want non-declarable-scope diagnostic", err)
 			}
 			if got := reg.Count(); got != 0 {
 				t.Fatalf("rejected registration mutated handler count: got %d", got)
@@ -65,6 +70,31 @@ func TestRegistryRejectsUndeclaredTenantScopeBeforeMutation(t *testing.T) {
 				t.Fatalf("rejected registration mutated role index: %v", got)
 			}
 		})
+	}
+}
+
+// TestRegistryAcceptsOpaqueConsumerAxis proves loom's taxonomy-agnostic
+// admission: a consumer-defined opaque scope tag loom does not bless registers
+// successfully (its meaning is the consumer PresencePolicy's to judge, and an
+// unrecognised tag fails CLOSED at EnforceScope — see
+// TestEnforceScope_OpaqueTagFailsClosed).
+func TestRegistryAcceptsOpaqueConsumerAxis(t *testing.T) {
+	reg := NewRegistry()
+	h := Handler{
+		Namespace: "test",
+		Domain:    "scope",
+		Operation: "OpaqueAxis",
+		Scope:     TenantScope("partition"),
+	}
+	if err := reg.Register(h); err != nil {
+		t.Fatalf("Register opaque consumer axis: %v", err)
+	}
+	if got := reg.Count(); got != 1 {
+		t.Fatalf("Count = %d, want 1", got)
+	}
+	stored, ok := reg.Get(h.FQN())
+	if !ok || stored.Scope != TenantScope("partition") {
+		t.Fatalf("stored opaque axis = (%+v, %v)", stored, ok)
 	}
 }
 
