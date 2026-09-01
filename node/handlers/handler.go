@@ -861,7 +861,7 @@ func (r *HandlerRegistry) validateTenantScope(ctx context.Context, h HandlerMeta
 	// request tenant. This reconciliation does not interpret the scope tag; it
 	// checks the transport binding against the identity's platform-tenant axis,
 	// which WithTransportTenant established from the same server-resolved value.
-	tenantID := identity.Scope(scope.AxisPlatformTenant)
+	tenantID := identity.Scope(scope.AxisTransportPinned)
 	transportTenant := TransportTenantFromContext(ctx)
 	if transportTenant != "" && transportTenant != "default" && tenantID != "" {
 		if transportTenant != tenantID {
@@ -1369,7 +1369,7 @@ type transportTenantCtxKey struct{}
 // tenant-aware listener.
 func WithTransportTenant(ctx context.Context, tenantID string) context.Context {
 	ctx = context.WithValue(ctx, transportTenantCtxKey{}, tenantID)
-	return scope.WithAuthenticatedScope(ctx, scope.AxisPlatformTenant, tenantID)
+	return scope.WithAuthenticatedScope(ctx, scope.AxisTransportPinned, tenantID)
 }
 
 // TransportTenantFromContext extracts the transport-level tenant ID from context.
