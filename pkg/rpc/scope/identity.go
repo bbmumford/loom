@@ -76,17 +76,6 @@ func (a AuthenticatedIdentity) WithPartition(partition string) AuthenticatedIden
 	return out
 }
 
-// OwnerScope is the deprecated alias for Partition, retained while consumers
-// migrate off the "owner" vocabulary the scope-agnostic model retires. New code
-// calls Partition.
-func (a AuthenticatedIdentity) OwnerScope() string { return a.Partition() }
-
-// WithOwner is the deprecated alias for WithPartition, retained while consumers
-// migrate off the "owner" vocabulary. New code calls WithPartition.
-func (a AuthenticatedIdentity) WithOwner(owner string) AuthenticatedIdentity {
-	return a.WithPartition(owner)
-}
-
 // clone returns a defensive copy of the identity's axis slice.
 func (a AuthenticatedIdentity) clone() AuthenticatedIdentity {
 	if len(a.Scopes) == 0 {
