@@ -29,7 +29,7 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 		}
 	}
 	return func(declared scope.ScopeTag, id scope.AuthenticatedIdentity) (bool, string) {
-		tenant := id.Scope(scope.AxisPlatformTenant)
+		tenant := id.Scope(scope.AxisTransportPinned)
 		switch declared {
 		case scope.ScopeNone:
 			return true, ""
@@ -48,7 +48,7 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 			if tenant == "" {
 				return false, "tenant required"
 			}
-			if id.Scope(scope.AxisCustomerOrg) == "" {
+			if id.Scope(scope.AxisWithinTransport) == "" {
 				return false, "organisation required"
 			}
 		case scope.ScopeUser:
@@ -74,10 +74,10 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 func idAxes(tenant, org, user string) AuthenticatedScopeIdentity {
 	id := AuthenticatedScopeIdentity{Subject: user}
 	if tenant != "" {
-		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisPlatformTenant, Value: tenant})
+		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisTransportPinned, Value: tenant})
 	}
 	if org != "" {
-		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisCustomerOrg, Value: org})
+		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisWithinTransport, Value: org})
 	}
 	return id
 }
@@ -87,16 +87,16 @@ func idAxes(tenant, org, user string) AuthenticatedScopeIdentity {
 // and does not leave a poisoned prior snapshot readable.
 func TestWithAuthenticatedScopeIdentity_FailsClosedOnInvalid(t *testing.T) {
 	base := WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "acme", "u1"))
-	if AuthenticatedScopeIdentityFromContext(base).Scope(scope.AxisPlatformTenant) != "orbtr" {
+	if AuthenticatedScopeIdentityFromContext(base).Scope(scope.AxisTransportPinned) != "orbtr" {
 		t.Fatal("precondition: prior valid identity must be present")
 	}
 	dup := AuthenticatedScopeIdentity{Scopes: []scope.ScopeValue{
-		{Name: scope.AxisPlatformTenant, Value: "orbtr"},
-		{Name: scope.AxisPlatformTenant, Value: "evil"},
+		{Name: scope.AxisTransportPinned, Value: "orbtr"},
+		{Name: scope.AxisTransportPinned, Value: "evil"},
 	}}
 	got := AuthenticatedScopeIdentityFromContext(WithAuthenticatedScopeIdentity(base, dup))
-	if got.Scope(scope.AxisPlatformTenant) != "" {
-		t.Fatalf("duplicate-axis identity was admitted through the rpc wrapper: %q", got.Scope(scope.AxisPlatformTenant))
+	if got.Scope(scope.AxisTransportPinned) != "" {
+		t.Fatalf("duplicate-axis identity was admitted through the rpc wrapper: %q", got.Scope(scope.AxisTransportPinned))
 	}
 }
 

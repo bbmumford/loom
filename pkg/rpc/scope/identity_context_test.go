@@ -22,7 +22,7 @@ func mustIdentity(t *testing.T, subject string, axes ...ScopeValue) Authenticate
 // (a) A caller that mutates the axis slice AFTER stamping must not reach the
 // stored authority — the stamper defensively clones.
 func TestWithAuthenticatedIdentity_ClonesOnStamp(t *testing.T) {
-	axes := []ScopeValue{{Name: AxisPlatformTenant, Value: "orbtr"}, {Name: AxisCustomerOrg, Value: "acme"}}
+	axes := []ScopeValue{{Name: AxisTransportPinned, Value: "orbtr"}, {Name: AxisWithinTransport, Value: "acme"}}
 	id, err := NewCompleteIdentity("user-1", axes...)
 	if err != nil {
 		t.Fatal(err)
@@ -31,7 +31,7 @@ func TestWithAuthenticatedIdentity_ClonesOnStamp(t *testing.T) {
 	axes[0].Value = "evil"      // mutate the original constructor input
 	id.Scopes[1].Value = "evil" // mutate the returned identity's backing array
 	got := AuthenticatedIdentityFromContext(ctx)
-	if got.Scope(AxisPlatformTenant) != "orbtr" || got.Scope(AxisCustomerOrg) != "acme" {
+	if got.Scope(AxisTransportPinned) != "orbtr" || got.Scope(AxisWithinTransport) != "acme" {
 		t.Fatalf("stamped identity mutated via retained input: %+v", got.Scopes)
 	}
 }
@@ -40,33 +40,33 @@ func TestWithAuthenticatedIdentity_ClonesOnStamp(t *testing.T) {
 // stored authority — the reader defensively clones.
 func TestAuthenticatedIdentityFromContext_ClonesOnRead(t *testing.T) {
 	ctx := WithAuthenticatedIdentity(context.Background(),
-		mustIdentity(t, "u", ScopeValue{Name: AxisPlatformTenant, Value: "orbtr"}))
+		mustIdentity(t, "u", ScopeValue{Name: AxisTransportPinned, Value: "orbtr"}))
 	first := AuthenticatedIdentityFromContext(ctx)
 	first.Scopes[0].Value = "evil"
 	second := AuthenticatedIdentityFromContext(ctx)
-	if second.Scope(AxisPlatformTenant) != "orbtr" {
-		t.Fatalf("stored identity mutated via read-returned slice: got %q", second.Scope(AxisPlatformTenant))
+	if second.Scope(AxisTransportPinned) != "orbtr" {
+		t.Fatalf("stored identity mutated via read-returned slice: got %q", second.Scope(AxisTransportPinned))
 	}
 }
 
 // (c) An INVALID stamp over a poisoned prior context must clear BOTH the identity
 // and the principal — never preserve prior authority (fail-closed).
 func TestWithAuthenticatedScope_InvalidFailsClosedClearsBoth(t *testing.T) {
-	good := mustIdentity(t, "u", ScopeValue{Name: AxisPlatformTenant, Value: "orbtr"})
+	good := mustIdentity(t, "u", ScopeValue{Name: AxisTransportPinned, Value: "orbtr"})
 	p, err := NewAuthenticatedPrincipal(good, []string{"grant.read"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := WithAuthenticatedPrincipal(context.Background(), p)
-	if AuthenticatedIdentityFromContext(ctx).Scope(AxisPlatformTenant) != "orbtr" {
+	if AuthenticatedIdentityFromContext(ctx).Scope(AxisTransportPinned) != "orbtr" {
 		t.Fatal("precondition: prior identity must be present")
 	}
 	if _, ok := AuthenticatedPrincipalFromContext(ctx); !ok {
 		t.Fatal("precondition: prior principal must be present")
 	}
 	// invalid: empty value fails the axis invariant
-	ctx = WithAuthenticatedScope(ctx, AxisPlatformTenant, "")
-	if AuthenticatedIdentityFromContext(ctx).Scope(AxisPlatformTenant) != "" {
+	ctx = WithAuthenticatedScope(ctx, AxisTransportPinned, "")
+	if AuthenticatedIdentityFromContext(ctx).Scope(AxisTransportPinned) != "" {
 		t.Fatal("invalid stamp preserved prior identity (fail-open)")
 	}
 	if _, ok := AuthenticatedPrincipalFromContext(ctx); ok {
@@ -77,14 +77,14 @@ func TestWithAuthenticatedScope_InvalidFailsClosedClearsBoth(t *testing.T) {
 // (d) A VALID raw identity replacement carries no grants, so it must clear the
 // prior principal — no contradictory identity/grants snapshot survives.
 func TestWithAuthenticatedIdentity_ValidRawClearsPriorPrincipal(t *testing.T) {
-	good := mustIdentity(t, "u", ScopeValue{Name: AxisPlatformTenant, Value: "orbtr"})
+	good := mustIdentity(t, "u", ScopeValue{Name: AxisTransportPinned, Value: "orbtr"})
 	p, _ := NewAuthenticatedPrincipal(good, []string{"grant.read"})
 	ctx := WithAuthenticatedPrincipal(context.Background(), p)
-	ctx = WithAuthenticatedIdentity(ctx, mustIdentity(t, "u2", ScopeValue{Name: AxisCustomerOrg, Value: "acme"}))
+	ctx = WithAuthenticatedIdentity(ctx, mustIdentity(t, "u2", ScopeValue{Name: AxisWithinTransport, Value: "acme"}))
 	if _, ok := AuthenticatedPrincipalFromContext(ctx); ok {
 		t.Fatal("raw identity replacement left prior principal grants live (contradictory snapshot)")
 	}
-	if AuthenticatedIdentityFromContext(ctx).Scope(AxisCustomerOrg) != "acme" {
+	if AuthenticatedIdentityFromContext(ctx).Scope(AxisWithinTransport) != "acme" {
 		t.Fatal("raw identity replacement did not take effect")
 	}
 }
@@ -93,15 +93,15 @@ func TestWithAuthenticatedIdentity_ValidRawClearsPriorPrincipal(t *testing.T) {
 // atomically and does not clear the principal it just stamped.
 func TestWithAuthenticatedPrincipal_CoherentAndAtomic(t *testing.T) {
 	id := mustIdentity(t, "u",
-		ScopeValue{Name: AxisPlatformTenant, Value: "orbtr"},
-		ScopeValue{Name: AxisCustomerOrg, Value: "acme"})
+		ScopeValue{Name: AxisTransportPinned, Value: "orbtr"},
+		ScopeValue{Name: AxisWithinTransport, Value: "acme"})
 	p, err := NewAuthenticatedPrincipal(id, []string{"grant.read", "grant.write"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	ctx := WithAuthenticatedPrincipal(context.Background(), p)
 	got := AuthenticatedIdentityFromContext(ctx)
-	if got.Scope(AxisPlatformTenant) != "orbtr" || got.Scope(AxisCustomerOrg) != "acme" {
+	if got.Scope(AxisTransportPinned) != "orbtr" || got.Scope(AxisWithinTransport) != "acme" {
 		t.Fatalf("principal identity projection incomplete: %+v", got.Scopes)
 	}
 	gotP, ok := AuthenticatedPrincipalFromContext(ctx)
@@ -112,11 +112,11 @@ func TestWithAuthenticatedPrincipal_CoherentAndAtomic(t *testing.T) {
 
 // An empty/invalid principal fails closed, clearing a prior snapshot.
 func TestWithAuthenticatedPrincipal_InvalidFailsClosed(t *testing.T) {
-	good := mustIdentity(t, "u", ScopeValue{Name: AxisPlatformTenant, Value: "orbtr"})
+	good := mustIdentity(t, "u", ScopeValue{Name: AxisTransportPinned, Value: "orbtr"})
 	p, _ := NewAuthenticatedPrincipal(good, []string{"grant.read"})
 	ctx := WithAuthenticatedPrincipal(context.Background(), p)
 	ctx = WithAuthenticatedPrincipal(ctx, AuthenticatedPrincipal{}) // empty
-	if AuthenticatedIdentityFromContext(ctx).Scope(AxisPlatformTenant) != "" {
+	if AuthenticatedIdentityFromContext(ctx).Scope(AxisTransportPinned) != "" {
 		t.Fatal("empty principal preserved prior identity")
 	}
 	if _, ok := AuthenticatedPrincipalFromContext(ctx); ok {
@@ -128,11 +128,11 @@ func TestWithAuthenticatedPrincipal_InvalidFailsClosed(t *testing.T) {
 // hstles NewScopeIdentity produces — survives validation and reads back whole.
 func TestHSTLESShapedPositiveSurvives(t *testing.T) {
 	id := mustIdentity(t, "user-x",
-		ScopeValue{Name: AxisPlatformTenant, Value: "orbtr"},
-		ScopeValue{Name: AxisCustomerOrg, Value: "org-A"})
+		ScopeValue{Name: AxisTransportPinned, Value: "orbtr"},
+		ScopeValue{Name: AxisWithinTransport, Value: "org-A"})
 	ctx := WithAuthenticatedIdentity(context.Background(), id)
 	got := AuthenticatedIdentityFromContext(ctx)
-	if got.Scope(AxisPlatformTenant) != "orbtr" || got.Scope(AxisCustomerOrg) != "org-A" || got.Subject != "user-x" {
+	if got.Scope(AxisTransportPinned) != "orbtr" || got.Scope(AxisWithinTransport) != "org-A" || got.Subject != "user-x" {
 		t.Fatalf("HSTLES-shaped identity did not survive: %+v subj=%q", got.Scopes, got.Subject)
 	}
 }

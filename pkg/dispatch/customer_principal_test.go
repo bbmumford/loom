@@ -28,8 +28,8 @@ func principalAxis(p *pb.AuthenticatedPrincipal, name string) string {
 func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing.T) {
 	identity := tenantScope.AuthenticatedIdentity{
 		Scopes: []tenantScope.ScopeValue{
-			{Name: tenantScope.AxisPlatformTenant, Value: "orbtr"},
-			{Name: tenantScope.AxisCustomerOrg, Value: "org-A"},
+			{Name: tenantScope.AxisTransportPinned, Value: "orbtr"},
+			{Name: tenantScope.AxisWithinTransport, Value: "org-A"},
 		},
 		Subject: "user-A",
 	}
@@ -54,10 +54,10 @@ func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing
 	if req.Principal == nil {
 		t.Fatal("typed principal omitted from RPC envelope")
 	}
-	if got := principalAxis(req.Principal, tenantScope.AxisPlatformTenant); got != "orbtr" {
+	if got := principalAxis(req.Principal, tenantScope.AxisTransportPinned); got != "orbtr" {
 		t.Fatalf("platform tenant axis = %q", got)
 	}
-	if got := principalAxis(req.Principal, tenantScope.AxisCustomerOrg); got != "org-A" {
+	if got := principalAxis(req.Principal, tenantScope.AxisWithinTransport); got != "org-A" {
 		t.Fatalf("customer org axis = %q", got)
 	}
 	if got := req.Principal.Subject; got != "user-A" {
@@ -79,8 +79,8 @@ func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing
 func TestBuildRPCRequestCtxDoesNotRewritePrincipalToCallerPlatform(t *testing.T) {
 	identity := tenantScope.AuthenticatedIdentity{
 		Scopes: []tenantScope.ScopeValue{
-			{Name: tenantScope.AxisPlatformTenant, Value: "foreign-platform"},
-			{Name: tenantScope.AxisCustomerOrg, Value: "org-A"},
+			{Name: tenantScope.AxisTransportPinned, Value: "foreign-platform"},
+			{Name: tenantScope.AxisWithinTransport, Value: "org-A"},
 		},
 		Subject: "user-A",
 	}
@@ -94,7 +94,7 @@ func TestBuildRPCRequestCtxDoesNotRewritePrincipalToCallerPlatform(t *testing.T)
 	if req.Principal == nil {
 		t.Fatal("mismatched principal was silently dropped")
 	}
-	if got := principalAxis(req.Principal, tenantScope.AxisPlatformTenant); got != "foreign-platform" {
+	if got := principalAxis(req.Principal, tenantScope.AxisTransportPinned); got != "foreign-platform" {
 		t.Fatalf("principal rewritten to dispatch platform: %q", got)
 	}
 	if got := req.Context["tenantId"]; got != "orbtr" {
