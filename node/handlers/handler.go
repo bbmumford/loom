@@ -461,7 +461,7 @@ func (r *HandlerRegistry) registerMeta(
 		return RegistrationHandle{}, fmt.Errorf("handler name cannot be empty")
 	}
 	if declared := h.TenantScope(); !scope.IsDeclared(declared) {
-		return RegistrationHandle{}, fmt.Errorf("handler %s has invalid tenant scope %q: declare one of the TenantScope* tiers explicitly", name, declared)
+		return RegistrationHandle{}, fmt.Errorf("handler %s has a non-declarable scope %q: declare a concrete scope tag (the TenantScopeUnset zero value and the TenantScopeUnknown proto-decay sentinel are refused)", name, declared)
 	}
 
 	r.mu.Lock()

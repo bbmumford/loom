@@ -35,7 +35,13 @@ func (h *registrationScopeHandler) HandleStream(context.Context, MessageStream) 
 	return nil
 }
 
-func TestHandlerRegistryRejectsUndeclaredTenantScopeBeforeMutation(t *testing.T) {
+// TestHandlerRegistryRejectsSentinelTenantScopeBeforeMutation proves the legacy
+// handlers registration path refuses ONLY the two non-declarable sentinels
+// (TenantScopeUnset zero value, TenantScopeUnknown proto-decay marker) before
+// mutating the handler map — matching the rpc.Registry path. A consumer-defined
+// opaque axis admits (see TestHandlerRegistryAcceptsOpaqueConsumerAxis); loom
+// no longer enumerates a fixed ladder at registration.
+func TestHandlerRegistryRejectsSentinelTenantScopeBeforeMutation(t *testing.T) {
 	registrars := []struct {
 		name string
 		call func(*HandlerRegistry, *registrationScopeHandler) error
@@ -51,7 +57,6 @@ func TestHandlerRegistryRejectsUndeclaredTenantScopeBeforeMutation(t *testing.T)
 	}{
 		{name: "zero"},
 		{name: "unknown", scope: TenantScopeUnknown},
-		{name: "garbage", scope: TenantScope("tennant")},
 	}
 
 	for _, registrar := range registrars {
@@ -62,15 +67,43 @@ func TestHandlerRegistryRejectsUndeclaredTenantScopeBeforeMutation(t *testing.T)
 					h := &registrationScopeHandler{name: registrar.name + "." + tc.name, scope: tc.scope}
 					err := registrar.call(reg, h)
 					if err == nil {
-						t.Fatalf("registration accepted undeclared scope %q", tc.scope)
+						t.Fatalf("registration accepted sentinel scope %q", tc.scope)
 					}
-					if !strings.Contains(err.Error(), "tenant scope") {
-						t.Fatalf("registration error = %q, want tenant-scope diagnostic", err)
+					if !strings.Contains(err.Error(), "non-declarable scope") {
+						t.Fatalf("registration error = %q, want non-declarable-scope diagnostic", err)
 					}
 					if _, ok := reg.GetMeta(h.name); ok {
 						t.Fatal("rejected registration mutated handler map")
 					}
 				})
+			}
+		})
+	}
+}
+
+// TestHandlerRegistryAcceptsOpaqueConsumerAxis proves the legacy handlers path
+// admits a consumer-defined opaque scope tag loom does not bless — its meaning
+// is the consumer PresencePolicy's to judge, and an unrecognised tag fails
+// CLOSED at enforcement (proven in the rpc package).
+func TestHandlerRegistryAcceptsOpaqueConsumerAxis(t *testing.T) {
+	registrars := []struct {
+		name string
+		call func(*HandlerRegistry, *registrationScopeHandler) error
+	}{
+		{name: "rpc", call: func(r *HandlerRegistry, h *registrationScopeHandler) error { return r.RegisterRPC(h) }},
+		{name: "task", call: func(r *HandlerRegistry, h *registrationScopeHandler) error { return r.RegisterTask(h) }},
+		{name: "stream", call: func(r *HandlerRegistry, h *registrationScopeHandler) error { return r.RegisterStream(h) }},
+		{name: "meta", call: func(r *HandlerRegistry, h *registrationScopeHandler) error { return r.RegisterHandler(h) }},
+	}
+	for _, registrar := range registrars {
+		t.Run(registrar.name, func(t *testing.T) {
+			reg := NewHandlerRegistry()
+			h := &registrationScopeHandler{name: registrar.name + ".partition", scope: TenantScope("partition")}
+			if err := registrar.call(reg, h); err != nil {
+				t.Fatalf("registration rejected opaque consumer axis: %v", err)
+			}
+			if _, ok := reg.GetMeta(h.name); !ok {
+				t.Fatal("admitted opaque-axis handler not present in handler map")
 			}
 		})
 	}

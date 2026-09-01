@@ -150,6 +150,32 @@ func TestEnforceScope_PolicyFalseDenies(t *testing.T) {
 	}
 }
 
+// TestEnforceScope_OpaqueTagFailsClosed is the safety pair to loom's
+// taxonomy-agnostic admission (IsDeclared admits any non-sentinel tag): a
+// consumer-defined opaque axis loom does not bless must still fail CLOSED at
+// enforcement. With a nil policy it is denied (no evaluator), and with a policy
+// that does not recognise it the policy's own deny is surfaced — the widened
+// admission never turns an unrecognised tag into a silent admit.
+func TestEnforceScope_OpaqueTagFailsClosed(t *testing.T) {
+	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: scope.ScopeTag("partition")}
+	ctx := WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "acme", "u1"))
+	// nil policy: loom cannot judge presence -> deny.
+	if err := EnforceScope(ctx, h, nil); !errors.Is(err, ErrScopeDenied) {
+		t.Fatalf("opaque tag under nil policy must deny, got %v", err)
+	}
+	// A policy that only recognises the blessed ladder denies the opaque tag.
+	ladderOnly := scope.PresencePolicyFunc(func(declared scope.ScopeTag, _ scope.AuthenticatedIdentity) (bool, string) {
+		if scope.IsDeclared(declared) && declared != scope.ScopeTag("partition") {
+			return true, ""
+		}
+		return false, "unrecognised-axis"
+	})
+	err := EnforceScope(ctx, h, ladderOnly)
+	if !errors.Is(err, ErrScopeDenied) || err == nil || !contains(err.Error(), "unrecognised-axis") {
+		t.Fatalf("opaque tag must fail closed via policy deny, got %v", err)
+	}
+}
+
 func contains(s, sub string) bool {
 	for i := 0; i+len(sub) <= len(s); i++ {
 		if s[i:i+len(sub)] == sub {
