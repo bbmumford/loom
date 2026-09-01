@@ -22,7 +22,7 @@ import (
 // receive path reconstructs the opaque identity and this policy judges it.
 func customerScopePolicy() tenantScope.PresencePolicyFunc {
 	return func(declared handlers.TenantScope, id tenantScope.AuthenticatedIdentity) (bool, string) {
-		tenant := id.Scope(tenantScope.AxisPlatformTenant)
+		tenant := id.Scope(tenantScope.AxisTransportPinned)
 		switch declared {
 		case handlers.TenantScopeNone:
 			return true, ""
@@ -30,7 +30,7 @@ func customerScopePolicy() tenantScope.PresencePolicyFunc {
 			if tenant == "" {
 				return false, "authenticated platform tenant context required"
 			}
-			if id.Scope(tenantScope.AxisCustomerOrg) == "" {
+			if id.Scope(tenantScope.AxisWithinTransport) == "" {
 				return false, "authenticated organisation context required"
 			}
 			return true, ""
@@ -88,7 +88,7 @@ func (customerPrincipalValidator) WithAuthenticatedPrincipal(
 // gates against the transport tenant (ports.TransportAxisPin) — the consumer
 // supplies the name; loom never hard-codes it.
 func (customerPrincipalValidator) TransportPinnedAxis() string {
-	return tenantScope.AxisPlatformTenant
+	return tenantScope.AxisTransportPinned
 }
 
 func customerPrincipalRequest() *pb.RPCRequest {
@@ -98,8 +98,8 @@ func customerPrincipalRequest() *pb.RPCRequest {
 		Principal: &pb.AuthenticatedPrincipal{
 			Subject: "user-A",
 			Axes: []*pb.ScopeAxis{
-				{Name: tenantScope.AxisPlatformTenant, Value: "orbtr"},
-				{Name: tenantScope.AxisCustomerOrg, Value: "org-A"},
+				{Name: tenantScope.AxisTransportPinned, Value: "orbtr"},
+				{Name: tenantScope.AxisWithinTransport, Value: "org-A"},
 			},
 			Scopes: []string{"org.read", "org.write"},
 		},
@@ -125,8 +125,8 @@ func TestRPCServerBindsTypedPrincipalFromTenantTransport(t *testing.T) {
 	if got := atomic.LoadInt32(&probe.calls); got != 1 {
 		t.Fatalf("handler calls = %d", got)
 	}
-	if identity := probe.got.Identity(); identity.Scope(tenantScope.AxisPlatformTenant) != "orbtr" ||
-		identity.Scope(tenantScope.AxisCustomerOrg) != "org-A" ||
+	if identity := probe.got.Identity(); identity.Scope(tenantScope.AxisTransportPinned) != "orbtr" ||
+		identity.Scope(tenantScope.AxisWithinTransport) != "org-A" ||
 		identity.Subject != "user-A" {
 		t.Fatalf("handler identity = %#v", identity)
 	}
@@ -222,7 +222,7 @@ func TestRPCServerAdmitsWithinTenantCustomerOrg(t *testing.T) {
 	if !resp.Success {
 		t.Fatalf("within-tenant customer org denied (over-pin regression): %s", resp.Error)
 	}
-	if got := probe.got.Identity().Scope(tenantScope.AxisCustomerOrg); got != "org-Z" {
+	if got := probe.got.Identity().Scope(tenantScope.AxisWithinTransport); got != "org-Z" {
 		t.Fatalf("customer-org axis round-trip = %q, want org-Z", got)
 	}
 }
@@ -312,7 +312,7 @@ func (stampingTenantValidator) ValidateExecutionAuth(context.Context, ports.Secu
 	return nil
 }
 func (stampingTenantValidator) WithTenantID(ctx context.Context, tenantID string) context.Context {
-	return tenantScope.WithAuthenticatedScope(ctx, tenantScope.AxisPlatformTenant, tenantID)
+	return tenantScope.WithAuthenticatedScope(ctx, tenantScope.AxisTransportPinned, tenantID)
 }
 func (stampingTenantValidator) WithAuthenticatedPrincipal(
 	ctx context.Context,

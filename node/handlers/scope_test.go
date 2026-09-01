@@ -44,7 +44,7 @@ func scopeRefPolicy(platforms ...string) tenantScope.PresencePolicyFunc {
 		}
 	}
 	return func(declared TenantScope, id tenantScope.AuthenticatedIdentity) (bool, string) {
-		tenant := id.Scope(tenantScope.AxisPlatformTenant)
+		tenant := id.Scope(tenantScope.AxisTransportPinned)
 		switch declared {
 		case TenantScopeNone:
 			return true, ""
@@ -63,7 +63,7 @@ func scopeRefPolicy(platforms ...string) tenantScope.PresencePolicyFunc {
 			if tenant == "" {
 				return false, "authenticated platform tenant context required"
 			}
-			if id.Scope(tenantScope.AxisCustomerOrg) == "" {
+			if id.Scope(tenantScope.AxisWithinTransport) == "" {
 				return false, "authenticated organisation context required"
 			}
 		case TenantScopeUser:
@@ -97,10 +97,10 @@ func newScopedRegistry(platforms ...string) *HandlerRegistry {
 func scopeIdentity(tenant, org, user string) tenantScope.AuthenticatedIdentity {
 	id := tenantScope.AuthenticatedIdentity{Subject: user}
 	if tenant != "" {
-		id.Scopes = append(id.Scopes, tenantScope.ScopeValue{Name: tenantScope.AxisPlatformTenant, Value: tenant})
+		id.Scopes = append(id.Scopes, tenantScope.ScopeValue{Name: tenantScope.AxisTransportPinned, Value: tenant})
 	}
 	if org != "" {
-		id.Scopes = append(id.Scopes, tenantScope.ScopeValue{Name: tenantScope.AxisCustomerOrg, Value: org})
+		id.Scopes = append(id.Scopes, tenantScope.ScopeValue{Name: tenantScope.AxisWithinTransport, Value: org})
 	}
 	return id
 }

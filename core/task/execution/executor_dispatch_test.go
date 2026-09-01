@@ -36,7 +36,7 @@ func newExecutorRegistry() *handlers.HandlerRegistry {
 			if declared == handlers.TenantScopeNone {
 				return true, ""
 			}
-			if id.Scope(scope.AxisPlatformTenant) == "" {
+			if id.Scope(scope.AxisTransportPinned) == "" {
 				return false, "authenticated platform tenant context required"
 			}
 			return true, ""
@@ -63,7 +63,7 @@ func (p *executorPrincipal) AuthorizeExecution(
 		ctx = scope.WithAuthenticatedIdentity(
 			ctx,
 			scope.AuthenticatedIdentity{Scopes: []scope.ScopeValue{
-				{Name: scope.AxisPlatformTenant, Value: p.tenant},
+				{Name: scope.AxisTransportPinned, Value: p.tenant},
 			}},
 		)
 	}
@@ -95,7 +95,7 @@ func (p *leasedExecutorPrincipal) AuthorizeExecution(
 	ctx = scope.WithAuthenticatedIdentity(
 		ctx,
 		scope.AuthenticatedIdentity{Scopes: []scope.ScopeValue{
-			{Name: scope.AxisPlatformTenant, Value: p.tenant},
+			{Name: scope.AxisTransportPinned, Value: p.tenant},
 		}},
 	)
 	return ctx, func() {

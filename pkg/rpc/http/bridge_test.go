@@ -34,7 +34,7 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 		}
 	}
 	return func(declared scope.ScopeTag, id scope.AuthenticatedIdentity) (bool, string) {
-		tenant := id.Scope(scope.AxisPlatformTenant)
+		tenant := id.Scope(scope.AxisTransportPinned)
 		switch declared {
 		case scope.ScopeNone:
 			return true, ""
@@ -53,7 +53,7 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 			if tenant == "" {
 				return false, "tenant required"
 			}
-			if id.Scope(scope.AxisCustomerOrg) == "" {
+			if id.Scope(scope.AxisWithinTransport) == "" {
 				return false, "organisation required"
 			}
 		case scope.ScopeUser:
@@ -79,10 +79,10 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 func idAxes(tenant, org, user string) rpc.AuthenticatedScopeIdentity {
 	id := rpc.AuthenticatedScopeIdentity{Subject: user}
 	if tenant != "" {
-		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisPlatformTenant, Value: tenant})
+		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisTransportPinned, Value: tenant})
 	}
 	if org != "" {
-		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisCustomerOrg, Value: org})
+		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisWithinTransport, Value: org})
 	}
 	return id
 }

@@ -13,8 +13,8 @@ import (
 func customerIdentity() AuthenticatedIdentity {
 	return AuthenticatedIdentity{
 		Scopes: []ScopeValue{
-			{Name: AxisPlatformTenant, Value: "orbtr"},
-			{Name: AxisCustomerOrg, Value: "org-A"},
+			{Name: AxisTransportPinned, Value: "orbtr"},
+			{Name: AxisWithinTransport, Value: "org-A"},
 		},
 		Subject: "user-A",
 	}
@@ -49,8 +49,8 @@ func TestAuthenticatedPrincipalIsDefensivelyCopied(t *testing.T) {
 		t.Fatalf("stored scopes mutated through retained slice: %v", got)
 	}
 	got := AuthenticatedIdentityFromContext(ctx)
-	if got.Scope(AxisPlatformTenant) != "orbtr" ||
-		got.Scope(AxisCustomerOrg) != "org-A" ||
+	if got.Scope(AxisTransportPinned) != "orbtr" ||
+		got.Scope(AxisWithinTransport) != "org-A" ||
 		got.Subject != "user-A" {
 		t.Fatalf("scope identity = %#v", got)
 	}
@@ -83,7 +83,7 @@ func TestAuthenticatedPrincipalReplacementDoesNotMergeAxes(t *testing.T) {
 		t.Fatal(err)
 	}
 	platformOnly, err := NewAuthenticatedPrincipal(AuthenticatedIdentity{
-		Scopes: []ScopeValue{{Name: AxisPlatformTenant, Value: "orbtr"}},
+		Scopes: []ScopeValue{{Name: AxisTransportPinned, Value: "orbtr"}},
 	}, nil)
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +96,7 @@ func TestAuthenticatedPrincipalReplacementDoesNotMergeAxes(t *testing.T) {
 	if !ok {
 		t.Fatal("replacement principal missing")
 	}
-	if identity := got.Identity(); identity.Scope(AxisCustomerOrg) != "" || identity.Subject != "" {
+	if identity := got.Identity(); identity.Scope(AxisWithinTransport) != "" || identity.Subject != "" {
 		t.Fatalf("replacement retained prior axes: %#v", identity)
 	}
 	if scopes := got.Scopes(); len(scopes) != 0 {
