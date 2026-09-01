@@ -27,18 +27,4 @@ const (
 	// the pinned axis, so a partition/owner derives from it within the pinned
 	// tenant after the forge gate.
 	AxisWithinTransport = "customer_org"
-
-	// AxisPlatformTenant is a deprecated alias of AxisTransportPinned, retained
-	// so existing consumers compile while they migrate to the neutral name. The
-	// wire value is identical, so a producer on one name and a consumer on the
-	// other still agree on the axis.
-	//
-	// Deprecated: use AxisTransportPinned.
-	AxisPlatformTenant = AxisTransportPinned
-
-	// AxisCustomerOrg is a deprecated alias of AxisWithinTransport, retained for
-	// the same migration reason; identical wire value.
-	//
-	// Deprecated: use AxisWithinTransport.
-	AxisCustomerOrg = AxisWithinTransport
 )
