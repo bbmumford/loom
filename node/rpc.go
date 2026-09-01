@@ -779,76 +779,51 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 	if transportTenant == "" || transportTenant == "default" {
 		return ctx, fmt.Errorf("customer authority requires a tenant-bound transport")
 	}
-	if wire.PlatformTenantId != transportTenant {
-		return ctx, fmt.Errorf(
-			"transport/principal platform mismatch: transport=%q principal=%q",
-			transportTenant,
-			wire.PlatformTenantId,
-		)
-	}
-	if candidate := mismatchedWireCandidate(
-		req.Context,
-		wire.PlatformTenantId,
-		"tenantId",
-		"tenant_id",
-	); candidate != "" {
-		return ctx, fmt.Errorf(
-			"request/platform candidate mismatch: candidate=%q principal=%q",
-			candidate,
-			wire.PlatformTenantId,
-		)
-	}
-	if candidate := mismatchedWireCandidate(
-		req.Context,
-		wire.CustomerOrgId,
-		"orgId",
-		"org_id",
-		"organizationId",
-		"organization_id",
-	); candidate != "" {
-		return ctx, fmt.Errorf(
-			"request/customer-org candidate mismatch: candidate=%q principal=%q",
-			candidate,
-			wire.CustomerOrgId,
-		)
-	}
-	if candidate := mismatchedWireCandidate(
-		req.Context,
-		wire.UserId,
-		"userId",
-		"user_id",
-	); candidate != "" {
-		return ctx, fmt.Errorf(
-			"request/user candidate mismatch: candidate=%q principal=%q",
-			candidate,
-			wire.UserId,
-		)
-	}
-	if candidate := rpc.ParseScopes(req.Context["scopes"]); len(candidate) > 0 &&
-		!equalWireScopes(candidate, wire.Scopes) {
-		return ctx, fmt.Errorf("request/scope candidate mismatch")
+
+	// Reconstruct the opaque identity generically from the wire axes — aether
+	// named none — dropping any axis with an empty name or value (an absent axis
+	// must stay absent, never a "" presence). The subject travels in Subject.
+	axes := make([]tenantScope.ScopeValue, 0, len(wire.Axes))
+	for _, a := range wire.Axes {
+		if a.GetName() == "" || a.GetValue() == "" {
+			continue
+		}
+		axes = append(axes, tenantScope.ScopeValue{Name: a.GetName(), Value: a.GetValue()})
 	}
 
-	// Reconstruct the opaque identity from the deployed proto fields: append
-	// the platform-tenant/customer-org axes ONLY when the wire carried a
-	// non-empty value (an absent axis must stay absent, not become an empty
-	// presence), and take the subject from UserId. The gates above still read
-	// the wire fields directly — they are the load-bearing reconciliation
-	// surface — while the reconstructed identity is what dispatch enforces on.
-	var axes []tenantScope.ScopeValue
-	if wire.PlatformTenantId != "" {
-		axes = append(axes, tenantScope.ScopeValue{
-			Name:  tenantScope.AxisPlatformTenant,
-			Value: wire.PlatformTenantId,
-		})
+	// Cross-tenant forge gate: the consuming project names which axis pins
+	// against the transport-established tenant; that axis's received value must
+	// equal transportTenant, or a peer bound to tenant T could present another
+	// tenant's identity. A consumer that injects no pin cannot carry customer
+	// authority over the mesh — fail closed rather than accept an un-pinned
+	// principal. Only the pinned (platform-tenant-analog) axis is gated here;
+	// the owner partition is derived receive-side from a within-tenant axis by
+	// the consumer's stamper below, so within-tenant multi-owner traffic still
+	// round-trips (pinning that axis too would deny it).
+	pinnedAxis := ""
+	if pinner, ok := s.authValidator.(ports.TransportAxisPin); ok {
+		pinnedAxis = pinner.TransportPinnedAxis()
 	}
-	if wire.CustomerOrgId != "" {
-		axes = append(axes, tenantScope.ScopeValue{
-			Name:  tenantScope.AxisCustomerOrg,
-			Value: wire.CustomerOrgId,
-		})
+	if pinnedAxis == "" {
+		return ctx, fmt.Errorf("mesh principal requires a consumer transport-axis pin")
 	}
-	identity, err := tenantScope.NewCompleteIdentity(wire.UserId, axes...)
+	pinnedValue := ""
+	for i := range axes {
+		if axes[i].Name == pinnedAxis {
+			pinnedValue = axes[i].Value
+			break
+		}
+	}
+	if pinnedValue != transportTenant {
+		return ctx, fmt.Errorf(
+			"transport/principal pinned-axis mismatch: axis=%q transport=%q principal=%q",
+			pinnedAxis,
+			transportTenant,
+			pinnedValue,
+		)
+	}
+
+	identity, err := tenantScope.NewCompleteIdentity(wire.Subject, axes...)
 	if err != nil {
 		return ctx, err
 	}

@@ -7,3 +7,9 @@ go 1.25.0
 // their own go.work (see io/go.work).
 use .
 use ../swarm
+
+// Local dev bridge: loom/go.mod pins aether v0.0.117, but the agnostic wire
+// (AuthenticatedPrincipal opaque ScopeAxis axes, no named tenant/org fields) it
+// now sends/receives is unpublished in the ../aether working tree. Resolve
+// aether locally until that wire is published and loom bumps its pin.
+use ../aether
