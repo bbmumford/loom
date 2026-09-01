@@ -156,6 +156,23 @@ type AuthenticatedPrincipalStamper interface {
 	) context.Context
 }
 
+// TransportAxisPin is the OPTIONAL consumer seam that names which received
+// identity axis a node reconciles against its transport-established tenant.
+// The RPC server gates that axis's wire value for equality with the transport
+// tenant before the reconstructed identity enters dispatch — the cross-tenant
+// forge gate: a mesh peer bound to transport tenant T cannot present a
+// principal whose pinned axis is any tenant but T. loom never names the axis;
+// the consuming project returns the canonical name it stamps that axis under
+// (e.g. its platform-tenant axis). A validator that omits this seam cannot
+// present customer authority over the mesh — the RPC server fails closed rather
+// than accept an un-pinned principal, so a missing seam never becomes a forge
+// hole. The owner partition is NOT pinned here: it is derived receive-side from
+// a within-tenant axis after this gate, so within-tenant multi-owner traffic
+// still round-trips (over-pinning it would deny that legitimately).
+type TransportAxisPin interface {
+	TransportPinnedAxis() string
+}
+
 // ScopeStamper is an OPTIONAL interface an injected AuthValidator MAY also
 // implement to receive the caller's wire-propagated identity (#K-32). When
 // the RPC server finds its AuthValidator also satisfies ScopeStamper it

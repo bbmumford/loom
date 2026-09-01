@@ -84,21 +84,24 @@ func (customerPrincipalValidator) WithAuthenticatedPrincipal(
 	return tenantScope.WithAuthenticatedPrincipal(ctx, principal)
 }
 
+// TransportPinnedAxis names the platform-tenant axis as the one the RPC server
+// gates against the transport tenant (ports.TransportAxisPin) — the consumer
+// supplies the name; loom never hard-codes it.
+func (customerPrincipalValidator) TransportPinnedAxis() string {
+	return tenantScope.AxisPlatformTenant
+}
+
 func customerPrincipalRequest() *pb.RPCRequest {
 	return &pb.RPCRequest{
 		Id:      "principal-request",
 		Handler: "orbtr.test.CustomerOrg",
-		Context: map[string]string{
-			"tenantId": "orbtr",
-			"orgId":    "org-A",
-			"userId":   "user-A",
-			"scopes":   "org.read org.write",
-		},
 		Principal: &pb.AuthenticatedPrincipal{
-			PlatformTenantId: "orbtr",
-			CustomerOrgId:    "org-A",
-			UserId:           "user-A",
-			Scopes:           []string{"org.read", "org.write"},
+			Subject: "user-A",
+			Axes: []*pb.ScopeAxis{
+				{Name: tenantScope.AxisPlatformTenant, Value: "orbtr"},
+				{Name: tenantScope.AxisCustomerOrg, Value: "org-A"},
+			},
+			Scopes: []string{"org.read", "org.write"},
 		},
 	}
 }
@@ -142,50 +145,30 @@ func TestRPCServerRejectsPrincipalTamperingBeforeHandler(t *testing.T) {
 		want      string
 	}{
 		{
-			name: "org A principal org B request",
+			// Forge: a peer bound to transport orbtr presents a principal whose
+			// pinned (platform-tenant) axis is another tenant. The gate rejects it.
+			name: "pinned-axis forge",
 			mutate: func(req *pb.RPCRequest) {
-				req.Context["orgId"] = "org-B"
+				req.Principal.Axes[0].Value = "foreign-platform"
 			},
 			transport: "orbtr",
-			want:      "customer-org candidate mismatch",
+			want:      "pinned-axis mismatch",
 		},
 		{
-			name: "org A principal snake organisation B request",
+			// Forge by omission: the pinned axis is absent, so its value cannot
+			// equal the transport tenant.
+			name: "pinned-axis absent",
 			mutate: func(req *pb.RPCRequest) {
-				req.Context["organization_id"] = "org-B"
+				req.Principal.Axes = req.Principal.Axes[1:] // drop platform_tenant
 			},
 			transport: "orbtr",
-			want:      "customer-org candidate mismatch",
-		},
-		{
-			name: "platform mismatch",
-			mutate: func(req *pb.RPCRequest) {
-				req.Principal.PlatformTenantId = "foreign-platform"
-			},
-			transport: "orbtr",
-			want:      "transport/principal platform mismatch",
-		},
-		{
-			name: "snake platform candidate mismatch",
-			mutate: func(req *pb.RPCRequest) {
-				req.Context["tenant_id"] = "foreign-platform"
-			},
-			transport: "orbtr",
-			want:      "platform candidate mismatch",
+			want:      "pinned-axis mismatch",
 		},
 		{
 			name:      "unbound transport",
 			mutate:    func(*pb.RPCRequest) {},
 			transport: "default",
 			want:      "tenant-bound transport",
-		},
-		{
-			name: "forged scopes",
-			mutate: func(req *pb.RPCRequest) {
-				req.Context["scopes"] = "org.admin"
-			},
-			transport: "orbtr",
-			want:      "scope candidate mismatch",
 		},
 	}
 
@@ -211,6 +194,36 @@ func TestRPCServerRejectsPrincipalTamperingBeforeHandler(t *testing.T) {
 				t.Fatalf("handler ran %d times after principal denial", got)
 			}
 		})
+	}
+}
+
+// TestRPCServerAdmitsWithinTenantCustomerOrg is the no-over-pin proof: only the
+// platform-tenant axis is transport-pinned, so a principal whose customer-org
+// axis is any value WITHIN the transport tenant is admitted and round-trips
+// unchanged. Pinning the customer-org axis too would deny legitimate
+// within-tenant multi-org traffic (the availability regression orb's stage-4
+// spec warns against).
+func TestRPCServerAdmitsWithinTenantCustomerOrg(t *testing.T) {
+	registry := handlers.NewHandlerRegistry()
+	registry.SetPresencePolicy(customerScopePolicy())
+	probe := &customerPrincipalProbe{}
+	if err := registry.RegisterRPC(probe); err != nil {
+		t.Fatal(err)
+	}
+	server := NewRPCServer(registry)
+	server.SetAuthValidator(customerPrincipalValidator{})
+
+	req := customerPrincipalRequest()
+	req.Principal.Axes[1].Value = "org-Z" // a different customer org, same platform tenant
+
+	ctx := handlers.WithTransportTenant(context.Background(), "orbtr")
+	resp := server.handleRequest(ctx, req)
+
+	if !resp.Success {
+		t.Fatalf("within-tenant customer org denied (over-pin regression): %s", resp.Error)
+	}
+	if got := probe.got.Identity().Scope(tenantScope.AxisCustomerOrg); got != "org-Z" {
+		t.Fatalf("customer-org axis round-trip = %q, want org-Z", got)
 	}
 }
 
@@ -264,8 +277,8 @@ func TestRPCServerForwardingPreservesTypedPrincipal(t *testing.T) {
 	if forwarder.got == nil || forwarder.got.Principal == nil {
 		t.Fatal("forwarder did not receive typed principal")
 	}
-	if got := forwarder.got.Principal.CustomerOrgId; got != "org-A" {
-		t.Fatalf("forwarded customer org = %q", got)
+	if got := forwarder.got.Principal.GetAxes(); len(got) != 2 || got[1].GetValue() != "org-A" {
+		t.Fatalf("forwarded customer org axis = %#v", got)
 	}
 }
 

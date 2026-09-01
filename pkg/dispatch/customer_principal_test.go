@@ -10,8 +10,20 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ORBTR/aether/rpc/pb"
 	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
+
+// principalAxis returns the value the wire principal carries under the named
+// axis, or "" — the send path projects loom's opaque axes as generic ScopeAxis.
+func principalAxis(p *pb.AuthenticatedPrincipal, name string) string {
+	for _, a := range p.GetAxes() {
+		if a.GetName() == name {
+			return a.GetValue()
+		}
+	}
+	return ""
+}
 
 func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing.T) {
 	identity := tenantScope.AuthenticatedIdentity{
@@ -42,14 +54,14 @@ func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing
 	if req.Principal == nil {
 		t.Fatal("typed principal omitted from RPC envelope")
 	}
-	if got := req.Principal.PlatformTenantId; got != "orbtr" {
-		t.Fatalf("platform tenant = %q", got)
+	if got := principalAxis(req.Principal, tenantScope.AxisPlatformTenant); got != "orbtr" {
+		t.Fatalf("platform tenant axis = %q", got)
 	}
-	if got := req.Principal.CustomerOrgId; got != "org-A" {
-		t.Fatalf("customer org = %q", got)
+	if got := principalAxis(req.Principal, tenantScope.AxisCustomerOrg); got != "org-A" {
+		t.Fatalf("customer org axis = %q", got)
 	}
-	if got := req.Principal.UserId; got != "user-A" {
-		t.Fatalf("user = %q", got)
+	if got := req.Principal.Subject; got != "user-A" {
+		t.Fatalf("subject = %q", got)
 	}
 	if got := req.Principal.Scopes; len(got) != 2 ||
 		got[0] != "orbtr.io.plugins.read" ||
@@ -82,7 +94,7 @@ func TestBuildRPCRequestCtxDoesNotRewritePrincipalToCallerPlatform(t *testing.T)
 	if req.Principal == nil {
 		t.Fatal("mismatched principal was silently dropped")
 	}
-	if got := req.Principal.PlatformTenantId; got != "foreign-platform" {
+	if got := principalAxis(req.Principal, tenantScope.AxisPlatformTenant); got != "foreign-platform" {
 		t.Fatalf("principal rewritten to dispatch platform: %q", got)
 	}
 	if got := req.Context["tenantId"]; got != "orbtr" {
