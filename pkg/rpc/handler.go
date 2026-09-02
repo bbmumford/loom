@@ -45,12 +45,13 @@ type TenantScope = scope.ScopeTag
 // scope subpackage is an implementation detail. New tags MUST be added
 // in rpc/scope/scopetag.go so both re-exports pick them up together.
 const (
-	ScopeNone     = scope.ScopeNone     // Opts out of scope enforcement
-	ScopePlatform = scope.ScopePlatform // Opaque label; a PresencePolicy assigns meaning
-	ScopeTenant   = scope.ScopeTenant   // Opaque label; a PresencePolicy assigns meaning
-	ScopeOrg      = scope.ScopeOrg      // Opaque label; a PresencePolicy assigns meaning
-	ScopeUser     = scope.ScopeUser     // Opaque label; a PresencePolicy assigns meaning
-	ScopeProfile  = scope.ScopeProfile  // Opaque label; a PresencePolicy assigns meaning
+	ScopeNone      = scope.ScopeNone      // Opts out of scope enforcement
+	ScopePlatform  = scope.ScopePlatform  // Opaque label; a PresencePolicy assigns meaning
+	ScopeTenant    = scope.ScopeTenant    // Opaque label; a PresencePolicy assigns meaning
+	ScopeOrg       = scope.ScopeOrg       // Opaque label; a PresencePolicy assigns meaning
+	ScopeUser      = scope.ScopeUser      // Opaque label; a PresencePolicy assigns meaning
+	ScopeProfile   = scope.ScopeProfile   // Opaque label; a PresencePolicy assigns meaning
+	ScopePartition = scope.ScopePartition // Opaque label; a PresencePolicy assigns meaning
 	// ScopeUnknown is the fail-closed sentinel installed by mapProtoScope
 	// when it sees a proto enum it does not recognise (including an explicit
 	// TENANT_SCOPE_UNSPECIFIED in a .proto file). It is not a declarable tag;
