@@ -58,7 +58,7 @@ func TestAuthenticatedIdentityCloneIsDefensive(t *testing.T) {
 func TestIsDeclaredAdmitsOpaqueRejectsSentinels(t *testing.T) {
 	declarable := []ScopeTag{
 		ScopeNone, ScopePlatform, ScopeTenant, ScopeOrg, ScopeUser, ScopeProfile,
-		ScopeTag("partition"), ScopeTag("consumer-defined-axis"),
+		ScopePartition, ScopeTag("consumer-defined-axis"),
 	}
 	for _, s := range declarable {
 		if !IsDeclared(s) {

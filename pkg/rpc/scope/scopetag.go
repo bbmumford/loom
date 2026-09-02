@@ -36,8 +36,8 @@ type ScopeTag string
 // labels; only a consumer's PresencePolicy assigns them meaning.
 //
 // The rpc package re-exports these as rpc.Scope{None,Platform,Tenant,Org,
-// User,Profile,Unknown}; the handlers package re-exports them as
-// handlers.TenantScope{None,Platform,Tenant,Org,User,Profile,Unknown}.
+// User,Profile,Partition,Unknown}; the handlers package re-exports them as
+// handlers.TenantScope{None,Platform,Tenant,Org,User,Profile,Partition,Unknown}.
 // Both surfaces MUST stay 1:1 with this list.
 const (
 	// ScopeUnset is the invalid zero value. It means no scope decision was
@@ -71,6 +71,10 @@ const (
 	// ScopeProfile is an opaque label a PresencePolicy may treat as "requires
 	// a billing-profile-bound caller". loom assigns it no meaning.
 	ScopeProfile ScopeTag = "profile"
+
+	// ScopePartition is an opaque label a PresencePolicy may treat as "requires
+	// a partition-bound caller". loom assigns it no meaning.
+	ScopePartition ScopeTag = "partition"
 
 	// ScopeUnknown is the fail-closed sentinel installed by rpc.mapProtoScope
 	// when it sees a proto enum it does not recognise (including an explicit

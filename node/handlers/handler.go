@@ -40,16 +40,17 @@ type TenantScope = scope.ScopeTag
 // and rpc.Scope* is now IMPOSSIBLE at compile time — both re-exports pull
 // from the same declaration.
 //
-// Deprecated: use rpc.Scope{None,Platform,Tenant,Org,User,Profile,Unknown}
+// Deprecated: use rpc.Scope{None,Platform,Tenant,Org,User,Profile,Partition,Unknown}
 // for new code. These symbols remain to avoid a big-bang rename in ~434
 // legacy call sites, but will be deleted once migration completes.
 const (
-	TenantScopeNone     = scope.ScopeNone     // Opts out of scope enforcement. Mirrors rpc.ScopeNone.
-	TenantScopePlatform = scope.ScopePlatform // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopePlatform.
-	TenantScopeTenant   = scope.ScopeTenant   // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeTenant.
-	TenantScopeOrg      = scope.ScopeOrg      // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeOrg.
-	TenantScopeUser     = scope.ScopeUser     // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeUser.
-	TenantScopeProfile  = scope.ScopeProfile  // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeProfile.
+	TenantScopeNone      = scope.ScopeNone      // Opts out of scope enforcement. Mirrors rpc.ScopeNone.
+	TenantScopePlatform  = scope.ScopePlatform  // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopePlatform.
+	TenantScopeTenant    = scope.ScopeTenant    // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeTenant.
+	TenantScopeOrg       = scope.ScopeOrg       // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeOrg.
+	TenantScopeUser      = scope.ScopeUser      // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeUser.
+	TenantScopeProfile   = scope.ScopeProfile   // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeProfile.
+	TenantScopePartition = scope.ScopePartition // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopePartition.
 	// TenantScopeUnknown is the fail-closed sentinel, mirroring rpc.ScopeUnknown.
 	// validateTenantScope rejects any handler bound to this scope.
 	// Never set it manually — it exists so decay-to-empty-string cannot fail open.
