@@ -2,17 +2,19 @@ package scope
 
 import "testing"
 
-// capSet admits exactly the capabilities it holds.
+// capSet admits exactly the capabilities it holds (a fake authorizer; it ignores
+// the principal's own grants and answers from its held set).
 type capSet map[string]bool
 
-func (c capSet) HasCapability(_ AuthenticatedIdentity, cap string) bool { return c[cap] }
+func (c capSet) HasCapability(_ AuthenticatedPrincipal, cap string) bool { return c[cap] }
 
-func resolved(partition string) AuthenticatedIdentity {
-	return AuthenticatedIdentity{}.WithPartition(partition)
+func resolved(partition string) AuthenticatedPrincipal {
+	p, _ := NewAuthenticatedPrincipal(AuthenticatedIdentity{}.WithPartition(partition), nil)
+	return p
 }
 
 func TestRequirement_Open(t *testing.T) {
-	if ok, _ := NewPolicy(nil).Authorize(Open(), AuthenticatedIdentity{}); !ok {
+	if ok, _ := NewPolicy(nil).Authorize(Open(), AuthenticatedPrincipal{}); !ok {
 		t.Fatal("open op should admit an unresolved identity")
 	}
 }
@@ -46,7 +48,7 @@ func TestRequirement_NexusResolvedOnly(t *testing.T) {
 	if ok, _ := p.Authorize(Nexus(), resolved("p1")); !ok {
 		t.Fatal("a resolved partition should pass the nexus authn gate")
 	}
-	if ok, r := p.Authorize(Nexus(), AuthenticatedIdentity{}); ok {
+	if ok, r := p.Authorize(Nexus(), AuthenticatedPrincipal{}); ok {
 		t.Fatal("an unresolved identity should fail closed")
 	} else if r == "" {
 		t.Fatal("deny should carry a reason")

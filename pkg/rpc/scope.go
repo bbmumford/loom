@@ -198,7 +198,7 @@ func EnforceScope(ctx context.Context, h *Handler, policy tenantScope.PresencePo
 		if az == nil {
 			return fmt.Errorf("%w: handler %s declares a Requirement but no authorization policy is configured", ErrScopeDenied, h.FQN())
 		}
-		if ok, reason := az.Authorize(*h.Requirement, tenantScope.AuthenticatedIdentityFromContext(ctx)); !ok {
+		if ok, reason := az.Authorize(*h.Requirement, tenantScope.PrincipalForEnforcement(ctx)); !ok {
 			return fmt.Errorf("%w: handler %s denied by authorization policy: %s", ErrScopeDenied, h.FQN(), reason)
 		}
 		return nil

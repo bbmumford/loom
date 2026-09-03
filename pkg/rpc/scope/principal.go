@@ -112,3 +112,20 @@ func AuthenticatedPrincipalFromContext(
 	principal.grants = principal.Scopes()
 	return principal, true
 }
+
+// PrincipalForEnforcement returns the sealed principal a Requirement is judged
+// against: the identity+grants principal a trusted ingress stamped via
+// WithAuthenticatedPrincipal, or — when only a raw identity was stamped — a
+// grant-less principal wrapping that identity. So the nexus arm still reads the
+// sealed identity's partition, and the capability arm fails CLOSED on absent
+// grants (a cap-arm op needs a grant-bearing principal from the warrant ingress).
+// The enforcement seam calls it; never a request body or ambient ctx field.
+func PrincipalForEnforcement(ctx context.Context) AuthenticatedPrincipal {
+	if p, ok := AuthenticatedPrincipalFromContext(ctx); ok {
+		return p
+	}
+	// Only a raw identity was stamped: the ctx identity was validated at stamp
+	// time, so this never errors; a zero principal on any error still fails closed.
+	p, _ := NewAuthenticatedPrincipal(AuthenticatedIdentityFromContext(ctx), nil)
+	return p
+}
