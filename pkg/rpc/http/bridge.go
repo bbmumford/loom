@@ -259,7 +259,7 @@ func (b *Bridge) dispatch(w http.ResponseWriter, r *http.Request, h *rpc.Handler
 // ErrWebhookSignatureInvalid / ErrWebhookSecretUnset → 401, keeping
 // status-code shaping single-sourced.
 func (b *Bridge) executeLocal(r *http.Request, h *rpc.Handler, req proto.Message) ([]byte, error) {
-	if err := rpc.EnforceScope(r.Context(), h, b.registry.PresencePolicy()); err != nil {
+	if err := rpc.EnforceScope(r.Context(), h, b.registry.PresencePolicy(), b.registry.AuthzPolicy()); err != nil {
 		return nil, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()}
 	}
 	if h.WebhookSignature != nil {
@@ -296,7 +296,7 @@ func (b *Bridge) executeLocal(r *http.Request, h *rpc.Handler, req proto.Message
 // thin gateway), which always runs Registry.Dispatch and always enforces.
 func (b *Bridge) executeProxy(r *http.Request, h *rpc.Handler, req proto.Message) ([]byte, error) {
 	if h != nil {
-		if err := rpc.EnforceScope(r.Context(), h, b.registry.PresencePolicy()); err != nil {
+		if err := rpc.EnforceScope(r.Context(), h, b.registry.PresencePolicy(), b.registry.AuthzPolicy()); err != nil {
 			return nil, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()}
 		}
 	}
