@@ -640,9 +640,9 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 	// the optional typed caller principal. RPCRequest.Context is mutable
 	// metadata: its tenant/user/org/scope spellings are compare-only candidates
 	// and never establish authority.
-	transportTenant := handlers.TransportTenantFromContext(ctx)
-	if transportTenant != "" && transportTenant != "default" {
-		ctx = s.authValidator.WithTenantID(ctx, transportTenant)
+	transportPartition := handlers.TransportTenantFromContext(ctx)
+	if transportPartition != "" && transportPartition != "default" {
+		ctx = s.authValidator.WithTenantID(ctx, transportPartition)
 	}
 	// No req.Context["tenantId"] fallback: RPCRequest.Context is mutable wire
 	// metadata and must never mint platform authority. Only an authenticated
@@ -650,7 +650,7 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 	typedPrincipal := false
 	if req.Principal != nil {
 		var err error
-		ctx, err = s.bindAuthenticatedPrincipal(ctx, req, transportTenant)
+		ctx, err = s.bindAuthenticatedPrincipal(ctx, req, transportPartition)
 		if err != nil {
 			return &pb.RPCResponse{
 				Id:        req.Id,
@@ -770,13 +770,13 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 func (s *RPCServer) bindAuthenticatedPrincipal(
 	ctx context.Context,
 	req *pb.RPCRequest,
-	transportTenant string,
+	transportPartition string,
 ) (context.Context, error) {
 	wire := req.Principal
 	if wire == nil {
 		return ctx, nil
 	}
-	if transportTenant == "" || transportTenant == "default" {
+	if transportPartition == "" || transportPartition == "default" {
 		return ctx, fmt.Errorf("customer authority requires a tenant-bound transport")
 	}
 
@@ -793,7 +793,7 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 
 	// Cross-tenant forge gate: the consuming project names which axis pins
 	// against the transport-established tenant; that axis's received value must
-	// equal transportTenant, or a peer bound to tenant T could present another
+	// equal transportPartition, or a peer bound to tenant T could present another
 	// tenant's identity. A consumer that injects no pin cannot carry customer
 	// authority over the mesh — fail closed rather than accept an un-pinned
 	// principal. Only the pinned (platform-tenant-analog) axis is gated here;
@@ -814,11 +814,11 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 			break
 		}
 	}
-	if pinnedValue != transportTenant {
+	if pinnedValue != transportPartition {
 		return ctx, fmt.Errorf(
 			"transport/principal pinned-axis mismatch: axis=%q transport=%q principal=%q",
 			pinnedAxis,
-			transportTenant,
+			transportPartition,
 			pinnedValue,
 		)
 	}

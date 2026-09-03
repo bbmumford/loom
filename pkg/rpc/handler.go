@@ -32,13 +32,16 @@ const (
 // This allows each app to compose its own auth/rate-limit/scope stack.
 type Middleware = func(http.Handler) http.Handler
 
-// TenantScope controls scope enforcement at the handler dispatch level. It
-// keeps the historical name but now aliases the opaque ScopeTag label in the
-// rpc/scope subpackage — the handlers package (mesh/node/handlers) aliases the
-// SAME underlying type, so a scope value round-trips between the two surfaces
-// with no possibility of drift. loom carries the tag opaquely; a consumer's
-// PresencePolicy decides what each tag requires. See rpc/scope/scopetag.go.
-type TenantScope = scope.ScopeTag
+// ScopeTag controls scope enforcement at the handler dispatch level: an opaque
+// label the handlers package (mesh/node/handlers) aliases to the SAME underlying
+// rpc/scope type, so a scope value round-trips between the two surfaces without
+// drift. loom carries the tag opaquely; a consumer's PresencePolicy decides what
+// each tag requires. See rpc/scope/scopetag.go.
+type ScopeTag = scope.ScopeTag
+
+// TenantScope aliases ScopeTag; a caller that spells the handler field type
+// "tenant" reaches the same opaque label.
+type TenantScope = ScopeTag
 
 // Scope* forwards to the canonical opaque tags in rpc/scope. Callers should
 // import "github.com/bbmumford/loom/pkg/rpc" and use rpc.Scope* directly — the
@@ -84,7 +87,7 @@ type Handler struct {
 	Request          proto.Message           // Nil pointer type hint: (*pb.CreateUserRequest)(nil)
 	Response         proto.Message           // Nil pointer type hint: (*pb.CreateUserResponse)(nil)
 	Middleware       []Middleware            // HTTP middleware chain applied before handler (auth, rate limit, etc.)
-	Scope            TenantScope             // Tenant scope enforcement at mesh dispatch level (legacy presence tier)
+	Scope            ScopeTag                // opaque scope label a PresencePolicy evaluates at mesh dispatch
 	Requirement      *scope.Requirement      // §R two-arm authorization; when set it supersedes Scope at the enforcement seam. nil = fall back to Scope/PresencePolicy.
 	Tags             []string                // Classification: "users", "write", "feature:policy.full"
 	OpClass          OperationClass          // minimum grade requirement for mesh forwarding (default: OpStandard)

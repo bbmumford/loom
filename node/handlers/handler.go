@@ -838,7 +838,7 @@ func (r *HandlerRegistry) validateTenantScope(ctx context.Context, h HandlerMeta
 		return nil
 	}
 	if declared == scope.ScopeUnset {
-		return fmt.Errorf("%w: handler %s has an undeclared tenant scope (ScopeUnset) — declare a scope tier explicitly", scope.ErrDenied, h.Name())
+		return fmt.Errorf("%w: handler %s has an undeclared scope (ScopeUnset) — declare a scope explicitly", scope.ErrDenied, h.Name())
 	}
 
 	identity := scope.AuthenticatedIdentityFromContext(ctx)
