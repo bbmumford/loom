@@ -15,6 +15,7 @@ type Registry struct {
 	handlers map[string]*Handler   // FQN → Handler
 	byRole   map[string][]*Handler // "namespace.domain" → handlers
 	policy   scope.PresencePolicy  // consumer-supplied scope evaluator (nil fails closed)
+	authz    *scope.Policy         // two-arm op authorizer; EnforceScope consults it for a handler that declares a Requirement (nil → the Scope/PresencePolicy tier path)
 }
 
 // NewRegistry creates an empty handler registry.
@@ -43,6 +44,25 @@ func (r *Registry) PresencePolicy() scope.PresencePolicy {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.policy
+}
+
+// SetAuthzPolicy installs the two-arm op authorizer (capability | nexus) that
+// EnforceScope consults for any handler declaring a scope.Requirement. Until a
+// composition root installs one, every Requirement-bearing handler fails CLOSED
+// at EnforceScope — the same fail-closed posture as a nil PresencePolicy — so a
+// handler cannot opt into two-arm authorization and then silently admit.
+func (r *Registry) SetAuthzPolicy(p *scope.Policy) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.authz = p
+}
+
+// AuthzPolicy returns the configured two-arm op authorizer (or nil). A nil authz
+// fails closed at EnforceScope for every handler that declares a Requirement.
+func (r *Registry) AuthzPolicy() *scope.Policy {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.authz
 }
 
 // Register adds a handler to the registry.

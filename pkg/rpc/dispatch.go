@@ -33,7 +33,7 @@ func (r *Registry) Dispatch(ctx context.Context, fqn string, payload []byte) ([]
 	if h.Func == nil {
 		return nil, fmt.Errorf("%w: %s", ErrProxyDispatchLocal, fqn)
 	}
-	if err := EnforceScope(ctx, h, r.PresencePolicy()); err != nil {
+	if err := EnforceScope(ctx, h, r.PresencePolicy(), r.AuthzPolicy()); err != nil {
 		return nil, err
 	}
 

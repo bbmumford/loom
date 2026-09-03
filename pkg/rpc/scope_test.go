@@ -134,6 +134,45 @@ func TestEnforceScope_UnsetDenies(t *testing.T) {
 	}
 }
 
+// twoArmCapHolder admits exactly the capabilities it holds.
+type twoArmCapHolder map[string]bool
+
+func (c twoArmCapHolder) HasCapability(_ scope.AuthenticatedIdentity, cap string) bool { return c[cap] }
+
+// TestEnforceScope_Requirement_TwoArm proves a handler that declares a Requirement
+// is judged by the two-arm authorizer, superseding its Scope tag: the nexus arm
+// admits a census-resolved identity and denies an unresolved one; the capability
+// arm turns on the held cap; and a Requirement with no authorizer fails CLOSED.
+func TestEnforceScope_Requirement_TwoArm(t *testing.T) {
+	nexus := scope.Nexus()
+	capReq := scope.Capability("orbtr.ai:platform.admin")
+	resolved := WithAuthenticatedScopeIdentity(context.Background(), scope.NewScopeIdentity("orbtr", "acme", "u1"))
+	bare := WithAuthenticatedScopeIdentity(context.Background(), scope.AuthenticatedIdentity{})
+
+	// Scope is None, but the Requirement supersedes it and governs the verdict.
+	hNexus := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopeNone, Requirement: &nexus}
+
+	// A Requirement with no authorizer supplied fails closed.
+	if err := EnforceScope(resolved, hNexus, nil); !errors.Is(err, ErrScopeDenied) {
+		t.Fatalf("Requirement with no authz must fail closed, got %v", err)
+	}
+	authz := scope.NewPolicy(nil) // the nexus arm needs no capability authorizer
+	if err := EnforceScope(resolved, hNexus, nil, authz); err != nil {
+		t.Fatalf("nexus arm should admit a census-resolved identity: %v", err)
+	}
+	if err := EnforceScope(bare, hNexus, nil, authz); !errors.Is(err, ErrScopeDenied) {
+		t.Fatalf("nexus arm must deny an unresolved identity, got %v", err)
+	}
+
+	hCap := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopeNone, Requirement: &capReq}
+	if err := EnforceScope(resolved, hCap, nil, scope.NewPolicy(twoArmCapHolder{"orbtr.ai:platform.admin": true})); err != nil {
+		t.Fatalf("capability arm should admit the held cap: %v", err)
+	}
+	if err := EnforceScope(resolved, hCap, nil, scope.NewPolicy(twoArmCapHolder{})); !errors.Is(err, ErrScopeDenied) {
+		t.Fatalf("capability arm must deny an unheld cap, got %v", err)
+	}
+}
+
 // TestEnforceScope_PolicyFalseDenies proves a policy that reports unsatisfied
 // denies, and the reason is surfaced in the wrapped error.
 func TestEnforceScope_PolicyFalseDenies(t *testing.T) {

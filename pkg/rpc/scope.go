@@ -179,9 +179,29 @@ var ErrScopeDenied = tenantScope.ErrDenied
 // denies when it reports unsatisfied. The wrapped error carries the handler
 // FQN and the policy's reason; callers should use errors.Is(err,
 // ErrScopeDenied) at boundaries.
-func EnforceScope(ctx context.Context, h *Handler, policy tenantScope.PresencePolicy) error {
+// authz is an optional two-arm op authorizer (variadic so pre-two-arm callers
+// keep the 3-arg form). When a handler declares a Requirement it is judged by
+// that authorizer, not its Scope tag; a caller that supplies none, or a nil one,
+// fails a Requirement-bearing handler CLOSED (symmetric to a nil PresencePolicy).
+func EnforceScope(ctx context.Context, h *Handler, policy tenantScope.PresencePolicy, authz ...*tenantScope.Policy) error {
 	if h == nil {
 		return fmt.Errorf("%w: nil handler", ErrScopeDenied)
+	}
+	// Two-arm authorization supersedes the presence tier when the handler declares
+	// a Requirement. A nil Requirement (the zero value) falls through to the Scope
+	// path below, so this is behavior-preserving until handlers populate it.
+	if h.Requirement != nil {
+		var az *tenantScope.Policy
+		if len(authz) > 0 {
+			az = authz[0]
+		}
+		if az == nil {
+			return fmt.Errorf("%w: handler %s declares a Requirement but no authorization policy is configured", ErrScopeDenied, h.FQN())
+		}
+		if ok, reason := az.Authorize(*h.Requirement, tenantScope.AuthenticatedIdentityFromContext(ctx)); !ok {
+			return fmt.Errorf("%w: handler %s denied by authorization policy: %s", ErrScopeDenied, h.FQN(), reason)
+		}
+		return nil
 	}
 	if h.Scope == ScopeNone {
 		return nil
