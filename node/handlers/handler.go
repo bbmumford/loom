@@ -1357,29 +1357,42 @@ func GetTenantIDFromContext(ctx map[string]interface{}) string {
 	return tenantIDStr
 }
 
-// ── Transport-level tenant context ──────────────────────────────────────────
-// These helpers propagate the server-resolved tenant ID determined at the
-// transport layer through context.Context so validateTenantScope can reconcile
-// the transport binding with the canonical typed identity.
+// ── Transport-bound partition context ───────────────────────────────────────
+// These helpers propagate the transport-resolved partition — the consumer-pinned
+// opaque axis value established at the transport layer — through context.Context
+// so validateTenantScope reconciles the transport binding against the canonical
+// typed identity. The value is an opaque partition identifier; loom attaches no
+// class or level to it.
 
-type transportTenantCtxKey struct{}
+type transportPartitionCtxKey struct{}
 
-// WithTransportTenant injects the transport-level tenant ID into context and
-// establishes the platform-tenant component of the canonical typed scope
-// identity. Called by the RPC server after accepting a session from a
-// tenant-aware listener.
-func WithTransportTenant(ctx context.Context, tenantID string) context.Context {
-	ctx = context.WithValue(ctx, transportTenantCtxKey{}, tenantID)
-	return scope.WithAuthenticatedScope(ctx, scope.AxisTransportPinned, tenantID)
+// WithTransportPartition binds the transport-resolved partition onto ctx and sets
+// the pinned-axis component of the canonical typed scope identity
+// (scope.AxisTransportPinned). The RPC server calls it after accepting a session
+// from a partition-bound listener.
+func WithTransportPartition(ctx context.Context, partition string) context.Context {
+	ctx = context.WithValue(ctx, transportPartitionCtxKey{}, partition)
+	return scope.WithAuthenticatedScope(ctx, scope.AxisTransportPinned, partition)
 }
 
-// TransportTenantFromContext extracts the transport-level tenant ID from context.
-// Returns "" if no transport tenant was set (e.g., single-tenant fallback).
-func TransportTenantFromContext(ctx context.Context) string {
-	if v, ok := ctx.Value(transportTenantCtxKey{}).(string); ok {
+// TransportPartitionFromContext returns the transport-bound partition, or "" when
+// no partition-bound listener established one (a single-partition transport).
+func TransportPartitionFromContext(ctx context.Context) string {
+	if v, ok := ctx.Value(transportPartitionCtxKey{}).(string); ok {
 		return v
 	}
 	return ""
+}
+
+// WithTransportTenant forwards to WithTransportPartition; a caller that spells the
+// pinned axis "tenant" reaches the same binding and context key.
+func WithTransportTenant(ctx context.Context, tenantID string) context.Context {
+	return WithTransportPartition(ctx, tenantID)
+}
+
+// TransportTenantFromContext forwards to TransportPartitionFromContext.
+func TransportTenantFromContext(ctx context.Context) string {
+	return TransportPartitionFromContext(ctx)
 }
 
 // GetRequestIDFromContext extracts request_id for tracing
