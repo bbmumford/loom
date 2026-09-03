@@ -84,7 +84,8 @@ type Handler struct {
 	Request          proto.Message           // Nil pointer type hint: (*pb.CreateUserRequest)(nil)
 	Response         proto.Message           // Nil pointer type hint: (*pb.CreateUserResponse)(nil)
 	Middleware       []Middleware            // HTTP middleware chain applied before handler (auth, rate limit, etc.)
-	Scope            TenantScope             // Tenant scope enforcement at mesh dispatch level
+	Scope            TenantScope             // Tenant scope enforcement at mesh dispatch level (legacy presence tier)
+	Requirement      *scope.Requirement      // §R two-arm authorization; when set it supersedes Scope at the enforcement seam. nil = fall back to Scope/PresencePolicy.
 	Tags             []string                // Classification: "users", "write", "feature:policy.full"
 	OpClass          OperationClass          // minimum grade requirement for mesh forwarding (default: OpStandard)
 	WebhookSignature *WebhookSignatureConfig // optional: declare this handler is a webhook-class receiver; the registry runs signature verification pre-dispatch
