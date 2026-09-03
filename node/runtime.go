@@ -2999,8 +2999,8 @@ func (c *prefixedConn) Read(p []byte) (int, error) {
 // acceptIncomingSessionsWithMux accepts incoming VL1 sessions and sets up Aether.
 // All sessions go through AcceptIncomingMeshSession for full Aether lifecycle.
 // The "WithMux" name is retained for backward compatibility with call sites.
-func (rt *Runtime) acceptIncomingSessionsWithMux(ctx context.Context, listener aether.Listener, fallbackTenantID string, transportType string) {
-	log.Printf("[NODE] Listening for incoming Aether sessions (tenant fallback: %s)...", fallbackTenantID)
+func (rt *Runtime) acceptIncomingSessionsWithMux(ctx context.Context, listener aether.Listener, fallbackPartition string, transportType string) {
+	log.Printf("[NODE] Listening for incoming Aether sessions (tenant fallback: %s)...", fallbackPartition)
 
 	for {
 		select {
@@ -3031,7 +3031,7 @@ func (rt *Runtime) acceptIncomingSessionsWithMux(ctx context.Context, listener a
 				continue
 			}
 
-			tenantID := fallbackTenantID
+			tenantID := fallbackPartition
 			if tas, ok := session.(aether.TenantAwareSession); ok {
 				if tid := tas.ScopeID(); tid != "" {
 					tenantID = tid
