@@ -41,17 +41,21 @@ func Capability(cap string) Requirement { return Requirement{Kind: ArmCapability
 // handler owning authorization through its nexus-graph resolution.
 func Nexus() Requirement { return Requirement{Kind: ArmNexus} }
 
-// Authorizer is the capability-arm seam: reports whether id holds capability cap. A
-// warrant-backed authorizer (a consumer's warrant.Authorizer adapter) satisfies it;
-// the composition root injects one. loom defines only the interface — it never
-// imports warrant. A nil Authorizer makes every capability-arm op fail closed.
+// Authorizer is the capability-arm seam: reports whether the sealed principal holds
+// capability cap. It receives the AuthenticatedPrincipal — the identity coupled with
+// its granted scope strings (principal.Scopes()) — because caps are resolved over the
+// caller's HELD grants, which live on the principal, not the bare identity. A
+// warrant-backed authorizer (a consumer's warrant.Authorizer adapter that runs its
+// cap grammar over principal.Scopes()) satisfies it; the composition root injects one.
+// loom defines only the interface — it never imports warrant. A nil Authorizer makes
+// every capability-arm op fail closed.
 type Authorizer interface {
-	HasCapability(id AuthenticatedIdentity, cap string) bool
+	HasCapability(principal AuthenticatedPrincipal, cap string) bool
 }
 
-// Policy enforces the seam-owned part of each arm over a sealed AuthenticatedIdentity.
+// Policy enforces the seam-owned part of each arm over a sealed AuthenticatedPrincipal.
 // It holds only the injected capability authorizer; the nexus arm needs no
-// dependency (an authn check on the opaque partition).
+// dependency (an authn check on the principal's opaque partition).
 type Policy struct {
 	az Authorizer
 }
@@ -60,12 +64,12 @@ type Policy struct {
 // case every capability-arm op fails closed (never silently admits).
 func NewPolicy(az Authorizer) *Policy { return &Policy{az: az} }
 
-// Authorize reports whether id may invoke an op with the given requirement, and a
-// non-authoritative reason when it may not. FAIL-CLOSED throughout: an unknown arm,
-// a capability-arm op with no declared capability or no authorizer, a capability the
-// identity lacks, or a nexus-arm identity with no resolved partition all DENY. The
-// reason is a diagnostic only; callers must not parse it.
-func (p *Policy) Authorize(req Requirement, id AuthenticatedIdentity) (allowed bool, reason string) {
+// Authorize reports whether the sealed principal may invoke an op with the given
+// requirement, and a non-authoritative reason when it may not. FAIL-CLOSED throughout:
+// an unknown arm, a capability-arm op with no declared capability or no authorizer, a
+// capability the principal's grants do not confer, or a nexus-arm identity with no
+// resolved partition all DENY. The reason is a diagnostic only; callers must not parse it.
+func (p *Policy) Authorize(req Requirement, principal AuthenticatedPrincipal) (allowed bool, reason string) {
 	switch req.Kind {
 	case ArmOpen:
 		return true, ""
@@ -76,12 +80,12 @@ func (p *Policy) Authorize(req Requirement, id AuthenticatedIdentity) (allowed b
 		if p.az == nil {
 			return false, "no capability authorizer configured"
 		}
-		if p.az.HasCapability(id, req.Cap) {
+		if p.az.HasCapability(principal, req.Cap) {
 			return true, ""
 		}
-		return false, "identity lacks required capability"
+		return false, "principal grants do not confer the required capability"
 	case ArmNexus:
-		if id.Partition() == "" {
+		if principal.Identity().Partition() == "" {
 			return false, "requires a census-resolved identity"
 		}
 		// Census-resolved. Authorization is the handler's nexus-graph resolution.

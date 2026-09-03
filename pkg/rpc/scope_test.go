@@ -137,7 +137,7 @@ func TestEnforceScope_UnsetDenies(t *testing.T) {
 // twoArmCapHolder admits exactly the capabilities it holds.
 type twoArmCapHolder map[string]bool
 
-func (c twoArmCapHolder) HasCapability(_ scope.AuthenticatedIdentity, cap string) bool { return c[cap] }
+func (c twoArmCapHolder) HasCapability(_ scope.AuthenticatedPrincipal, cap string) bool { return c[cap] }
 
 // TestEnforceScope_Requirement_TwoArm proves a handler that declares a Requirement
 // is judged by the two-arm authorizer, superseding its Scope tag: the nexus arm
