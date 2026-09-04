@@ -138,7 +138,7 @@ func TestRegistryExportPreservesExplicitTenantScopeNone(t *testing.T) {
 	if !ok {
 		t.Fatalf("exported handler %q missing from target registry", h.FQN())
 	}
-	if stored.TenantScope() != handlers.TenantScopeNone {
-		t.Fatalf("exported scope = %q, want explicit TenantScopeNone", stored.TenantScope())
+	if stored.Scope() != handlers.TenantScopeNone {
+		t.Fatalf("exported scope = %q, want explicit TenantScopeNone", stored.Scope())
 	}
 }

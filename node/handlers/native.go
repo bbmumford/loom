@@ -73,7 +73,7 @@ func (w *NativeRPCWrapper[Req, Resp]) Role() string               { return w.rol
 func (w *NativeRPCWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
 func (w *NativeRPCWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.authTypes }
 func (w *NativeRPCWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
-func (w *NativeRPCWrapper[Req, Resp]) TenantScope() TenantScope   { return w.tenantScope }
+func (w *NativeRPCWrapper[Req, Resp]) Scope() TenantScope         { return w.tenantScope }
 func (w *NativeRPCWrapper[Req, Resp]) AllowedTenants() []string   { return w.allowedTenants }
 
 func (w *NativeRPCWrapper[Req, Resp]) ExecuteRPC(ctx context.Context, req *RPCRequest) (*RPCResponse, error) {
@@ -170,7 +170,7 @@ func (w *NativeTaskWrapper[Req, Resp]) Role() string               { return w.ro
 func (w *NativeTaskWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
 func (w *NativeTaskWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.authTypes }
 func (w *NativeTaskWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
-func (w *NativeTaskWrapper[Req, Resp]) TenantScope() TenantScope   { return w.tenantScope }
+func (w *NativeTaskWrapper[Req, Resp]) Scope() TenantScope         { return w.tenantScope }
 func (w *NativeTaskWrapper[Req, Resp]) AllowedTenants() []string   { return w.allowedTenants }
 
 func (w *NativeTaskWrapper[Req, Resp]) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error) {

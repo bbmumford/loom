@@ -18,12 +18,12 @@ type meshHandler struct {
 	scopes []string
 }
 
-func (h meshHandler) Name() string                   { return h.name }
-func (h meshHandler) RequiresAuth() bool             { return true }
-func (h meshHandler) AllowedAuthTypes() []string     { return nil }
-func (h meshHandler) Scopes() []string               { return h.scopes }
-func (h meshHandler) TenantScope() ports.TenantScope { return "" }
-func (h meshHandler) AllowedTenants() []string       { return nil }
+func (h meshHandler) Name() string               { return h.name }
+func (h meshHandler) RequiresAuth() bool         { return true }
+func (h meshHandler) AllowedAuthTypes() []string { return nil }
+func (h meshHandler) Scopes() []string           { return h.scopes }
+func (h meshHandler) Scope() ports.TenantScope   { return "" }
+func (h meshHandler) AllowedTenants() []string   { return nil }
 
 // TestWithWireIdentity_EnablesScopeEnforcement verifies #K-32: the default
 // validator implements ports.ScopeStamper, and a mesh-propagated principal

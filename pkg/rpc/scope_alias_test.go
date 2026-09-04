@@ -64,20 +64,20 @@ func TestScopeAlias_TypeIdentity(t *testing.T) {
 // TestScopeAlias_ProfileEnforceScopeParity guards the Profile-tier gap that
 // finding rev-069 closed: a handler declared with rpc.ScopeProfile MUST
 // receive the same enforcement whether it dispatches through EnforceScope
-// (rpc) or validateTenantScope (handlers). Because the two implementations
+// (rpc) or validateScope (handlers). Because the two implementations
 // now consult the same constant, this test asserts they refuse the same
 // missing-tenant input rather than one silently accepting.
 func TestScopeAlias_ProfileEnforceScopeParity(t *testing.T) {
 	// rpc.EnforceScope side: a ScopeProfile handler with an empty ctx
 	// (no platform-tenant axis) must be denied with ErrScopeDenied under the
-	// reference policy — mirroring what validateTenantScope does on the
+	// reference policy — mirroring what validateScope does on the
 	// handlers side with the same policy.
 	h := &Handler{Namespace: "app", Domain: "billing", Operation: "GetProfile", Scope: ScopeProfile}
 	err := EnforceScope(t.Context(), h, refPolicy())
 	if err == nil {
 		t.Fatalf("EnforceScope(ScopeProfile, empty ctx) unexpectedly passed — Profile tier must require a tenant axis")
 	}
-	// handlers.validateTenantScope side is exercised in
+	// handlers.validateScope side is exercised in
 	// mesh/node/handlers/scope_test.go:TestValidateTenantScope_Profile_MissingTenantFailsClosed.
 	// Both together prove parity across the two dispatch surfaces.
 }

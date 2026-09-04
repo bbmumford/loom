@@ -212,7 +212,7 @@ func (h *holepunchRPCHandler) Role() string               { return "system" }
 func (h *holepunchRPCHandler) RequiresAuth() bool         { return false }
 func (h *holepunchRPCHandler) AllowedAuthTypes() []string { return nil }
 func (h *holepunchRPCHandler) Scopes() []string           { return nil }
-func (h *holepunchRPCHandler) TenantScope() handlers.TenantScope {
+func (h *holepunchRPCHandler) Scope() handlers.TenantScope {
 	return handlers.TenantScopeNone
 }
 func (h *holepunchRPCHandler) AllowedTenants() []string { return nil }

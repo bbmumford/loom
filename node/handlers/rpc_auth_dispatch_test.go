@@ -25,7 +25,7 @@ func (*resolvedRPCProbe) Role() string               { return "resolved-rpc-test
 func (*resolvedRPCProbe) RequiresAuth() bool         { return true }
 func (*resolvedRPCProbe) AllowedAuthTypes() []string { return []string{"service"} }
 func (*resolvedRPCProbe) Scopes() []string           { return []string{"rpc.execute"} }
-func (h *resolvedRPCProbe) TenantScope() TenantScope {
+func (h *resolvedRPCProbe) Scope() TenantScope {
 	if h.scope == "" {
 		return TenantScopeNone
 	}

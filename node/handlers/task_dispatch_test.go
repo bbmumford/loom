@@ -26,7 +26,7 @@ func (h *taskDispatchProbe) Role() string               { return "task-dispatch-
 func (h *taskDispatchProbe) RequiresAuth() bool         { return h.requiresAuth }
 func (h *taskDispatchProbe) AllowedAuthTypes() []string { return nil }
 func (h *taskDispatchProbe) Scopes() []string           { return nil }
-func (h *taskDispatchProbe) TenantScope() TenantScope {
+func (h *taskDispatchProbe) Scope() TenantScope {
 	if h.scope == "" {
 		return TenantScopeNone
 	}

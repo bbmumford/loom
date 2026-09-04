@@ -152,7 +152,7 @@ func (h *executorTaskProbe) Role() string               { return "executor-test"
 func (h *executorTaskProbe) RequiresAuth() bool         { return true }
 func (h *executorTaskProbe) AllowedAuthTypes() []string { return nil }
 func (h *executorTaskProbe) Scopes() []string           { return nil }
-func (h *executorTaskProbe) TenantScope() handlers.TenantScope {
+func (h *executorTaskProbe) Scope() handlers.TenantScope {
 	return handlers.TenantScopeTenant
 }
 
@@ -168,7 +168,7 @@ func (*blockingExecutorTaskProbe) Role() string               { return "executor
 func (*blockingExecutorTaskProbe) RequiresAuth() bool         { return true }
 func (*blockingExecutorTaskProbe) AllowedAuthTypes() []string { return nil }
 func (*blockingExecutorTaskProbe) Scopes() []string           { return nil }
-func (*blockingExecutorTaskProbe) TenantScope() handlers.TenantScope {
+func (*blockingExecutorTaskProbe) Scope() handlers.TenantScope {
 	return handlers.TenantScopeTenant
 }
 func (*blockingExecutorTaskProbe) AllowedTenants() []string { return nil }

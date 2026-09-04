@@ -23,7 +23,7 @@ func (h *registrationScopeHandler) Role() string               { return "test.sc
 func (h *registrationScopeHandler) RequiresAuth() bool         { return false }
 func (h *registrationScopeHandler) AllowedAuthTypes() []string { return nil }
 func (h *registrationScopeHandler) Scopes() []string           { return nil }
-func (h *registrationScopeHandler) TenantScope() TenantScope   { return h.scope }
+func (h *registrationScopeHandler) Scope() TenantScope         { return h.scope }
 func (h *registrationScopeHandler) AllowedTenants() []string   { return nil }
 func (h *registrationScopeHandler) ExecuteRPC(context.Context, *RPCRequest) (*RPCResponse, error) {
 	return &RPCResponse{Success: true}, nil
@@ -116,7 +116,7 @@ func TestHandlerRegistryAcceptsExplicitTenantScopeNone(t *testing.T) {
 		t.Fatalf("RegisterRPC explicit TenantScopeNone: %v", err)
 	}
 	stored, ok := reg.GetMeta(h.name)
-	if !ok || stored.TenantScope() != TenantScopeNone {
+	if !ok || stored.Scope() != TenantScopeNone {
 		t.Fatalf("stored explicit TenantScopeNone = (%+v, %v)", stored, ok)
 	}
 }

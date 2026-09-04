@@ -24,7 +24,7 @@ func TestSpellingProbe_MeshShapedArrivalIsDenied(t *testing.T) {
 
 	for _, scope := range []TenantScope{TenantScopeTenant, TenantScopeOrg, TenantScopeProfile} {
 		h := &stubMeta{name: "probe.meshArrival", scope: scope}
-		err := r.validateTenantScope(ctxWithRPC(map[string]interface{}{
+		err := r.validateScope(ctxWithRPC(map[string]interface{}{
 			"tenantId": probeTenant, // CAMEL — what the wire actually stamps
 		}), h)
 
@@ -51,7 +51,7 @@ func TestSpellingProbe_ReaderShapedArrivalIsDenied(t *testing.T) {
 
 	for _, scope := range []TenantScope{TenantScopeTenant, TenantScopeOrg, TenantScopeProfile} {
 		h := &stubMeta{name: "probe.readerShape", scope: scope}
-		err := r.validateTenantScope(ctxWithRPC(map[string]interface{}{
+		err := r.validateScope(ctxWithRPC(map[string]interface{}{
 			"tenant_id": probeTenant, // SNAKE — what the reader looks up
 		}), h)
 		if err == nil {
@@ -67,8 +67,8 @@ func TestSpellingProbe_TypedIdentityIsTheOnlyAdmissionPath(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "probe.control", scope: TenantScopeTenant}
 
-	camelErr := r.validateTenantScope(ctxWithRPC(map[string]interface{}{"tenantId": probeTenant}), h)
-	snakeErr := r.validateTenantScope(ctxWithRPC(map[string]interface{}{"tenant_id": probeTenant}), h)
+	camelErr := r.validateScope(ctxWithRPC(map[string]interface{}{"tenantId": probeTenant}), h)
+	snakeErr := r.validateScope(ctxWithRPC(map[string]interface{}{"tenant_id": probeTenant}), h)
 
 	if camelErr == nil || snakeErr == nil {
 		t.Fatalf("both mutable spellings must deny (camel=%v snake=%v)", camelErr, snakeErr)
@@ -78,7 +78,7 @@ func TestSpellingProbe_TypedIdentityIsTheOnlyAdmissionPath(t *testing.T) {
 		"tenantId":  probeTenant,
 		"tenant_id": probeTenant,
 	}), scopeIdentity(probeTenant, "", ""))
-	if err := r.validateTenantScope(ctx, h); err != nil {
+	if err := r.validateScope(ctx, h); err != nil {
 		t.Errorf("typed authenticated platform tenant should admit: %v", err)
 	}
 }

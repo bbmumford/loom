@@ -884,7 +884,7 @@ func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startT
 	}
 
 	// OBS-6 dispatch_handler_latency_ms: time the pure handler logic
-	// (validateTenantScope + middleware Before + ExecuteRPC + middleware
+	// (validateScope + middleware Before + ExecuteRPC + middleware
 	// After), excluding network decode/encode which happens in the
 	// caller. This is the canonical instrumentation site for inbound
 	// dispatch — both the non-bidi path (handleRequest at rpc.go:243)
@@ -1014,13 +1014,13 @@ func (s *RPCServer) HandleIncomingSessionsForTenant(ctx context.Context, listene
 // Echoes the payload back with a JSON response containing a timestamp.
 type PingRPCHandler struct{}
 
-func (h *PingRPCHandler) Name() string                      { return "ping" }
-func (h *PingRPCHandler) Role() string                      { return "system" }
-func (h *PingRPCHandler) RequiresAuth() bool                { return false }
-func (h *PingRPCHandler) AllowedAuthTypes() []string        { return nil }
-func (h *PingRPCHandler) Scopes() []string                  { return nil }
-func (h *PingRPCHandler) TenantScope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *PingRPCHandler) AllowedTenants() []string          { return nil }
+func (h *PingRPCHandler) Name() string                { return "ping" }
+func (h *PingRPCHandler) Role() string                { return "system" }
+func (h *PingRPCHandler) RequiresAuth() bool          { return false }
+func (h *PingRPCHandler) AllowedAuthTypes() []string  { return nil }
+func (h *PingRPCHandler) Scopes() []string            { return nil }
+func (h *PingRPCHandler) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
+func (h *PingRPCHandler) AllowedTenants() []string    { return nil }
 
 func (h *PingRPCHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	type PingRequest struct {
@@ -1115,13 +1115,13 @@ func (h *StatusRPCHandler) statusVerdict() (status, confidence string, obs Obser
 	return ev.MeshStatus(h.rt.Config().ServiceName), conf, obs
 }
 
-func (h *StatusRPCHandler) Name() string                      { return "status" }
-func (h *StatusRPCHandler) Role() string                      { return "system" }
-func (h *StatusRPCHandler) RequiresAuth() bool                { return false }
-func (h *StatusRPCHandler) AllowedAuthTypes() []string        { return nil }
-func (h *StatusRPCHandler) Scopes() []string                  { return nil }
-func (h *StatusRPCHandler) TenantScope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *StatusRPCHandler) AllowedTenants() []string          { return nil }
+func (h *StatusRPCHandler) Name() string                { return "status" }
+func (h *StatusRPCHandler) Role() string                { return "system" }
+func (h *StatusRPCHandler) RequiresAuth() bool          { return false }
+func (h *StatusRPCHandler) AllowedAuthTypes() []string  { return nil }
+func (h *StatusRPCHandler) Scopes() []string            { return nil }
+func (h *StatusRPCHandler) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
+func (h *StatusRPCHandler) AllowedTenants() []string    { return nil }
 
 func (h *StatusRPCHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	// The four original fields keep their names and meanings; everything new is

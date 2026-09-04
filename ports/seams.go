@@ -48,7 +48,7 @@ type SecureHandler interface {
 	RequiresAuth() bool
 	AllowedAuthTypes() []string
 	Scopes() []string
-	TenantScope() TenantScope
+	Scope() TenantScope
 	AllowedTenants() []string
 }
 

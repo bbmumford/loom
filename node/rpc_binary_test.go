@@ -102,13 +102,13 @@ func recvResponse(t *testing.T, ctx context.Context, session *channelSession) *p
 // echoRPCHandler is a test handler that echoes the payload back.
 type echoRPCHandler struct{}
 
-func (h *echoRPCHandler) Name() string                      { return "test.echo" }
-func (h *echoRPCHandler) Role() string                      { return "test" }
-func (h *echoRPCHandler) RequiresAuth() bool                { return false }
-func (h *echoRPCHandler) AllowedAuthTypes() []string        { return nil }
-func (h *echoRPCHandler) Scopes() []string                  { return nil }
-func (h *echoRPCHandler) TenantScope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *echoRPCHandler) AllowedTenants() []string          { return nil }
+func (h *echoRPCHandler) Name() string                { return "test.echo" }
+func (h *echoRPCHandler) Role() string                { return "test" }
+func (h *echoRPCHandler) RequiresAuth() bool          { return false }
+func (h *echoRPCHandler) AllowedAuthTypes() []string  { return nil }
+func (h *echoRPCHandler) Scopes() []string            { return nil }
+func (h *echoRPCHandler) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
+func (h *echoRPCHandler) AllowedTenants() []string    { return nil }
 
 func (h *echoRPCHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	return &handlers.RPCResponse{
