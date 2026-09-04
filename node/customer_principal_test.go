@@ -53,7 +53,7 @@ func (h *customerPrincipalProbe) Role() string               { return "orbtr.tes
 func (h *customerPrincipalProbe) RequiresAuth() bool         { return false }
 func (h *customerPrincipalProbe) AllowedAuthTypes() []string { return nil }
 func (h *customerPrincipalProbe) Scopes() []string           { return nil }
-func (h *customerPrincipalProbe) TenantScope() handlers.TenantScope {
+func (h *customerPrincipalProbe) Scope() handlers.TenantScope {
 	return handlers.TenantScopeOrg
 }
 func (h *customerPrincipalProbe) AllowedTenants() []string { return nil }
@@ -287,13 +287,13 @@ func TestRPCServerForwardingPreservesTypedPrincipal(t *testing.T) {
 // invocations so a test can assert it was NOT reached.
 type platformOnlyProbe struct{ calls int32 }
 
-func (h *platformOnlyProbe) Name() string                      { return "orbtr.test.PlatformOnly" }
-func (h *platformOnlyProbe) Role() string                      { return "orbtr.test" }
-func (h *platformOnlyProbe) RequiresAuth() bool                { return false }
-func (h *platformOnlyProbe) AllowedAuthTypes() []string        { return nil }
-func (h *platformOnlyProbe) Scopes() []string                  { return nil }
-func (h *platformOnlyProbe) TenantScope() handlers.TenantScope { return handlers.TenantScopeTenant }
-func (h *platformOnlyProbe) AllowedTenants() []string          { return nil }
+func (h *platformOnlyProbe) Name() string                { return "orbtr.test.PlatformOnly" }
+func (h *platformOnlyProbe) Role() string                { return "orbtr.test" }
+func (h *platformOnlyProbe) RequiresAuth() bool          { return false }
+func (h *platformOnlyProbe) AllowedAuthTypes() []string  { return nil }
+func (h *platformOnlyProbe) Scopes() []string            { return nil }
+func (h *platformOnlyProbe) Scope() handlers.TenantScope { return handlers.TenantScopeTenant }
+func (h *platformOnlyProbe) AllowedTenants() []string    { return nil }
 func (h *platformOnlyProbe) ExecuteRPC(
 	ctx context.Context,
 	_ *handlers.RPCRequest,

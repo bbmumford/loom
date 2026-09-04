@@ -72,7 +72,7 @@ func (w *GenericRPCWrapper[Req, Resp]) Role() string               { return w.ro
 func (w *GenericRPCWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
 func (w *GenericRPCWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.authTypes }
 func (w *GenericRPCWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
-func (w *GenericRPCWrapper[Req, Resp]) TenantScope() TenantScope   { return w.tenantScope }
+func (w *GenericRPCWrapper[Req, Resp]) Scope() TenantScope         { return w.tenantScope }
 func (w *GenericRPCWrapper[Req, Resp]) AllowedTenants() []string   { return w.allowedTenants }
 
 func (w *GenericRPCWrapper[Req, Resp]) ExecuteRPC(ctx context.Context, req *RPCRequest) (*RPCResponse, error) {
@@ -169,7 +169,7 @@ func (w *GenericTaskWrapper[Req, Resp]) Role() string               { return w.r
 func (w *GenericTaskWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
 func (w *GenericTaskWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.authTypes }
 func (w *GenericTaskWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
-func (w *GenericTaskWrapper[Req, Resp]) TenantScope() TenantScope   { return w.tenantScope }
+func (w *GenericTaskWrapper[Req, Resp]) Scope() TenantScope         { return w.tenantScope }
 func (w *GenericTaskWrapper[Req, Resp]) AllowedTenants() []string   { return w.allowedTenants }
 
 func (w *GenericTaskWrapper[Req, Resp]) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error) {

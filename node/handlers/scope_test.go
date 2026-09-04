@@ -13,7 +13,7 @@ import (
 	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
-// stubMeta is a minimal HandlerMeta used solely to exercise validateTenantScope
+// stubMeta is a minimal HandlerMeta used solely to exercise validateScope
 // without pulling in a full registry or wrapper type. It carries only the
 // fields the switch statement reads.
 type stubMeta struct {
@@ -28,12 +28,12 @@ func (s *stubMeta) Role() string               { return s.role }
 func (s *stubMeta) RequiresAuth() bool         { return false }
 func (s *stubMeta) AllowedAuthTypes() []string { return nil }
 func (s *stubMeta) Scopes() []string           { return nil }
-func (s *stubMeta) TenantScope() TenantScope   { return s.scope }
+func (s *stubMeta) Scope() TenantScope         { return s.scope }
 func (s *stubMeta) AllowedTenants() []string   { return s.allowed }
 
 // scopeRefPolicy is a CONSUMER-side reference PresencePolicy reproducing the
 // platform's historical presence semantics. loom no longer contains this
-// logic — validateTenantScope delegates every declared (non-None) tag to
+// logic — validateScope delegates every declared (non-None) tag to
 // whatever policy the registry carries; a nil policy fails closed. The reason
 // strings mirror the diagnostics these tests characterise.
 func scopeRefPolicy(platforms ...string) tenantScope.PresencePolicyFunc {
@@ -120,7 +120,7 @@ func TestValidateTenantScope_Profile_MissingTenantFailsClosed(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "billing.getProfile", scope: TenantScopeProfile}
 
-	err := r.validateTenantScope(ctxWithRPC(nil), h)
+	err := r.validateScope(ctxWithRPC(nil), h)
 	if err == nil {
 		t.Fatalf("expected TenantScopeProfile without tenant to fail closed; got nil")
 	}
@@ -138,7 +138,7 @@ func TestValidateTenantScope_Profile_WithTenantPasses(t *testing.T) {
 	h := &stubMeta{name: "billing.getProfile", scope: TenantScopeProfile}
 
 	ctx := tenantScope.WithAuthenticatedIdentity(context.Background(), scopeIdentity("acme", "", ""))
-	err := r.validateTenantScope(ctx, h)
+	err := r.validateScope(ctx, h)
 	if err != nil {
 		t.Fatalf("expected TenantScopeProfile with tenant to pass; got %v", err)
 	}
@@ -154,7 +154,7 @@ func TestValidateTenantScope_Unknown_FailsClosed(t *testing.T) {
 
 	// Even with a fully-populated tenant/user context, the Unknown sentinel
 	// must refuse — the caller identity is not the reason for refusal.
-	err := r.validateTenantScope(ctxWithRPC(map[string]interface{}{
+	err := r.validateScope(ctxWithRPC(map[string]interface{}{
 		"tenant_id": "acme",
 		"userID":    "alice",
 	}), h)
@@ -176,7 +176,7 @@ func TestValidateTenantScope_GarbageScope_FailsClosed(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "typo.op", scope: TenantScope("tennant")}
 
-	err := r.validateTenantScope(ctxWithRPC(map[string]interface{}{
+	err := r.validateScope(ctxWithRPC(map[string]interface{}{
 		"tenant_id": "acme",
 	}), h)
 	if err == nil {
@@ -194,7 +194,7 @@ func TestValidateTenantScope_None_Passes(t *testing.T) {
 	r := NewHandlerRegistry()
 	h := &stubMeta{name: "public.heartbeat", scope: TenantScopeNone}
 
-	if err := r.validateTenantScope(context.Background(), h); err != nil {
+	if err := r.validateScope(context.Background(), h); err != nil {
 		t.Fatalf("expected TenantScopeNone to pass without context; got %v", err)
 	}
 }
@@ -224,7 +224,7 @@ func TestValidateTenantScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing
 			// The platform allowlist now lives in the CONSUMER policy, not in
 			// loom. An empty/nil allowlist admits nobody — fail closed.
 			r.SetPresencePolicy(scopeRefPolicy(test.set...))
-			err := r.validateTenantScope(identity(test.tenant), h)
+			err := r.validateScope(identity(test.tenant), h)
 			if test.wantErr {
 				if !errors.Is(err, tenantScope.ErrDenied) {
 					t.Fatalf("expected shared fail-closed denial, got %v", err)
@@ -254,7 +254,7 @@ func TestValidateTenantScope_LegacyScopes_StillEnforce(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			h := &stubMeta{name: "op." + c.name, scope: c.scope}
-			err := r.validateTenantScope(ctxWithRPC(nil), h)
+			err := r.validateScope(ctxWithRPC(nil), h)
 			if err == nil {
 				t.Fatalf("expected %s scope without tenant to fail; got nil", c.name)
 			}
@@ -338,7 +338,7 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 				ctx = WithTransportTenant(ctx, c.transport)
 			}
 			ctx = tenantScope.WithAuthenticatedIdentity(ctx, scopeIdentity(reqTenant, "", ""))
-			err := r.validateTenantScope(ctx, h)
+			err := r.validateScope(ctx, h)
 			if c.wantErr == "" {
 				if err != nil {
 					t.Fatalf("%s: expected pass; got %v", c.name, err)
@@ -368,7 +368,7 @@ func TestValidateTenantScope_OrganizationIgnoresMutableHints(t *testing.T) {
 		{"tenant_id": "orbtr", "organization": "forged"},
 	} {
 		ctx := WithTransportTenant(ctxWithRPC(body), "orbtr")
-		err := r.validateTenantScope(ctx, h)
+		err := r.validateScope(ctx, h)
 		if err == nil || !strings.Contains(err.Error(), "organisation") {
 			t.Fatalf("mutable org hint %#v must not satisfy ScopeOrg; got %v", body, err)
 		}
@@ -379,7 +379,7 @@ func TestValidateTenantScope_OrganizationIgnoresMutableHints(t *testing.T) {
 		"orgId":     "evil",
 	}), "orbtr")
 	ctx = tenantScope.WithAuthenticatedIdentity(ctx, scopeIdentity("orbtr", "acme", ""))
-	if err := r.validateTenantScope(ctx, h); err != nil {
+	if err := r.validateScope(ctx, h); err != nil {
 		t.Fatalf("exact authenticated organisation must satisfy ScopeOrg despite body hints: %v", err)
 	}
 }

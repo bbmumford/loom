@@ -148,8 +148,8 @@ func TestAnUnauthenticatedHandlerDeclaresNoUnenforceableRestrictions(t *testing.
 		t.Errorf("AllowedTenants() = %v on a no-auth handler — an unenforceable "+
 			"tenant allowlist", got)
 	}
-	if got := h.TenantScope(); got != handlers.TenantScopeNone {
-		t.Errorf("TenantScope() = %q on a no-auth handler — tenant scoping cannot "+
+	if got := h.Scope(); got != handlers.TenantScopeNone {
+		t.Errorf("Scope() = %q on a no-auth handler — tenant scoping cannot "+
 			"be applied without an authenticated principal to scope", got)
 	}
 }

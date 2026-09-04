@@ -31,13 +31,13 @@ type composeTaskProbe struct {
 	run          func(context.Context, *handlers.Task) (*handlers.TaskResult, error)
 }
 
-func (h *composeTaskProbe) Name() string                      { return h.name }
-func (h *composeTaskProbe) Role() string                      { return "compose-test" }
-func (h *composeTaskProbe) RequiresAuth() bool                { return h.requiresAuth }
-func (h *composeTaskProbe) AllowedAuthTypes() []string        { return nil }
-func (h *composeTaskProbe) Scopes() []string                  { return nil }
-func (h *composeTaskProbe) TenantScope() handlers.TenantScope { return h.scope }
-func (h *composeTaskProbe) AllowedTenants() []string          { return nil }
+func (h *composeTaskProbe) Name() string                { return h.name }
+func (h *composeTaskProbe) Role() string                { return "compose-test" }
+func (h *composeTaskProbe) RequiresAuth() bool          { return h.requiresAuth }
+func (h *composeTaskProbe) AllowedAuthTypes() []string  { return nil }
+func (h *composeTaskProbe) Scopes() []string            { return nil }
+func (h *composeTaskProbe) Scope() handlers.TenantScope { return h.scope }
+func (h *composeTaskProbe) AllowedTenants() []string    { return nil }
 
 func (h *composeTaskProbe) ExecuteTask(ctx context.Context, task *handlers.Task) (*handlers.TaskResult, error) {
 	h.ran <- ctx
@@ -65,7 +65,7 @@ func (h *composeRPCProbe) Role() string               { return "compose-rpc-test
 func (h *composeRPCProbe) RequiresAuth() bool         { return h.requiresAuth }
 func (h *composeRPCProbe) AllowedAuthTypes() []string { return h.allowedAuthTypes }
 func (h *composeRPCProbe) Scopes() []string           { return h.scopes }
-func (h *composeRPCProbe) TenantScope() handlers.TenantScope {
+func (h *composeRPCProbe) Scope() handlers.TenantScope {
 	return handlers.TenantScopeNone
 }
 func (h *composeRPCProbe) AllowedTenants() []string { return nil }
@@ -1006,7 +1006,7 @@ func (*composeBlockingTaskProbe) Role() string               { return "compose-t
 func (*composeBlockingTaskProbe) RequiresAuth() bool         { return false }
 func (*composeBlockingTaskProbe) AllowedAuthTypes() []string { return nil }
 func (*composeBlockingTaskProbe) Scopes() []string           { return nil }
-func (*composeBlockingTaskProbe) TenantScope() handlers.TenantScope {
+func (*composeBlockingTaskProbe) Scope() handlers.TenantScope {
 	return handlers.TenantScopeNone
 }
 func (*composeBlockingTaskProbe) AllowedTenants() []string { return nil }
@@ -1148,7 +1148,7 @@ func (*composeMultiBlockingProbe) RequiresAuth() bool {
 }
 func (*composeMultiBlockingProbe) AllowedAuthTypes() []string { return nil }
 func (*composeMultiBlockingProbe) Scopes() []string           { return nil }
-func (*composeMultiBlockingProbe) TenantScope() handlers.TenantScope {
+func (*composeMultiBlockingProbe) Scope() handlers.TenantScope {
 	return handlers.TenantScopeNone
 }
 func (*composeMultiBlockingProbe) AllowedTenants() []string { return nil }

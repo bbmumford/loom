@@ -52,7 +52,7 @@ const (
 	TenantScopeProfile   = scope.ScopeProfile   // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeProfile.
 	TenantScopePartition = scope.ScopePartition // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopePartition.
 	// TenantScopeUnknown is the fail-closed sentinel, mirroring rpc.ScopeUnknown.
-	// validateTenantScope rejects any handler bound to this scope.
+	// validateScope rejects any handler bound to this scope.
 	// Never set it manually — it exists so decay-to-empty-string cannot fail open.
 	TenantScopeUnknown = scope.ScopeUnknown
 )
@@ -81,7 +81,7 @@ type HandlerMeta interface {
 	// TenantScope returns the required tenant isolation level.
 	// Returns TenantScopeNone for deliberately unrestricted handlers. The zero
 	// value is invalid and registration rejects it.
-	TenantScope() TenantScope
+	Scope() TenantScope
 
 	// AllowedTenants returns an optional tenant whitelist.
 	// Empty slice = all tenants allowed (subject to TenantScope).
@@ -331,7 +331,7 @@ func (r *HandlerRegistry) Use(mw Middleware) {
 // for every declared scope other than TenantScopeNone, whether the
 // server-established identity satisfies it. loom carries the opaque scope tag
 // and identity but interprets neither. A nil policy fails closed:
-// validateTenantScope denies every non-None handler when no policy is set.
+// validateScope denies every non-None handler when no policy is set.
 // Each endpoint should install its policy at init, e.g.
 // registry.SetPresencePolicy(myPolicy).
 func (r *HandlerRegistry) SetPresencePolicy(p scope.PresencePolicy) {
@@ -341,7 +341,7 @@ func (r *HandlerRegistry) SetPresencePolicy(p scope.PresencePolicy) {
 }
 
 // presencePolicy returns the configured scope evaluator (or nil). A nil policy
-// fails closed at validateTenantScope for every non-None handler.
+// fails closed at validateScope for every non-None handler.
 func (r *HandlerRegistry) presencePolicy() scope.PresencePolicy {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -350,7 +350,7 @@ func (r *HandlerRegistry) presencePolicy() scope.PresencePolicy {
 
 // PresencePolicy returns the configured scope evaluator (or nil), letting an
 // out-of-package composition root confirm SetPresencePolicy seeded this mesh
-// registry. It reads the same field validateTenantScope consults, so a nil
+// registry. It reads the same field validateScope consults, so a nil
 // return proves that path still fails closed. Mirrors rpc.Registry.PresencePolicy.
 func (r *HandlerRegistry) PresencePolicy() scope.PresencePolicy {
 	return r.presencePolicy()
@@ -461,7 +461,7 @@ func (r *HandlerRegistry) registerMeta(
 	if name == "" {
 		return RegistrationHandle{}, fmt.Errorf("handler name cannot be empty")
 	}
-	if declared := h.TenantScope(); !scope.IsDeclared(declared) {
+	if declared := h.Scope(); !scope.IsDeclared(declared) {
 		return RegistrationHandle{}, fmt.Errorf("handler %s has a non-declarable scope %q: declare a concrete scope tag (the TenantScopeUnset zero value and the TenantScopeUnknown proto-decay sentinel are refused)", name, declared)
 	}
 
@@ -827,12 +827,12 @@ func getUserIDFromContext(ctx context.Context) string {
 	return ""
 }
 
-// validateTenantScope checks that the trusted typed context satisfies the
+// validateScope checks that the trusted typed context satisfies the
 // handler's tenant scope. RPCRequest.Context and task Metadata are deliberately
 // ignored here: both are mutable request data and cannot establish platform,
 // organisation, or user identity.
-func (r *HandlerRegistry) validateTenantScope(ctx context.Context, h HandlerMeta) error {
-	declared := h.TenantScope()
+func (r *HandlerRegistry) validateScope(ctx context.Context, h HandlerMeta) error {
+	declared := h.Scope()
 	if declared == scope.ScopeNone {
 		// Explicit opt-out — the one tag loom admits without a policy.
 		return nil
@@ -993,7 +993,7 @@ func (h ResolvedHandler) dispatchRPC(
 	defer releaseAdmission()
 
 	// Surface RPCRequest.Context to middleware and application handlers.
-	// validateTenantScope does not consume this mutable request map.
+	// validateScope does not consume this mutable request map.
 	ctx = injectRPCContext(ctx, req.Context)
 
 	// Propagate e2e trace ID — the LocalCaller (in-process dispatch) and
@@ -1017,7 +1017,7 @@ func (h ResolvedHandler) dispatchRPC(
 	}
 
 	// 🔒 TENANT SCOPE ENFORCEMENT
-	if err := h.registry.validateTenantScope(ctx, h.meta); err != nil {
+	if err := h.registry.validateScope(ctx, h.meta); err != nil {
 		return &RPCResponse{
 			Success: false,
 			Error:   fmt.Sprintf("tenant restriction: %v", err),
@@ -1126,7 +1126,7 @@ func (h ResolvedHandler) DispatchTaskWithAuth(
 	defer releaseAdmission()
 
 	// Surface task metadata to middleware and application handlers.
-	// validateTenantScope does not consume this mutable task map.
+	// validateScope does not consume this mutable task map.
 	ctx = injectRPCContext(ctx, task.Metadata)
 
 	if auth == nil {
@@ -1141,7 +1141,7 @@ func (h ResolvedHandler) DispatchTaskWithAuth(
 	}
 
 	// 🔒 TENANT SCOPE ENFORCEMENT
-	if err := h.registry.validateTenantScope(ctx, h.meta); err != nil {
+	if err := h.registry.validateScope(ctx, h.meta); err != nil {
 		return &TaskResult{
 			TaskID: task.ID,
 			Status: TaskStatusFailed,
@@ -1248,7 +1248,7 @@ func (r *HandlerRegistry) DispatchStream(ctx context.Context, handlerName string
 	defer releaseAdmission()
 
 	// 🔒 TENANT SCOPE ENFORCEMENT
-	if err := r.validateTenantScope(ctx, h); err != nil {
+	if err := r.validateScope(ctx, h); err != nil {
 		return fmt.Errorf("tenant restriction: %w", err)
 	}
 
@@ -1338,7 +1338,7 @@ func GetDomainFromContext(ctx map[string]interface{}, fallback string) string {
 
 // GetPartitionIDFromContext is a legacy accessor for the snake_case
 // RPCRequest.Context hint. It is retained for application compatibility only;
-// validateTenantScope never treats this mutable map as identity authority.
+// validateScope never treats this mutable map as identity authority.
 func GetPartitionIDFromContext(ctx map[string]interface{}) string {
 	if ctx == nil {
 		return ""
@@ -1360,7 +1360,7 @@ func GetPartitionIDFromContext(ctx map[string]interface{}) string {
 // ── Transport-bound partition context ───────────────────────────────────────
 // These helpers propagate the transport-resolved partition — the consumer-pinned
 // opaque axis value established at the transport layer — through context.Context
-// so validateTenantScope reconciles the transport binding against the canonical
+// so validateScope reconciles the transport binding against the canonical
 // typed identity. The value is an opaque partition identifier; loom attaches no
 // class or level to it.
 

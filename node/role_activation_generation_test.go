@@ -28,13 +28,13 @@ type lifetimeTaskHandler struct {
 	runs     atomic.Int32
 }
 
-func (h *lifetimeTaskHandler) Name() string                      { return h.name }
-func (h *lifetimeTaskHandler) Role() string                      { return h.role }
-func (h *lifetimeTaskHandler) RequiresAuth() bool                { return false }
-func (h *lifetimeTaskHandler) AllowedAuthTypes() []string        { return nil }
-func (h *lifetimeTaskHandler) Scopes() []string                  { return nil }
-func (h *lifetimeTaskHandler) TenantScope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *lifetimeTaskHandler) AllowedTenants() []string          { return nil }
+func (h *lifetimeTaskHandler) Name() string                { return h.name }
+func (h *lifetimeTaskHandler) Role() string                { return h.role }
+func (h *lifetimeTaskHandler) RequiresAuth() bool          { return false }
+func (h *lifetimeTaskHandler) AllowedAuthTypes() []string  { return nil }
+func (h *lifetimeTaskHandler) Scopes() []string            { return nil }
+func (h *lifetimeTaskHandler) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
+func (h *lifetimeTaskHandler) AllowedTenants() []string    { return nil }
 
 func (h *lifetimeTaskHandler) ExecuteTask(
 	ctx context.Context,

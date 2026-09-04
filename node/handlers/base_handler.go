@@ -86,7 +86,7 @@ func (h *BaseHandler) AllowedAuthTypes() []string {
 // includes Profile) constant set; they are literally the same values with
 // two names during the migration. See rpc/scope/tenantscope.go for the
 // canonical enum and finding rev-069 for the rationale.
-func (h *BaseHandler) TenantScope() TenantScope {
+func (h *BaseHandler) Scope() TenantScope {
 	return h.tenantScope
 }
 

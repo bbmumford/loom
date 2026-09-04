@@ -46,11 +46,11 @@ func (h *rpcOnlyHandler) Role() string {
 	}
 	return "system"
 }
-func (h *rpcOnlyHandler) RequiresAuth() bool                { return false }
-func (h *rpcOnlyHandler) AllowedAuthTypes() []string        { return nil }
-func (h *rpcOnlyHandler) Scopes() []string                  { return nil }
-func (h *rpcOnlyHandler) TenantScope() handlers.TenantScope { return h.scope }
-func (h *rpcOnlyHandler) AllowedTenants() []string          { return nil }
+func (h *rpcOnlyHandler) RequiresAuth() bool          { return false }
+func (h *rpcOnlyHandler) AllowedAuthTypes() []string  { return nil }
+func (h *rpcOnlyHandler) Scopes() []string            { return nil }
+func (h *rpcOnlyHandler) Scope() handlers.TenantScope { return h.scope }
+func (h *rpcOnlyHandler) AllowedTenants() []string    { return nil }
 
 func (h *rpcOnlyHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	h.ran = true
@@ -63,13 +63,13 @@ var _ handlers.RPCHandler = (*rpcOnlyHandler)(nil)
 // the exact shape the HasHandler filter exists to reject.
 type taskOnlyHandler struct{ name string }
 
-func (h *taskOnlyHandler) Name() string                      { return h.name }
-func (h *taskOnlyHandler) Role() string                      { return "system" }
-func (h *taskOnlyHandler) RequiresAuth() bool                { return false }
-func (h *taskOnlyHandler) AllowedAuthTypes() []string        { return nil }
-func (h *taskOnlyHandler) Scopes() []string                  { return nil }
-func (h *taskOnlyHandler) TenantScope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *taskOnlyHandler) AllowedTenants() []string          { return nil }
+func (h *taskOnlyHandler) Name() string                { return h.name }
+func (h *taskOnlyHandler) Role() string                { return "system" }
+func (h *taskOnlyHandler) RequiresAuth() bool          { return false }
+func (h *taskOnlyHandler) AllowedAuthTypes() []string  { return nil }
+func (h *taskOnlyHandler) Scopes() []string            { return nil }
+func (h *taskOnlyHandler) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
+func (h *taskOnlyHandler) AllowedTenants() []string    { return nil }
 
 func (h *taskOnlyHandler) ExecuteTask(ctx context.Context, t *handlers.Task) (*handlers.TaskResult, error) {
 	return &handlers.TaskResult{TaskID: t.ID}, nil
@@ -160,7 +160,7 @@ func TestTheNilGuardsFailClosed(t *testing.T) {
 
 // 🔴 THE DOC'S CLAIM IS LOAD-BEARING: "local calls thus have the same security
 // semantics as remote ones". That holds ONLY because DispatchBytes goes through
-// registry.Dispatch, which runs validateTenantScope. Type-asserting to
+// registry.Dispatch, which runs validateScope. Type-asserting to
 // RPCHandler and calling ExecuteRPC directly would be faster, identical on the
 // happy path, and would silently drop tenant enforcement for every local call.
 //
@@ -179,7 +179,7 @@ func TestDispatchBytesEnforcesTenantScopeJustLikeARemoteCall(t *testing.T) {
 	if err == nil {
 		t.Fatal("a TENANT-SCOPED handler executed through the local short circuit " +
 			"with no tenant in context — DispatchBytes is bypassing " +
-			"registry.Dispatch's validateTenantScope, so local calls do NOT have " +
+			"registry.Dispatch's validateScope, so local calls do NOT have " +
 			"the same security semantics as remote ones, contrary to its own doc")
 	}
 	if h.ran {
@@ -234,13 +234,13 @@ func TestAnUnsuccessfulHandlerBecomesAnErrorNotAnEmptySuccess(t *testing.T) {
 
 type failingHandler struct{ name string }
 
-func (h *failingHandler) Name() string                      { return h.name }
-func (h *failingHandler) Role() string                      { return "system" }
-func (h *failingHandler) RequiresAuth() bool                { return false }
-func (h *failingHandler) AllowedAuthTypes() []string        { return nil }
-func (h *failingHandler) Scopes() []string                  { return nil }
-func (h *failingHandler) TenantScope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *failingHandler) AllowedTenants() []string          { return nil }
+func (h *failingHandler) Name() string                { return h.name }
+func (h *failingHandler) Role() string                { return "system" }
+func (h *failingHandler) RequiresAuth() bool          { return false }
+func (h *failingHandler) AllowedAuthTypes() []string  { return nil }
+func (h *failingHandler) Scopes() []string            { return nil }
+func (h *failingHandler) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
+func (h *failingHandler) AllowedTenants() []string    { return nil }
 func (h *failingHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	return &handlers.RPCResponse{ID: req.ID, Success: false, Error: "handler said no"}, nil
 }

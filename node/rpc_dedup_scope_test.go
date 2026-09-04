@@ -38,13 +38,13 @@ type dedupProbe struct {
 	calls int32
 }
 
-func (h *dedupProbe) Name() string                      { return h.name }
-func (h *dedupProbe) Role() string                      { return "orbtr.test" }
-func (h *dedupProbe) RequiresAuth() bool                { return false }
-func (h *dedupProbe) AllowedAuthTypes() []string        { return nil }
-func (h *dedupProbe) Scopes() []string                  { return nil }
-func (h *dedupProbe) TenantScope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *dedupProbe) AllowedTenants() []string          { return nil }
+func (h *dedupProbe) Name() string                { return h.name }
+func (h *dedupProbe) Role() string                { return "orbtr.test" }
+func (h *dedupProbe) RequiresAuth() bool          { return false }
+func (h *dedupProbe) AllowedAuthTypes() []string  { return nil }
+func (h *dedupProbe) Scopes() []string            { return nil }
+func (h *dedupProbe) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
+func (h *dedupProbe) AllowedTenants() []string    { return nil }
 func (h *dedupProbe) ExecuteRPC(context.Context, *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	atomic.AddInt32(&h.calls, 1)
 	return &handlers.RPCResponse{Success: true, Payload: []byte(h.name)}, nil
