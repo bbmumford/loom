@@ -314,7 +314,7 @@ func TestTenantScopingActuallyFilters(t *testing.T) {
 
 	// Control: the other tenant's node IS present, so the 1 above is a filter
 	// result and not an ingest failure.
-	os, err := d.Members(ctx, ports.Tenant("other-tenant"))
+	os, err := d.Members(ctx, ports.Partition("other-tenant"))
 	if err != nil {
 		t.Fatal(err)
 	}

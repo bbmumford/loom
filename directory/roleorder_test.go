@@ -40,7 +40,7 @@ var unsortedRoles = []string{"identity", "auth", "anchor", "billing"}
 // documents that a record stored under a tenant returns nothing for a query
 // on "" — so both implementations must be asked the SAME tenant or the
 // comparison is between a hit and a miss.
-const fixtureTenant ports.Tenant = "hstles"
+const fixtureTenant ports.Partition = "hstles"
 
 func wantSortedRoles() []string { return []string{"anchor", "auth", "billing", "identity"} }
 
@@ -89,7 +89,7 @@ func ladMemberRoles(t *testing.T, id, tenant string, roles []string) []string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, ok, err := d.Member(context.Background(), ports.Tenant(tenant), ports.NodeID(id))
+	m, ok, err := d.Member(context.Background(), ports.Partition(tenant), ports.NodeID(id))
 	if err != nil || !ok {
 		t.Fatalf("LADDirectory does not know the fixture node (ok=%v err=%v)", ok, err)
 	}

@@ -163,7 +163,7 @@ type RoleAdvert struct {
 type RoleEnumerator interface {
 	// RoleAdverts returns every role advertisement in a tenant, one entry per
 	// advertising node. Order is by NodeID so the result is comparable.
-	RoleAdverts(ctx context.Context, tenant Tenant) ([]RoleAdvert, error)
+	RoleAdverts(ctx context.Context, partition Partition) ([]RoleAdvert, error)
 }
 
 // DirectorySnapshot is a deterministic point-in-time view: two nodes with the
@@ -202,24 +202,24 @@ type DirectorySnapshot struct {
 // hide it (#R-1455 ③). Nine of loom's ten tenant-scoped cache reads pass "",
 // and they still may — but they now SAY SO, which is the precondition for
 // fixing the hardcode rather than the fix itself.
-type Tenant string
+type Partition string
 
 type LiveDirectory interface {
 	// Members returns the live membership projection for one tenant
 	// (tombstoned/TTL-expired entries excluded unless still within retention
 	// for observers).
-	Members(ctx context.Context, tenant Tenant) ([]Member, error)
+	Members(ctx context.Context, partition Partition) ([]Member, error)
 
 	// Member returns one node's membership entry; ok=false when absent.
-	Member(ctx context.Context, tenant Tenant, id NodeID) (m Member, ok bool, err error)
+	Member(ctx context.Context, partition Partition, id NodeID) (m Member, ok bool, err error)
 
 	// NodesByRole returns nodes currently advertising a service role.
 	// Advertisement is not authorization — recipients of anything sensitive
 	// must additionally pass TrustPolicy.
-	NodesByRole(ctx context.Context, tenant Tenant, role string) ([]NodeID, error)
+	NodesByRole(ctx context.Context, partition Partition, role string) ([]NodeID, error)
 
 	// Reach returns priority-ordered dial candidates for a node.
-	Reach(ctx context.Context, tenant Tenant, id NodeID) ([]ReachAddress, error)
+	Reach(ctx context.Context, partition Partition, id NodeID) ([]ReachAddress, error)
 
 	// Latency takes NO tenant, deliberately: the substrate indexes latency by
 	// observing node only (ladcache.Latency(fromNode)), and adding a parameter
@@ -236,7 +236,7 @@ type LiveDirectory interface {
 	// HandlersByName returns the nodes advertising an RPC handler FQN.
 	// rpc_forward target discovery reads this (via RoleTable today) — the
 	// cutover must not re-point it at retired LAD Roles records.
-	HandlersByName(ctx context.Context, tenant Tenant, name string) ([]HandlerAdvert, error)
+	HandlersByName(ctx context.Context, partition Partition, name string) ([]HandlerAdvert, error)
 
 	// RecordsByTopic returns the accepted records of one topic (KeyOps,
 	// Quorum, and other consumers without a typed projection yet).

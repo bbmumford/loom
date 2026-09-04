@@ -25,7 +25,7 @@ import (
 const testTenant = "hstles"
 
 // testTenantID is the port-level form of testTenant.
-const testTenantID = ports.Tenant(testTenant)
+const testTenantID = ports.Partition(testTenant)
 
 func applyLAD(t *testing.T, c *ladcache.DirectoryCache, topic lad.Topic, nodeID string, body any) {
 	t.Helper()

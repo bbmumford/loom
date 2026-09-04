@@ -25,18 +25,18 @@ type fakeParityDir struct {
 
 func (f *fakeParityDir) RecordModel() string { return f.model }
 
-func (f *fakeParityDir) Members(context.Context, ports.Tenant) ([]ports.Member, error) {
+func (f *fakeParityDir) Members(context.Context, ports.Partition) ([]ports.Member, error) {
 	return f.members, nil
 }
 
-func (f *fakeParityDir) Reach(context.Context, ports.Tenant, ports.NodeID) ([]ports.ReachAddress, error) {
+func (f *fakeParityDir) Reach(context.Context, ports.Partition, ports.NodeID) ([]ports.ReachAddress, error) {
 	return nil, nil
 }
 
 // HandlerFQNs satisfies directory.HandlerEnumerator so the handler axis is
 // performed (over an empty set) rather than recorded as a degraded axis — that
 // keeps InParity() driven by member content, not by an un-enumerable side.
-func (f *fakeParityDir) HandlerFQNs(context.Context, ports.Tenant) ([]string, error) {
+func (f *fakeParityDir) HandlerFQNs(context.Context, ports.Partition) ([]string, error) {
 	return nil, nil
 }
 
@@ -57,7 +57,7 @@ func TestShadowParityPassRecordsDivergence(t *testing.T) {
 		[]ports.Member{{NodeID: "bbb", ServiceName: "svc", Tenant: "t"}},
 	)
 
-	rt.shadowParityPass(context.Background(), auth, shadow, ports.Tenant("t"), nil)
+	rt.shadowParityPass(context.Background(), auth, shadow, ports.Partition("t"), nil)
 
 	if got := rt.shadowParityRuns.Load(); got != 1 {
 		t.Fatalf("shadowParityRuns = %d, want 1 — a divergent typed comparison did not "+
@@ -79,7 +79,7 @@ func TestShadowParityPassInParityRecordsNoDivergence(t *testing.T) {
 	same := []ports.Member{{NodeID: "aaa", ServiceName: "svc", Tenant: "t"}}
 	auth, shadow := ladShadowPair(same, same)
 
-	rt.shadowParityPass(context.Background(), auth, shadow, ports.Tenant("t"), nil)
+	rt.shadowParityPass(context.Background(), auth, shadow, ports.Partition("t"), nil)
 
 	if got := rt.shadowParityRuns.Load(); got != 1 {
 		t.Fatalf("shadowParityRuns = %d, want 1", got)

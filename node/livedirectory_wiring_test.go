@@ -84,7 +84,7 @@ func TestSeamMatchesDirectCacheReads(t *testing.T) {
 				t.Fatal("the direct call returned nothing — the comparison would be vacuous")
 			}
 
-			viaPort, err := ld.NodesByRole(ctx, ports.Tenant(tenant), "auth")
+			viaPort, err := ld.NodesByRole(ctx, ports.Partition(tenant), "auth")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -108,7 +108,7 @@ func TestSeamMatchesDirectCacheReads(t *testing.T) {
 
 			// Control: the port discriminates by role rather than returning
 			// everything, or the equality above would be trivially satisfiable.
-			billing, err := ld.NodesByRole(ctx, ports.Tenant(tenant), "billing")
+			billing, err := ld.NodesByRole(ctx, ports.Partition(tenant), "billing")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -121,7 +121,7 @@ func TestSeamMatchesDirectCacheReads(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			portM, err := ld.Members(ctx, ports.Tenant(tenant))
+			portM, err := ld.Members(ctx, ports.Partition(tenant))
 			if err != nil {
 				t.Fatal(err)
 			}

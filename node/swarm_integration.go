@@ -76,7 +76,7 @@ func (si *SwarmIntegration) ShadowStats() (checked, rejected, dropped uint64) {
 // per-capability report. It returns (nil, nil) when no shadow is running. A
 // report whose InParity() is false means the Swarm directory does not yet
 // reproduce the live directory — the LAD→Swarm cutover must not proceed on it.
-func (si *SwarmIntegration) ShadowParity(ctx context.Context, authoritative ports.LiveDirectory, tenant ports.Tenant, roles []string) (*directory.ShadowReport, error) {
+func (si *SwarmIntegration) ShadowParity(ctx context.Context, authoritative ports.LiveDirectory, tenant ports.Partition, roles []string) (*directory.ShadowReport, error) {
 	if si == nil || si.trustShadow == nil {
 		return nil, nil
 	}

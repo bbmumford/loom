@@ -101,7 +101,7 @@ func TestZeroConfigPolicyRejectsSelfOwnedPublish(t *testing.T) {
 	if d.Rejected() != 1 || d.Checked() != 1 {
 		t.Fatalf("checked=%d rejected=%d, want 1/1", d.Checked(), d.Rejected())
 	}
-	if m, _ := d.Members(ctx, ports.Tenant("hstles")); len(m) != 0 {
+	if m, _ := d.Members(ctx, ports.Partition("hstles")); len(m) != 0 {
 		t.Fatalf("refused record must not project, got %d members", len(m))
 	}
 }
@@ -119,7 +119,7 @@ func TestBaselineSeedAllowsSelfOwnedPublish(t *testing.T) {
 	if d.Rejected() != 0 || d.Checked() != 1 {
 		t.Fatalf("checked=%d rejected=%d, want 1/0", d.Checked(), d.Rejected())
 	}
-	m, _ := d.Members(ctx, ports.Tenant("hstles"))
+	m, _ := d.Members(ctx, ports.Partition("hstles"))
 	if len(m) != 1 || m[0].NodeID != id {
 		t.Fatalf("allowed record must project as a member, got %+v", m)
 	}
@@ -140,7 +140,7 @@ func TestObserveModeCountsButKeeps(t *testing.T) {
 	if d.Rejected() != 1 || d.Checked() != 1 {
 		t.Fatalf("checked=%d rejected=%d, want 1/1 (counted but kept)", d.Checked(), d.Rejected())
 	}
-	m, _ := d.Members(ctx, ports.Tenant("hstles"))
+	m, _ := d.Members(ctx, ports.Partition("hstles"))
 	if len(m) != 1 || m[0].NodeID != id {
 		t.Fatalf("observe mode must still project the record, got %+v", m)
 	}
