@@ -10,8 +10,6 @@ import (
 	"time"
 
 	"google.golang.org/protobuf/proto"
-
-	scope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // ---------------------------------------------------------------------------
@@ -29,7 +27,6 @@ type GenericRPCWrapper[Req, Resp proto.Message] struct {
 	scopes         []string
 	tenantScope    TenantScope
 	allowedTenants []string
-	requirement    *scope.Requirement
 	handler        func(ctx context.Context, req Req) (Resp, error)
 	newRequest     func() Req
 }
@@ -70,13 +67,6 @@ func (w *GenericRPCWrapper[Req, Resp]) WithTenantScope(scope TenantScope, allowe
 	return w
 }
 
-// WithRequirement sets the two-arm authorization requirement, which supersedes
-// the tenant scope at the mesh enforcer. Returns self for chaining.
-func (w *GenericRPCWrapper[Req, Resp]) WithRequirement(req *scope.Requirement) *GenericRPCWrapper[Req, Resp] {
-	w.requirement = req
-	return w
-}
-
 func (w *GenericRPCWrapper[Req, Resp]) Name() string               { return w.name }
 func (w *GenericRPCWrapper[Req, Resp]) Role() string               { return w.role }
 func (w *GenericRPCWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
@@ -84,9 +74,6 @@ func (w *GenericRPCWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.au
 func (w *GenericRPCWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
 func (w *GenericRPCWrapper[Req, Resp]) TenantScope() TenantScope   { return w.tenantScope }
 func (w *GenericRPCWrapper[Req, Resp]) AllowedTenants() []string   { return w.allowedTenants }
-
-// Requirement exposes the optional two-arm requirement to validateTenantScope.
-func (w *GenericRPCWrapper[Req, Resp]) Requirement() *scope.Requirement { return w.requirement }
 
 func (w *GenericRPCWrapper[Req, Resp]) ExecuteRPC(ctx context.Context, req *RPCRequest) (*RPCResponse, error) {
 	start := time.Now()
