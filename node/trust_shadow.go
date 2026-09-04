@@ -139,14 +139,14 @@ func (s *TrustShadow) Stats() (checked, rejected, dropped uint64) {
 
 // shadowParityScope names the tenant + role set the parity pass queries on both
 // directories. It reads the node's own configured tenant and roles: an empty
-// tenant selects records stored under the empty tenant (ports.Tenant is a
+// tenant selects records stored under the empty tenant (ports.Partition is a
 // literal bucket key, not a wildcard), and the role list bounds the per-role
 // NodesByRole comparison to roles this node actually participates in.
-func (rt *Runtime) shadowParityScope() (ports.Tenant, []string) {
-	tenant := ports.Tenant("")
+func (rt *Runtime) shadowParityScope() (ports.Partition, []string) {
+	tenant := ports.Partition("")
 	for _, tc := range rt.cfg.Tenants {
 		if tc.TenantID != "" {
-			tenant = ports.Tenant(tc.TenantID)
+			tenant = ports.Partition(tc.TenantID)
 			break
 		}
 	}
@@ -204,7 +204,7 @@ func (rt *Runtime) startShadowParity() bool {
 // escalates to the typed CompareDirectories walk, which is the comparison that
 // is meaningful across the two models. A report that is not InParity is the
 // evidence that the shadow does not yet reproduce the live directory.
-func (rt *Runtime) shadowParityPass(ctx context.Context, authoritative, shadow ports.LiveDirectory, tenant ports.Tenant, roles []string) {
+func (rt *Runtime) shadowParityPass(ctx context.Context, authoritative, shadow ports.LiveDirectory, tenant ports.Partition, roles []string) {
 	if authoritative == nil || shadow == nil {
 		return
 	}

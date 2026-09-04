@@ -232,7 +232,7 @@ type countingDir struct {
 	calls int
 }
 
-func (d *countingDir) Member(context.Context, ports.Tenant, ports.NodeID) (ports.Member, bool, error) {
+func (d *countingDir) Member(context.Context, ports.Partition, ports.NodeID) (ports.Member, bool, error) {
 	d.calls++
 	return ports.Member{}, false, nil
 }

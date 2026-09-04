@@ -59,7 +59,7 @@ func (r *ShadowReport) add(format string, args ...any) {
 // tenant), per-node reach sets, and handler adverts for every FQN either
 // side knows. Ordering differences are normalized away; content differences
 // are mismatches.
-func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDirectory, tenant ports.Tenant, roles []string) (*ShadowReport, error) {
+func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDirectory, tenant ports.Partition, roles []string) (*ShadowReport, error) {
 	rep := &ShadowReport{}
 
 	aMembers, err := authoritative.Members(ctx, tenant)
@@ -220,14 +220,14 @@ func CompareFingerprints(ctx context.Context, a, b ports.LiveDirectory) (bool, e
 // legitimate is letting its silence read as agreement. CompareDirectories
 // degrades the axis instead.
 type HandlerEnumerator interface {
-	HandlerFQNs(ctx context.Context, tenant ports.Tenant) ([]string, error)
+	HandlerFQNs(ctx context.Context, tenant ports.Partition) ([]string, error)
 }
 
 // collectHandlerFQNs derives the FQN comparison set from the sides that can
 // enumerate, and names the sides that cannot. The second return value lists
 // degraded axes; a non-empty list fails InParity, because the alternative is
 // a handler comparison over an empty set reporting agreement.
-func collectHandlerFQNs(ctx context.Context, tenant ports.Tenant, sides ...ports.LiveDirectory) ([]string, []string) {
+func collectHandlerFQNs(ctx context.Context, tenant ports.Partition, sides ...ports.LiveDirectory) ([]string, []string) {
 	set := map[string]bool{}
 	var degraded []string
 	for i, side := range sides {

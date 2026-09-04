@@ -408,12 +408,12 @@ func transportPriority(t swarmpb.Address_Transport) int {
 // Members filters by tenant. Before #R-1455 this returned EVERY tenant's
 // members regardless of the caller, which the tenant-implicit port could not
 // express — a cross-tenant leak the signature made invisible.
-func (d *SwarmDirectory) Members(_ context.Context, tenant ports.Tenant) ([]ports.Member, error) {
+func (d *SwarmDirectory) Members(_ context.Context, tenant ports.Partition) ([]ports.Member, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	out := make([]ports.Member, 0, len(d.members))
 	for _, m := range d.members {
-		if ports.Tenant(m.Tenant) != tenant {
+		if ports.Partition(m.Tenant) != tenant {
 			continue
 		}
 		out = append(out, cloneMember(m))
@@ -422,11 +422,11 @@ func (d *SwarmDirectory) Members(_ context.Context, tenant ports.Tenant) ([]port
 	return out, nil
 }
 
-func (d *SwarmDirectory) Member(_ context.Context, tenant ports.Tenant, id ports.NodeID) (ports.Member, bool, error) {
+func (d *SwarmDirectory) Member(_ context.Context, tenant ports.Partition, id ports.NodeID) (ports.Member, bool, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	m, ok := d.members[id]
-	if !ok || ports.Tenant(m.Tenant) != tenant {
+	if !ok || ports.Partition(m.Tenant) != tenant {
 		return ports.Member{}, false, nil
 	}
 	return cloneMember(m), true, nil
@@ -440,12 +440,12 @@ func (d *SwarmDirectory) Member(_ context.Context, tenant ports.Tenant, id ports
 // is the only source. Roles are already sorted at projection (#R-1607 ④); the
 // clone below preserves that and the result is ordered by NodeID so the two
 // implementations are comparable.
-func (d *SwarmDirectory) RoleAdverts(_ context.Context, tenant ports.Tenant) ([]ports.RoleAdvert, error) {
+func (d *SwarmDirectory) RoleAdverts(_ context.Context, tenant ports.Partition) ([]ports.RoleAdvert, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	out := make([]ports.RoleAdvert, 0, len(d.members))
 	for id, m := range d.members {
-		if ports.Tenant(m.Tenant) != tenant {
+		if ports.Partition(m.Tenant) != tenant {
 			continue
 		}
 		if len(m.Roles) == 0 {
@@ -460,12 +460,12 @@ func (d *SwarmDirectory) RoleAdverts(_ context.Context, tenant ports.Tenant) ([]
 	return out, nil
 }
 
-func (d *SwarmDirectory) NodesByRole(_ context.Context, tenant ports.Tenant, role string) ([]ports.NodeID, error) {
+func (d *SwarmDirectory) NodesByRole(_ context.Context, tenant ports.Partition, role string) ([]ports.NodeID, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	var out []ports.NodeID
 	for id, m := range d.members {
-		if ports.Tenant(m.Tenant) != tenant {
+		if ports.Partition(m.Tenant) != tenant {
 			continue
 		}
 		for _, r := range m.Roles {
@@ -479,10 +479,10 @@ func (d *SwarmDirectory) NodesByRole(_ context.Context, tenant ports.Tenant, rol
 	return out, nil
 }
 
-func (d *SwarmDirectory) Reach(_ context.Context, tenant ports.Tenant, id ports.NodeID) ([]ports.ReachAddress, error) {
+func (d *SwarmDirectory) Reach(_ context.Context, tenant ports.Partition, id ports.NodeID) ([]ports.ReachAddress, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	if m, ok := d.members[id]; ok && ports.Tenant(m.Tenant) != tenant {
+	if m, ok := d.members[id]; ok && ports.Partition(m.Tenant) != tenant {
 		return nil, nil
 	}
 	return append([]ports.ReachAddress(nil), d.reach[id]...), nil
@@ -495,12 +495,12 @@ func (d *SwarmDirectory) Latency(_ context.Context, from, to ports.NodeID) (port
 	return s, ok, nil
 }
 
-func (d *SwarmDirectory) HandlersByName(_ context.Context, tenant ports.Tenant, name string) ([]ports.HandlerAdvert, error) {
+func (d *SwarmDirectory) HandlersByName(_ context.Context, tenant ports.Partition, name string) ([]ports.HandlerAdvert, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	var out []ports.HandlerAdvert
 	for _, a := range d.handlers[name] {
-		if m, ok := d.members[a.NodeID]; ok && ports.Tenant(m.Tenant) != tenant {
+		if m, ok := d.members[a.NodeID]; ok && ports.Partition(m.Tenant) != tenant {
 			continue
 		}
 		out = append(out, a)
@@ -510,7 +510,7 @@ func (d *SwarmDirectory) HandlersByName(_ context.Context, tenant ports.Tenant, 
 
 // HandlerFQNs implements HandlerEnumerator: the set of handler names this
 // directory currently indexes, for shadow-parity comparison-set building.
-func (d *SwarmDirectory) HandlerFQNs(_ context.Context, _ ports.Tenant) ([]string, error) {
+func (d *SwarmDirectory) HandlerFQNs(_ context.Context, _ ports.Partition) ([]string, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	out := make([]string, 0, len(d.handlers))
