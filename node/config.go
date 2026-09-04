@@ -19,10 +19,10 @@ type AnchorConfig struct {
 	PrivateKey string
 }
 
-// TenantTransportConfig configures a single platform tenant's aether.
+// PartitionTransportConfig configures a single platform tenant's aether.
 // Each tenant gets its own PSK and either a dedicated UDP port or a slot
 // on the shared transport (preamble-based routing).
-type TenantTransportConfig struct {
+type PartitionTransportConfig struct {
 	TenantID    string   // Platform tenant identifier (required)
 	NetworkKeys []string // PSKs — first is active, rest accepted for receiving (required)
 	Dedicated   bool     // If true, gets its own UDP port; if false, uses shared transport
@@ -180,7 +180,7 @@ type Config struct {
 	// Each tenant entry creates either a dedicated NoiseTransport (own UDP port)
 	// or registers with the shared transport (preamble protocol on VL1.UDPPort).
 	// If empty, NetworkKeys is used as a single default transport (backward compat).
-	Tenants []TenantTransportConfig
+	Tenants []PartitionTransportConfig
 
 	// Anchor bootstrapping (Secure Snapshot)
 	Anchor AnchorConfig

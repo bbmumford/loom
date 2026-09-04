@@ -15,9 +15,9 @@ import (
 )
 
 var (
-	ErrTenantNotRegistered = errors.New("manager: tenant transport not registered")
-	ErrTenantAlreadyExists = errors.New("manager: tenant transport already registered")
-	ErrManagerClosed       = errors.New("manager: transport manager is closed")
+	ErrPartitionNotRegistered = errors.New("manager: tenant transport not registered")
+	ErrPartitionAlreadyExists = errors.New("manager: tenant transport already registered")
+	ErrManagerClosed          = errors.New("manager: transport manager is closed")
 )
 
 // TransportManager routes transport operations to per-tenant NoiseTransport instances.
@@ -35,7 +35,7 @@ func New() *TransportManager {
 	}
 }
 
-// Register adds a transport for a tenant. Returns ErrTenantAlreadyExists
+// Register adds a transport for a tenant. Returns ErrPartitionAlreadyExists
 // if the tenant is already registered.
 func (m *TransportManager) Register(tenantID aether.ScopeID, t aether.Transport) error {
 	m.mu.Lock()
@@ -45,7 +45,7 @@ func (m *TransportManager) Register(tenantID aether.ScopeID, t aether.Transport)
 		return ErrManagerClosed
 	}
 	if _, exists := m.transports[tenantID]; exists {
-		return ErrTenantAlreadyExists
+		return ErrPartitionAlreadyExists
 	}
 
 	m.transports[tenantID] = t
@@ -53,7 +53,7 @@ func (m *TransportManager) Register(tenantID aether.ScopeID, t aether.Transport)
 }
 
 // Replace swaps the transport for an existing tenant (used for key rotation).
-// Returns ErrTenantNotRegistered if the tenant doesn't exist.
+// Returns ErrPartitionNotRegistered if the tenant doesn't exist.
 func (m *TransportManager) Replace(tenantID aether.ScopeID, t aether.Transport) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -62,7 +62,7 @@ func (m *TransportManager) Replace(tenantID aether.ScopeID, t aether.Transport) 
 		return ErrManagerClosed
 	}
 	if _, exists := m.transports[tenantID]; !exists {
-		return ErrTenantNotRegistered
+		return ErrPartitionNotRegistered
 	}
 
 	m.transports[tenantID] = t
@@ -70,7 +70,7 @@ func (m *TransportManager) Replace(tenantID aether.ScopeID, t aether.Transport) 
 }
 
 // Remove deregisters a tenant's aether. Does not close the aether.
-// Returns ErrTenantNotRegistered if the tenant doesn't exist.
+// Returns ErrPartitionNotRegistered if the tenant doesn't exist.
 func (m *TransportManager) Remove(tenantID aether.ScopeID) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -79,7 +79,7 @@ func (m *TransportManager) Remove(tenantID aether.ScopeID) error {
 		return ErrManagerClosed
 	}
 	if _, exists := m.transports[tenantID]; !exists {
-		return ErrTenantNotRegistered
+		return ErrPartitionNotRegistered
 	}
 
 	delete(m.transports, tenantID)
@@ -96,16 +96,16 @@ func (m *TransportManager) Get(tenantID aether.ScopeID) (aether.Transport, error
 	}
 	t, ok := m.transports[tenantID]
 	if !ok {
-		return nil, fmt.Errorf("%w: %s", ErrTenantNotRegistered, tenantID)
+		return nil, fmt.Errorf("%w: %s", ErrPartitionNotRegistered, tenantID)
 	}
 	return t, nil
 }
 
 // Dial establishes a session to a remote node through the tenant's aether.
-// The returned session is wrapped as a TenantSession carrying the tenant ID.
+// The returned session is wrapped as a PartitionSession carrying the tenant ID.
 // The tenant ID is injected into the context so shared transports can use it
 // for preamble construction during the handshake.
-func (m *TransportManager) Dial(ctx context.Context, tenantID aether.ScopeID, target aether.Target) (*TenantSession, error) {
+func (m *TransportManager) Dial(ctx context.Context, tenantID aether.ScopeID, target aether.Target) (*PartitionSession, error) {
 	t, err := m.Get(tenantID)
 	if err != nil {
 		return nil, err
@@ -119,9 +119,9 @@ func (m *TransportManager) Dial(ctx context.Context, tenantID aether.ScopeID, ta
 		return nil, err
 	}
 
-	return &TenantSession{
+	return &PartitionSession{
 		Connection: session,
-		tenantID: tenantID,
+		tenantID:   tenantID,
 	}, nil
 }
 
@@ -133,8 +133,8 @@ func WithTenantID(ctx context.Context, id aether.ScopeID) context.Context {
 	return context.WithValue(ctx, tenantIDContextKey{}, id)
 }
 
-// TenantIDFromContext extracts a tenant ID from context.
-func TenantIDFromContext(ctx context.Context) (aether.ScopeID, bool) {
+// PartitionIDFromContext extracts a tenant ID from context.
+func PartitionIDFromContext(ctx context.Context) (aether.ScopeID, bool) {
 	id, ok := ctx.Value(tenantIDContextKey{}).(aether.ScopeID)
 	return id, ok
 }
@@ -163,10 +163,10 @@ func (m *TransportManager) Count() int {
 // a glance which tenants are on which transport family and whether any
 // are running on a degraded path.
 type ManagerStats struct {
-	Closed       bool
-	TenantCount  int
-	Tenants      []TenantStats  // per-tenant breakdown, sorted by tenant ID
-	ByTransport  map[string]int // transport-type-name → tenant count
+	Closed         bool
+	PartitionCount int
+	Tenants        []TenantStats  // per-tenant breakdown, sorted by tenant ID
+	ByTransport    map[string]int // transport-type-name → tenant count
 }
 
 // TenantStats is per-tenant observable state.
@@ -183,10 +183,10 @@ func (m *TransportManager) Stats() ManagerStats {
 	defer m.mu.RUnlock()
 
 	out := ManagerStats{
-		Closed:      m.closed,
-		TenantCount: len(m.transports),
-		Tenants:     make([]TenantStats, 0, len(m.transports)),
-		ByTransport: make(map[string]int),
+		Closed:         m.closed,
+		PartitionCount: len(m.transports),
+		Tenants:        make([]TenantStats, 0, len(m.transports)),
+		ByTransport:    make(map[string]int),
 	}
 	for tid, t := range m.transports {
 		typeName := fmt.Sprintf("%T", t)
@@ -222,7 +222,7 @@ func (m *TransportManager) RotateKey(tenantID aether.ScopeID, newKey []byte) err
 			return fmt.Errorf("resolve current keys: %w", err)
 		}
 		newKeys := append([][]byte{keyCopy}, currentKeys...)
-		return tx.UpdateTenantKeys(tenantID, newKeys)
+		return tx.UpdatePartitionKeys(tenantID, newKeys)
 
 	case *noise.NoiseTransport:
 		currentKeys := tx.CurrentKeys()
@@ -251,7 +251,7 @@ func (m *TransportManager) FinalizeRotation(tenantID aether.ScopeID) error {
 		if len(currentKeys) <= 1 {
 			return nil // Already finalized
 		}
-		return tx.UpdateTenantKeys(tenantID, currentKeys[:1])
+		return tx.UpdatePartitionKeys(tenantID, currentKeys[:1])
 
 	case *noise.NoiseTransport:
 		currentKeys := tx.CurrentKeys()

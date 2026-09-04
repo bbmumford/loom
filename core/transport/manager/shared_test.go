@@ -27,72 +27,72 @@ func testSharedTransportConfig(t *testing.T) noise.NoiseTransportConfig {
 	}
 }
 
-func TestSharedTransport_RegisterTenant(t *testing.T) {
+func TestSharedTransport_RegisterPartition(t *testing.T) {
 	st, err := NewSharedTransport(testSharedTransportConfig(t))
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 
 	keys := [][]byte{[]byte("psk-tenant-A")}
-	if err := st.RegisterTenant("tenant-A", keys); err != nil {
+	if err := st.RegisterPartition("tenant-A", keys); err != nil {
 		t.Fatalf("register: %v", err)
 	}
-	if st.TenantCount() != 1 {
-		t.Errorf("count = %d, want 1", st.TenantCount())
+	if st.PartitionCount() != 1 {
+		t.Errorf("count = %d, want 1", st.PartitionCount())
 	}
 }
 
-func TestSharedTransport_RegisterTenant_Duplicate(t *testing.T) {
+func TestSharedTransport_RegisterPartition_Duplicate(t *testing.T) {
 	st, err := NewSharedTransport(testSharedTransportConfig(t))
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 
 	keys := [][]byte{[]byte("psk-tenant-A")}
-	st.RegisterTenant("tenant-A", keys)
+	st.RegisterPartition("tenant-A", keys)
 
-	err = st.RegisterTenant("tenant-A", keys)
-	if err != ErrSharedTenantExists {
-		t.Fatalf("err = %v, want ErrSharedTenantExists", err)
+	err = st.RegisterPartition("tenant-A", keys)
+	if err != ErrSharedPartitionExists {
+		t.Fatalf("err = %v, want ErrSharedPartitionExists", err)
 	}
 }
 
-func TestSharedTransport_RegisterTenant_NoKeys(t *testing.T) {
+func TestSharedTransport_RegisterPartition_NoKeys(t *testing.T) {
 	st, err := NewSharedTransport(testSharedTransportConfig(t))
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 
-	err = st.RegisterTenant("tenant-A", nil)
-	if err != ErrSharedNoKeysForTenant {
-		t.Fatalf("err = %v, want ErrSharedNoKeysForTenant", err)
+	err = st.RegisterPartition("tenant-A", nil)
+	if err != ErrSharedNoKeysForPartition {
+		t.Fatalf("err = %v, want ErrSharedNoKeysForPartition", err)
 	}
 }
 
-func TestSharedTransport_RemoveTenant(t *testing.T) {
+func TestSharedTransport_RemovePartition(t *testing.T) {
 	st, err := NewSharedTransport(testSharedTransportConfig(t))
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 
-	st.RegisterTenant("tenant-A", [][]byte{[]byte("key")})
-	if err := st.RemoveTenant("tenant-A"); err != nil {
+	st.RegisterPartition("tenant-A", [][]byte{[]byte("key")})
+	if err := st.RemovePartition("tenant-A"); err != nil {
 		t.Fatalf("remove: %v", err)
 	}
-	if st.TenantCount() != 0 {
-		t.Errorf("count = %d, want 0", st.TenantCount())
+	if st.PartitionCount() != 0 {
+		t.Errorf("count = %d, want 0", st.PartitionCount())
 	}
 }
 
-func TestSharedTransport_RemoveTenant_NotFound(t *testing.T) {
+func TestSharedTransport_RemovePartition_NotFound(t *testing.T) {
 	st, err := NewSharedTransport(testSharedTransportConfig(t))
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 
-	err = st.RemoveTenant("nonexistent")
-	if err != ErrSharedTenantNotFound {
-		t.Fatalf("err = %v, want ErrSharedTenantNotFound", err)
+	err = st.RemovePartition("nonexistent")
+	if err != ErrSharedPartitionNotFound {
+		t.Fatalf("err = %v, want ErrSharedPartitionNotFound", err)
 	}
 }
 
@@ -103,7 +103,7 @@ func TestSharedTransport_ResolveKeys(t *testing.T) {
 	}
 
 	keys := [][]byte{[]byte("active-key"), []byte("old-key")}
-	st.RegisterTenant("tenant-A", keys)
+	st.RegisterPartition("tenant-A", keys)
 
 	resolved, err := st.ResolveKeys("tenant-A")
 	if err != nil {
@@ -126,16 +126,16 @@ func TestSharedTransport_ResolveKeys_NotFound(t *testing.T) {
 	}
 }
 
-func TestSharedTransport_UpdateTenantKeys(t *testing.T) {
+func TestSharedTransport_UpdatePartitionKeys(t *testing.T) {
 	st, err := NewSharedTransport(testSharedTransportConfig(t))
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 
-	st.RegisterTenant("tenant-A", [][]byte{[]byte("old-key")})
+	st.RegisterPartition("tenant-A", [][]byte{[]byte("old-key")})
 
 	newKeys := [][]byte{[]byte("new-key"), []byte("old-key")}
-	if err := st.UpdateTenantKeys("tenant-A", newKeys); err != nil {
+	if err := st.UpdatePartitionKeys("tenant-A", newKeys); err != nil {
 		t.Fatalf("update: %v", err)
 	}
 
@@ -145,15 +145,15 @@ func TestSharedTransport_UpdateTenantKeys(t *testing.T) {
 	}
 }
 
-func TestSharedTransport_UpdateTenantKeys_NotFound(t *testing.T) {
+func TestSharedTransport_UpdatePartitionKeys_NotFound(t *testing.T) {
 	st, err := NewSharedTransport(testSharedTransportConfig(t))
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
 
-	err = st.UpdateTenantKeys("nonexistent", [][]byte{[]byte("key")})
-	if err != ErrSharedTenantNotFound {
-		t.Fatalf("err = %v, want ErrSharedTenantNotFound", err)
+	err = st.UpdatePartitionKeys("nonexistent", [][]byte{[]byte("key")})
+	if err != ErrSharedPartitionNotFound {
+		t.Fatalf("err = %v, want ErrSharedPartitionNotFound", err)
 	}
 }
 
@@ -168,8 +168,8 @@ func TestSharedTransport_Dial_NoTenantInCtx(t *testing.T) {
 		NodeID:  "test-node",
 		Address: "127.0.0.1:9999",
 	})
-	if err != ErrSharedNoTenantInCtx {
-		t.Fatalf("err = %v, want ErrSharedNoTenantInCtx", err)
+	if err != ErrSharedNoPartitionInCtx {
+		t.Fatalf("err = %v, want ErrSharedNoPartitionInCtx", err)
 	}
 }
 
@@ -198,8 +198,8 @@ func TestSharedTransport_KeyIsolation(t *testing.T) {
 
 	keyA := [][]byte{[]byte("psk-alpha")}
 	keyB := [][]byte{[]byte("psk-beta")}
-	st.RegisterTenant("alpha", keyA)
-	st.RegisterTenant("beta", keyB)
+	st.RegisterPartition("alpha", keyA)
+	st.RegisterPartition("beta", keyB)
 
 	resolvedA, _ := st.ResolveKeys("alpha")
 	resolvedB, _ := st.ResolveKeys("beta")
@@ -234,7 +234,7 @@ func TestTransportManager_ContextInjection(t *testing.T) {
 	if capturedCtx == nil {
 		t.Fatal("context was not captured")
 	}
-	tid, ok := TenantIDFromContext(capturedCtx)
+	tid, ok := PartitionIDFromContext(capturedCtx)
 	if !ok {
 		t.Fatal("tenant ID not found in context")
 	}

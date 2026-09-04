@@ -15,10 +15,10 @@ import (
 )
 
 var (
-	ErrSharedTenantNotFound   = errors.New("shared: tenant not registered")
-	ErrSharedTenantExists     = errors.New("shared: tenant already registered")
-	ErrSharedNoTenantInCtx    = errors.New("shared: no tenant ID in context (use TransportManager.Dial)")
-	ErrSharedNoKeysForTenant  = errors.New("shared: no keys registered for tenant")
+	ErrSharedPartitionNotFound  = errors.New("shared: tenant not registered")
+	ErrSharedPartitionExists    = errors.New("shared: tenant already registered")
+	ErrSharedNoPartitionInCtx   = errors.New("shared: no tenant ID in context (use TransportManager.Dial)")
+	ErrSharedNoKeysForPartition = errors.New("shared: no keys registered for tenant")
 )
 
 // SharedTransport wraps a single NoiseTransport to serve multiple platform
@@ -59,18 +59,18 @@ func NewSharedTransport(cfg noise.NoiseTransportConfig) (*SharedTransport, error
 	return st, nil
 }
 
-// RegisterTenant adds a tenant with its network keys. The first key is used
+// RegisterPartition adds a tenant with its network keys. The first key is used
 // for outbound connections (active key); additional keys are accepted for
 // inbound connections (key rotation overlap).
-func (s *SharedTransport) RegisterTenant(tenantID aether.ScopeID, keys [][]byte) error {
+func (s *SharedTransport) RegisterPartition(tenantID aether.ScopeID, keys [][]byte) error {
 	if len(keys) == 0 {
-		return ErrSharedNoKeysForTenant
+		return ErrSharedNoKeysForPartition
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.tenantKeys[tenantID]; exists {
-		return ErrSharedTenantExists
+		return ErrSharedPartitionExists
 	}
 	// Deep copy keys to prevent external mutation.
 	copied := make([][]byte, len(keys))
@@ -81,16 +81,16 @@ func (s *SharedTransport) RegisterTenant(tenantID aether.ScopeID, keys [][]byte)
 	return nil
 }
 
-// UpdateTenantKeys replaces the keys for an existing tenant (used for key rotation).
-func (s *SharedTransport) UpdateTenantKeys(tenantID aether.ScopeID, keys [][]byte) error {
+// UpdatePartitionKeys replaces the keys for an existing tenant (used for key rotation).
+func (s *SharedTransport) UpdatePartitionKeys(tenantID aether.ScopeID, keys [][]byte) error {
 	if len(keys) == 0 {
-		return ErrSharedNoKeysForTenant
+		return ErrSharedNoKeysForPartition
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.tenantKeys[tenantID]; !exists {
-		return ErrSharedTenantNotFound
+		return ErrSharedPartitionNotFound
 	}
 	copied := make([][]byte, len(keys))
 	for i, k := range keys {
@@ -100,20 +100,20 @@ func (s *SharedTransport) UpdateTenantKeys(tenantID aether.ScopeID, keys [][]byt
 	return nil
 }
 
-// RemoveTenant deregisters a tenant from the shared aether.
-func (s *SharedTransport) RemoveTenant(tenantID aether.ScopeID) error {
+// RemovePartition deregisters a tenant from the shared aether.
+func (s *SharedTransport) RemovePartition(tenantID aether.ScopeID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	if _, exists := s.tenantKeys[tenantID]; !exists {
-		return ErrSharedTenantNotFound
+		return ErrSharedPartitionNotFound
 	}
 	delete(s.tenantKeys, tenantID)
 	return nil
 }
 
-// TenantCount returns the number of registered tenants.
-func (s *SharedTransport) TenantCount() int {
+// PartitionCount returns the number of registered tenants.
+func (s *SharedTransport) PartitionCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.tenantKeys)
@@ -126,7 +126,7 @@ func (s *SharedTransport) ResolveKeys(tenantID string) ([][]byte, error) {
 
 	keys, ok := s.tenantKeys[aether.ScopeID(tenantID)]
 	if !ok || len(keys) == 0 {
-		return nil, fmt.Errorf("%w: %s", ErrSharedTenantNotFound, tenantID)
+		return nil, fmt.Errorf("%w: %s", ErrSharedPartitionNotFound, tenantID)
 	}
 	return keys, nil
 }
@@ -138,16 +138,16 @@ func (s *SharedTransport) ResolveKeys(tenantID string) ([][]byte, error) {
 // Dial establishes a session with preamble for the tenant identified in context.
 // The context must contain a tenant ID (set by TransportManager.Dial via WithTenantID).
 func (s *SharedTransport) Dial(ctx context.Context, target aether.Target) (aether.Connection, error) {
-	tenantID, ok := TenantIDFromContext(ctx)
+	tenantID, ok := PartitionIDFromContext(ctx)
 	if !ok || tenantID == "" {
-		return nil, ErrSharedNoTenantInCtx
+		return nil, ErrSharedNoPartitionInCtx
 	}
 
 	s.mu.RLock()
 	keys, exists := s.tenantKeys[tenantID]
 	s.mu.RUnlock()
 	if !exists || len(keys) == 0 {
-		return nil, fmt.Errorf("%w: %s", ErrSharedTenantNotFound, tenantID)
+		return nil, fmt.Errorf("%w: %s", ErrSharedPartitionNotFound, tenantID)
 	}
 
 	// Inject the tenant's keys and ID into context so the underlying
