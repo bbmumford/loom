@@ -592,7 +592,7 @@ func (m *ConnectionManager) clearConsecutiveStalls(peerID string, proto Protocol
 }
 
 // WalkerStats returns the walker's telemetry counters as a snapshot
-// tuple. Mirrors CrossOrgPreambleStats / CrossOrgGateStats style so
+// tuple. Mirrors CrossPartitionPreambleStats / CrossPartitionGateStats style so
 // runtime.MeshMetrics can surface them as snake_case keys without
 // touching the underlying atomics from outside this package.
 //

@@ -99,13 +99,13 @@ func TestEnqueueAuthorizedBindsOnlyTheExactTaskPointer(t *testing.T) {
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(principal), authorized); err != nil {
 		t.Fatalf("EnqueueAuthorized: %v", err)
 	}
-	if owner, ok := g.EstablishedExecutionOwner(authorized); !ok || owner != principal.owner {
+	if owner, ok := g.EstablishedExecutionPartition(authorized); !ok || owner != principal.owner {
 		t.Fatalf("authorized binding = (%s, %v), want (%s, true)",
 			owner.Fingerprint(), ok, principal.owner.Fingerprint())
 	}
 
 	collision := *authorized
-	if owner, ok := g.EstablishedExecutionOwner(&collision); ok || owner.Valid() {
+	if owner, ok := g.EstablishedExecutionPartition(&collision); ok || owner.Valid() {
 		t.Fatalf("same-ID copy binding = (%s, %v), want empty/false", owner.Fingerprint(), ok)
 	}
 
@@ -113,7 +113,7 @@ func TestEnqueueAuthorizedBindsOnlyTheExactTaskPointer(t *testing.T) {
 	if err := g.Enqueue(bodyOnly); err != nil {
 		t.Fatalf("legacy Enqueue: %v", err)
 	}
-	if owner, ok := g.EstablishedExecutionOwner(bodyOnly); ok || owner.Valid() {
+	if owner, ok := g.EstablishedExecutionPartition(bodyOnly); ok || owner.Valid() {
 		t.Fatalf("body-only binding = (%s, %v), want empty/false", owner.Fingerprint(), ok)
 	}
 
@@ -124,7 +124,7 @@ func TestEnqueueAuthorizedBindsOnlyTheExactTaskPointer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("body claim influenced owner admission: %v", err)
 	}
-	if owner, ok := g.EstablishedExecutionOwner(foreign); !ok || owner != principal.owner {
+	if owner, ok := g.EstablishedExecutionPartition(foreign); !ok || owner != principal.owner {
 		t.Fatal("authorized task did not retain the established opaque owner")
 	}
 
@@ -173,7 +173,7 @@ func TestAuthorizedBindingMovesToRetryCloneAndReleasesAtTerminal(t *testing.T) {
 		Status: task.ResultStatusError,
 	})
 
-	if _, ok := g.EstablishedExecutionOwner(owned); ok {
+	if _, ok := g.EstablishedExecutionPartition(owned); ok {
 		t.Fatal("retry left authority attached to the superseded gateway snapshot")
 	}
 
@@ -191,7 +191,7 @@ func TestAuthorizedBindingMovesToRetryCloneAndReleasesAtTerminal(t *testing.T) {
 	if retry == original || retry == owned || retry.Attempt != 1 {
 		t.Fatalf("retry = (%p, attempt %d), want distinct pointer attempt 1", retry, retry.Attempt)
 	}
-	if owner, ok := g.EstablishedExecutionOwner(retry); !ok || owner != principal.owner {
+	if owner, ok := g.EstablishedExecutionPartition(retry); !ok || owner != principal.owner {
 		t.Fatalf("retry binding = (%s, %v), want (%s, true)",
 			owner.Fingerprint(), ok, principal.owner.Fingerprint())
 	}
@@ -211,7 +211,7 @@ func TestAuthorizedBindingMovesToRetryCloneAndReleasesAtTerminal(t *testing.T) {
 		Fence:  "fence-2",
 		Status: task.ResultStatusRejected,
 	})
-	if _, ok := g.EstablishedExecutionOwner(retry); ok {
+	if _, ok := g.EstablishedExecutionPartition(retry); ok {
 		t.Fatal("terminal rejection retained a private principal")
 	}
 	if got := g.queue.Pop(); got != nil {
@@ -234,7 +234,7 @@ func TestStopReleasesAuthorizedBindings(t *testing.T) {
 		t.Fatalf("EnqueueAuthorized: %v", err)
 	}
 	g.Stop()
-	if _, ok := g.EstablishedExecutionOwner(admitted); ok {
+	if _, ok := g.EstablishedExecutionPartition(admitted); ok {
 		t.Fatal("Stop retained an authorized task binding")
 	}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(principal), &task.Task{
@@ -389,7 +389,7 @@ func TestQueueRejectionRollsBackOwnerAndPointerAdmission(t *testing.T) {
 		!strings.Contains(err.Error(), "queue is full") {
 		t.Fatalf("second admission = %v, want queue-full rejection", err)
 	}
-	if _, ok := g.EstablishedExecutionOwner(second); ok {
+	if _, ok := g.EstablishedExecutionPartition(second); ok {
 		t.Fatal("queue rejection stranded a private owner binding")
 	}
 	if got := g.ownerOutstanding[principal.owner]; got != 1 {
@@ -439,7 +439,7 @@ func TestStartContextCancellationConvergesWithStop(t *testing.T) {
 	if !stopped {
 		t.Fatal("context cancellation did not stop the gateway")
 	}
-	if _, ok := g.EstablishedExecutionOwner(admitted); ok {
+	if _, ok := g.EstablishedExecutionPartition(admitted); ok {
 		t.Fatal("context cancellation retained an authorized admission")
 	}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(principal), &task.Task{ID: "after-cancel"}); err == nil ||

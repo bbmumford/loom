@@ -2222,7 +2222,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	// them. See ConnectionManager field documentation for the full
 	// decision tree.
 	if rt.connMgr != nil {
-		attempted, succeeded, failed := rt.connMgr.CrossOrgPreambleStats()
+		attempted, succeeded, failed := rt.connMgr.CrossPartitionPreambleStats()
 		m["cross_org_preamble_dials_attempted"] = attempted
 		m["cross_org_preamble_dials_succeeded"] = succeeded
 		m["cross_org_preamble_dials_failed"] = failed
@@ -2231,7 +2231,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		// noise-UDP dials before they reach the preamble code, per the
 		// Batch 5 instrumentation plan. See ConnectionManager field
 		// documentation for the diagnostic decision tree.
-		pickIncl, pubUDP, candEmpty, allDead, nonAny, noSuit := rt.connMgr.CrossOrgGateStats()
+		pickIncl, pubUDP, candEmpty, allDead, nonAny, noSuit := rt.connMgr.CrossPartitionGateStats()
 		m["cross_org_pickpath_noise_udp_included"] = pickIncl
 		m["cross_org_bestaddr_public_udp_count"] = pubUDP
 		m["cross_org_bestaddr_candidates_empty"] = candEmpty

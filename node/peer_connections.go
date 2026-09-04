@@ -1900,26 +1900,26 @@ func (m *ConnectionManager) BudgetStatus() map[string]interface{} {
 	}
 }
 
-// CrossOrgPreambleStats reports cross-org noise-UDP forwarder dial
+// CrossPartitionPreambleStats reports cross-org noise-UDP forwarder dial
 // telemetry: the number of dialWithProtocol calls that engaged the
 // MetadataKeyCrossOrgPreamble path (attempted), and how many returned
 // without / with a dial error (succeeded / failed). Paired with
 // Runtime.MeshMetrics' receive-side forwarder_drops_* counters to
 // localize cross-Fly-org session pinning to WebSocket. See the field
 // definitions on ConnectionManager for the diagnostic decision tree.
-func (m *ConnectionManager) CrossOrgPreambleStats() (attempted, succeeded, failed uint64) {
+func (m *ConnectionManager) CrossPartitionPreambleStats() (attempted, succeeded, failed uint64) {
 	return m.crossOrgPreambleDialsAttempted.Load(),
 		m.crossOrgPreambleDialsSucceeded.Load(),
 		m.crossOrgPreambleDialsFailed.Load()
 }
 
-// CrossOrgGateStats reports the cross-org dial funnel telemetry: which
+// CrossPartitionGateStats reports the cross-org dial funnel telemetry: which
 // upstream stage (pickPath, bestAddress public-UDP filter, AddressTracker
 // dead-cooldown, anycast-vs-direct address shape) is dropping cross-org
 // noise-UDP dials before they reach the preamble code site. See the
 // field definitions on ConnectionManager for the diagnostic decision
 // tree mapping counter patterns to root cause.
-func (m *ConnectionManager) CrossOrgGateStats() (pickPathIncluded, publicUDPCount, candidatesEmpty, allDead, nonAnycastSelected, dialNoSuitableAddr uint64) {
+func (m *ConnectionManager) CrossPartitionGateStats() (pickPathIncluded, publicUDPCount, candidatesEmpty, allDead, nonAnycastSelected, dialNoSuitableAddr uint64) {
 	return m.crossOrgPickPathNoiseUDPIncluded.Load(),
 		m.crossOrgBestAddrPublicUDPCount.Load(),
 		m.crossOrgBestAddrCandidatesEmpty.Load(),
