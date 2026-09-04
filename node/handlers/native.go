@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"time"
+
+	scope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // ---------------------------------------------------------------------------
@@ -28,6 +30,7 @@ type NativeRPCWrapper[Req any, Resp any] struct {
 	scopes         []string
 	tenantScope    TenantScope
 	allowedTenants []string
+	requirement    *scope.Requirement
 	handler        func(ctx context.Context, req Req) (Resp, error)
 	newRequest     func() Req
 }
@@ -68,6 +71,13 @@ func (w *NativeRPCWrapper[Req, Resp]) WithTenantScope(scope TenantScope, allowed
 	return w
 }
 
+// WithRequirement sets the two-arm authorization requirement, which supersedes
+// the tenant scope at the mesh enforcer. Returns self for chaining.
+func (w *NativeRPCWrapper[Req, Resp]) WithRequirement(req *scope.Requirement) *NativeRPCWrapper[Req, Resp] {
+	w.requirement = req
+	return w
+}
+
 func (w *NativeRPCWrapper[Req, Resp]) Name() string               { return w.name }
 func (w *NativeRPCWrapper[Req, Resp]) Role() string               { return w.role }
 func (w *NativeRPCWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
@@ -75,6 +85,9 @@ func (w *NativeRPCWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.aut
 func (w *NativeRPCWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
 func (w *NativeRPCWrapper[Req, Resp]) TenantScope() TenantScope   { return w.tenantScope }
 func (w *NativeRPCWrapper[Req, Resp]) AllowedTenants() []string   { return w.allowedTenants }
+
+// Requirement exposes the optional two-arm requirement to validateTenantScope.
+func (w *NativeRPCWrapper[Req, Resp]) Requirement() *scope.Requirement { return w.requirement }
 
 func (w *NativeRPCWrapper[Req, Resp]) ExecuteRPC(ctx context.Context, req *RPCRequest) (*RPCResponse, error) {
 	start := time.Now()
