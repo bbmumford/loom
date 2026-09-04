@@ -962,7 +962,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 						for i, k := range tc.NetworkKeys {
 							keys[i] = []byte(k)
 						}
-						if err := rt.sharedTransport.RegisterTenant(tid, keys); err != nil {
+						if err := rt.sharedTransport.RegisterPartition(tid, keys); err != nil {
 							cancel()
 							return nil, fmt.Errorf("register tenant %s on shared transport: %w", tc.TenantID, err)
 						}
@@ -2483,46 +2483,46 @@ func (rt *Runtime) HandleRelayFrame(sourceNodeID aether.NodeID, data []byte) {
 // Dynamic tenant management (for relay/shared endpoints)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// RegisterTenant dynamically adds a tenant to the shared aether.
+// RegisterPartition dynamically adds a tenant to the shared aether.
 // Requires multi-tenant mode (Tenants config non-empty) so that a SharedTransport exists.
-func (rt *Runtime) RegisterTenant(tenantID string, keys [][]byte) error {
+func (rt *Runtime) RegisterPartition(tenantID string, keys [][]byte) error {
 	if rt.sharedTransport == nil {
 		return fmt.Errorf("node: no shared transport (configure Tenants for multi-tenant mode)")
 	}
 	tid := aether.ScopeID(tenantID)
-	if err := rt.sharedTransport.RegisterTenant(tid, keys); err != nil {
+	if err := rt.sharedTransport.RegisterPartition(tid, keys); err != nil {
 		return err
 	}
 	return rt.transportMgr.Register(tid, rt.sharedTransport)
 }
 
-// UpdateTenantKeys replaces the network keys for an existing tenant (key rotation).
-func (rt *Runtime) UpdateTenantKeys(tenantID string, keys [][]byte) error {
+// UpdatePartitionKeys replaces the network keys for an existing tenant (key rotation).
+func (rt *Runtime) UpdatePartitionKeys(tenantID string, keys [][]byte) error {
 	if rt.sharedTransport == nil {
 		return fmt.Errorf("node: no shared transport (configure Tenants for multi-tenant mode)")
 	}
-	return rt.sharedTransport.UpdateTenantKeys(aether.ScopeID(tenantID), keys)
+	return rt.sharedTransport.UpdatePartitionKeys(aether.ScopeID(tenantID), keys)
 }
 
-// RemoveTenant removes a tenant from the shared transport and transport manager.
-func (rt *Runtime) RemoveTenant(tenantID string) error {
+// RemovePartition removes a tenant from the shared transport and transport manager.
+func (rt *Runtime) RemovePartition(tenantID string) error {
 	if rt.sharedTransport == nil {
 		return fmt.Errorf("node: no shared transport (configure Tenants for multi-tenant mode)")
 	}
 	tid := aether.ScopeID(tenantID)
-	if err := rt.sharedTransport.RemoveTenant(tid); err != nil {
+	if err := rt.sharedTransport.RemovePartition(tid); err != nil {
 		return err
 	}
 	return rt.transportMgr.Remove(tid)
 }
 
-// TenantCount returns the number of registered tenants on the shared aether.
+// PartitionCount returns the number of registered tenants on the shared aether.
 // Returns 0 if no shared transport is configured.
-func (rt *Runtime) TenantCount() int {
+func (rt *Runtime) PartitionCount() int {
 	if rt.sharedTransport == nil {
 		return 0
 	}
-	return rt.sharedTransport.TenantCount()
+	return rt.sharedTransport.PartitionCount()
 }
 
 // recordVL1Disconnection decrements active session counter

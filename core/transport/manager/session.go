@@ -8,27 +8,27 @@ import (
 	"github.com/ORBTR/aether"
 )
 
-// TenantSession wraps a aether.Connection and associates it with a tenant.
+// PartitionSession wraps a aether.Connection and associates it with a tenant.
 // Callers use TenantID() to determine which tenant the session belongs to,
 // enabling transport-level tenant verification in the RPC executor.
-type TenantSession struct {
+type PartitionSession struct {
 	aether.Connection
 	tenantID aether.ScopeID
 }
 
 // TenantID returns the tenant this session belongs to.
-func (s *TenantSession) TenantID() aether.ScopeID {
+func (s *PartitionSession) TenantID() aether.ScopeID {
 	return s.tenantID
 }
 
 // Unwrap returns the underlying aether.Connection.
-func (s *TenantSession) Unwrap() aether.Connection {
+func (s *PartitionSession) Unwrap() aether.Connection {
 	return s.Connection
 }
 
-// WrapSession creates a TenantSession from an existing connection.
-func WrapSession(conn aether.Connection, tenantID aether.ScopeID) *TenantSession {
-	return &TenantSession{
+// WrapSession creates a PartitionSession from an existing connection.
+func WrapSession(conn aether.Connection, tenantID aether.ScopeID) *PartitionSession {
+	return &PartitionSession{
 		Connection: conn,
 		tenantID:   tenantID,
 	}

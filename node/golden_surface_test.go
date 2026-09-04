@@ -35,13 +35,13 @@ var goldenRuntimeMethods = []string{
 	"MeshSessionCount", "MetricsExporter", "NATBehaviour", "NATStrategy",
 	"NodeID", "PeerDispatchHealth", "PickTraversalMethod",
 	"PublishHandlersToLAD", "PublishRPCHandlersToLAD", "ReachLookupHandler",
-	"RegisterExternalSession", "RegisterSession", "RegisterTenant",
-	"Registry", "RemoveTenant", "Route", "RPCServer", "SelfHealth",
+	"RegisterExternalSession", "RegisterSession", "RegisterPartition",
+	"Registry", "RemovePartition", "Route", "RPCServer", "SelfHealth",
 	"SessionMetrics", "SessionOptions", "SetHealthEvaluator", "SetRoles",
 	"SetServiceName", "SetSessionOptions", "SetupMeshSession", "Shutdown",
-	"SnapshotHandler", "SubsystemsHandler", "Swarm", "TenantCount",
+	"SnapshotHandler", "SubsystemsHandler", "Swarm", "PartitionCount",
 	"TopologyRouter", "Transport", "TransportManager",
-	"UnregisterExternalSession", "UnregisterSession", "UpdateTenantKeys",
+	"UnregisterExternalSession", "UnregisterSession", "UpdatePartitionKeys",
 	"WebSocketHandler",
 }
 

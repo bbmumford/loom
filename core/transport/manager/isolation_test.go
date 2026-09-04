@@ -96,8 +96,8 @@ func TestPreambleSpoofingRejection(t *testing.T) {
 
 	honestKey := []byte("psk-honest-tenant")
 	victimKey := []byte("psk-victim-tenant")
-	st.RegisterTenant("honest", [][]byte{honestKey})
-	st.RegisterTenant("victim", [][]byte{victimKey})
+	st.RegisterPartition("honest", [][]byte{honestKey})
+	st.RegisterPartition("victim", [][]byte{victimKey})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
@@ -165,8 +165,8 @@ func TestInfrastructureServesAllTenants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new shared: %v", err)
 	}
-	st.RegisterTenant("tenant-a", [][]byte{keyA})
-	st.RegisterTenant("tenant-b", [][]byte{keyB})
+	st.RegisterPartition("tenant-a", [][]byte{keyA})
+	st.RegisterPartition("tenant-b", [][]byte{keyB})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -233,7 +233,7 @@ func TestInfrastructureServesAllTenants(t *testing.T) {
 	}
 	defer sessB.Close()
 
-	// Verify client-side TenantSession wrappers carry correct tenant IDs.
+	// Verify client-side PartitionSession wrappers carry correct tenant IDs.
 	if sessA.TenantID() != "tenant-a" {
 		t.Errorf("sessA.TenantID() = %q, want %q", sessA.TenantID(), "tenant-a")
 	}

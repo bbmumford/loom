@@ -26,7 +26,7 @@ type mockSession struct {
 	closed bool
 }
 
-func (s *mockSession) Send(_ context.Context, _ []byte) error   { return nil }
+func (s *mockSession) Send(_ context.Context, _ []byte) error    { return nil }
 func (s *mockSession) Receive(_ context.Context) ([]byte, error) { return nil, nil }
 func (s *mockSession) Close() error                              { s.closed = true; return nil }
 func (s *mockSession) RemoteAddr() net.Addr                      { return &net.UDPAddr{} }
@@ -36,10 +36,10 @@ func (s *mockSession) Protocol() aether.Protocol                 { return aether
 func (s *mockSession) OnClose(_ func())                          {}
 
 type mockTransport struct {
-	id       string
-	dialErr  error
-	closed   bool
-	closeMu  sync.Mutex
+	id      string
+	dialErr error
+	closed  bool
+	closeMu sync.Mutex
 }
 
 func (t *mockTransport) Dial(_ context.Context, target aether.Target) (aether.Connection, error) {
@@ -97,8 +97,8 @@ func TestRegister_Duplicate(t *testing.T) {
 
 	mgr.Register("orbtr", tr)
 	err := mgr.Register("orbtr", tr)
-	if !errors.Is(err, ErrTenantAlreadyExists) {
-		t.Errorf("err = %v, want ErrTenantAlreadyExists", err)
+	if !errors.Is(err, ErrPartitionAlreadyExists) {
+		t.Errorf("err = %v, want ErrPartitionAlreadyExists", err)
 	}
 }
 
@@ -119,8 +119,8 @@ func TestRemove_Happy(t *testing.T) {
 func TestRemove_NotFound(t *testing.T) {
 	mgr := New()
 	err := mgr.Remove("nonexistent")
-	if !errors.Is(err, ErrTenantNotRegistered) {
-		t.Errorf("err = %v, want ErrTenantNotRegistered", err)
+	if !errors.Is(err, ErrPartitionNotRegistered) {
+		t.Errorf("err = %v, want ErrPartitionNotRegistered", err)
 	}
 }
 
@@ -141,8 +141,8 @@ func TestGet_Happy(t *testing.T) {
 func TestGet_NotFound(t *testing.T) {
 	mgr := New()
 	_, err := mgr.Get("missing")
-	if !errors.Is(err, ErrTenantNotRegistered) {
-		t.Errorf("err = %v, want ErrTenantNotRegistered", err)
+	if !errors.Is(err, ErrPartitionNotRegistered) {
+		t.Errorf("err = %v, want ErrPartitionNotRegistered", err)
 	}
 }
 
@@ -172,8 +172,8 @@ func TestDial_UnknownTenant(t *testing.T) {
 	target := aether.Target{NodeID: "vl1_test"}
 
 	_, err := mgr.Dial(context.Background(), "unknown", target)
-	if !errors.Is(err, ErrTenantNotRegistered) {
-		t.Errorf("err = %v, want ErrTenantNotRegistered", err)
+	if !errors.Is(err, ErrPartitionNotRegistered) {
+		t.Errorf("err = %v, want ErrPartitionNotRegistered", err)
 	}
 }
 
@@ -267,8 +267,8 @@ func TestReplace_Happy(t *testing.T) {
 func TestReplace_NotFound(t *testing.T) {
 	mgr := New()
 	err := mgr.Replace("missing", &mockTransport{})
-	if !errors.Is(err, ErrTenantNotRegistered) {
-		t.Errorf("err = %v, want ErrTenantNotRegistered", err)
+	if !errors.Is(err, ErrPartitionNotRegistered) {
+		t.Errorf("err = %v, want ErrPartitionNotRegistered", err)
 	}
 }
 
@@ -295,7 +295,7 @@ func TestConcurrentAccess(t *testing.T) {
 	}
 }
 
-func TestTenantSession_Wrap(t *testing.T) {
+func TestPartitionSession_Wrap(t *testing.T) {
 	inner := &mockSession{nodeID: "vl1_abc"}
 	sess := WrapSession(inner, "my-tenant")
 
@@ -340,7 +340,7 @@ func TestRotateKey_SharedTransport(t *testing.T) {
 	}
 
 	oldKey := []byte("old-psk-alpha")
-	st.RegisterTenant("alpha", [][]byte{oldKey})
+	st.RegisterPartition("alpha", [][]byte{oldKey})
 
 	mgr := New()
 	mgr.Register("alpha", st)
@@ -405,8 +405,8 @@ func TestRotateKey_UnknownTenant(t *testing.T) {
 	mgr := New()
 
 	err := mgr.RotateKey("nonexistent", []byte("key"))
-	if !errors.Is(err, ErrTenantNotRegistered) {
-		t.Errorf("err = %v, want ErrTenantNotRegistered", err)
+	if !errors.Is(err, ErrPartitionNotRegistered) {
+		t.Errorf("err = %v, want ErrPartitionNotRegistered", err)
 	}
 }
 
@@ -421,7 +421,7 @@ func TestFinalizeRotation_SharedTransport(t *testing.T) {
 	}
 
 	oldKey := []byte("old-psk")
-	st.RegisterTenant("gamma", [][]byte{oldKey})
+	st.RegisterPartition("gamma", [][]byte{oldKey})
 
 	mgr := New()
 	mgr.Register("gamma", st)

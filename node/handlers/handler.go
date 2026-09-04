@@ -1336,10 +1336,10 @@ func GetDomainFromContext(ctx map[string]interface{}, fallback string) string {
 	return domainStr
 }
 
-// GetTenantIDFromContext is a legacy accessor for the snake_case
+// GetPartitionIDFromContext is a legacy accessor for the snake_case
 // RPCRequest.Context hint. It is retained for application compatibility only;
 // validateTenantScope never treats this mutable map as identity authority.
-func GetTenantIDFromContext(ctx map[string]interface{}) string {
+func GetPartitionIDFromContext(ctx map[string]interface{}) string {
 	if ctx == nil {
 		return ""
 	}
