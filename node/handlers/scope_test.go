@@ -21,7 +21,6 @@ type stubMeta struct {
 	role    string
 	scope   TenantScope
 	allowed []string
-	req     *tenantScope.Requirement
 }
 
 func (s *stubMeta) Name() string               { return s.name }
@@ -31,38 +30,6 @@ func (s *stubMeta) AllowedAuthTypes() []string { return nil }
 func (s *stubMeta) Scopes() []string           { return nil }
 func (s *stubMeta) TenantScope() TenantScope   { return s.scope }
 func (s *stubMeta) AllowedTenants() []string   { return s.allowed }
-
-// Requirement exposes the optional two-arm requirement validateTenantScope reads;
-// nil (the default) leaves a handler on the ScopeTag presence path.
-func (s *stubMeta) Requirement() *tenantScope.Requirement { return s.req }
-
-// TestValidateTenantScope_Requirement_TwoArm proves the mesh enforcer honours a
-// Requirement (superseding the ScopeTag) exactly as the rpc EnforceScope path:
-// nexus admits a resolved partition, denies an unresolved one, and a Requirement
-// with no authz policy fails CLOSED.
-func TestValidateTenantScope_Requirement_TwoArm(t *testing.T) {
-	nexus := tenantScope.Nexus()
-	h := &stubMeta{name: "d.Op", role: "d", scope: TenantScopeNone, req: &nexus}
-
-	// No authz policy installed → a Requirement handler fails closed.
-	noAuthz := NewHandlerRegistry()
-	if err := noAuthz.validateTenantScope(context.Background(), h); !errors.Is(err, tenantScope.ErrDenied) {
-		t.Fatalf("Requirement with no authz policy must fail closed, got %v", err)
-	}
-
-	r := NewHandlerRegistry()
-	r.SetAuthzPolicy(tenantScope.NewPolicy(nil)) // nexus needs no capability authorizer
-
-	// Resolved partition → nexus admits (even though scope is None — Requirement supersedes).
-	resolved := tenantScope.WithAuthenticatedIdentity(context.Background(), tenantScope.NewScopeIdentity("acme", "org", "usr"))
-	if err := r.validateTenantScope(resolved, h); err != nil {
-		t.Fatalf("nexus arm should admit a resolved partition: %v", err)
-	}
-	// Unresolved identity → nexus denies.
-	if err := r.validateTenantScope(context.Background(), h); !errors.Is(err, tenantScope.ErrDenied) {
-		t.Fatalf("nexus arm must deny an unresolved identity, got %v", err)
-	}
-}
 
 // scopeRefPolicy is a CONSUMER-side reference PresencePolicy reproducing the
 // platform's historical presence semantics. loom no longer contains this

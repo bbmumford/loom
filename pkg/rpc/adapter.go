@@ -56,16 +56,6 @@ func (s *registryShim) Role() string                      { return s.handler.Rol
 func (s *registryShim) RequiresAuth() bool                { return !s.handler.IsPublic() }
 func (s *registryShim) AllowedAuthTypes() []string        { return nil }
 func (s *registryShim) Scopes() []string                  { return nil }
-
-// TenantScope carries the handler's ScopeTag onto the mesh HandlerRegistry.
-// registryShim deliberately implements NO Requirement() method: node/handlers
-// validateTenantScope reads a two-arm Requirement only from a handler that
-// exposes one (an optional, type-asserted interface), so omitting it makes every
-// mesh-exported handler enforce via its ScopeTag presence, never a loom
-// Requirement. Adding a Requirement() method here would route mesh-exported
-// two-arm handlers through the authz policy on the mesh HandlerRegistry — which
-// the endpoint spine does not seed — fail-closing them; seed the mesh registry's
-// SetAuthzPolicy in the same change if this is ever lifted.
 func (s *registryShim) TenantScope() handlers.TenantScope { return s.handler.Scope }
 func (s *registryShim) AllowedTenants() []string          { return nil }
 

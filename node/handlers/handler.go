@@ -246,7 +246,6 @@ type HandlerRegistry struct {
 	roleMiddleware     map[string][]Middleware // per-role middleware
 	globalMiddleware   []Middleware            // runs for all handlers
 	policy             scope.PresencePolicy    // consumer-supplied scope evaluator (nil fails closed)
-	authz              *scope.Policy           // two-arm op authorizer; validateTenantScope consults it for a handler exposing a non-nil Requirement() (nil → the ScopeTag presence path)
 	registrationScopes map[*registrationScopeToken]*registrationScopeState
 	pendingHandlers    map[string]*registrationEntry
 	nextScopeID        uint64
@@ -355,29 +354,6 @@ func (r *HandlerRegistry) presencePolicy() scope.PresencePolicy {
 // return proves that path still fails closed. Mirrors rpc.Registry.PresencePolicy.
 func (r *HandlerRegistry) PresencePolicy() scope.PresencePolicy {
 	return r.presencePolicy()
-}
-
-// SetAuthzPolicy installs the two-arm op authorizer (capability | nexus) that
-// validateTenantScope consults for a handler exposing a non-nil Requirement().
-// Until one is installed, a Requirement-bearing handler fails CLOSED here — the
-// same fail-closed posture as a nil PresencePolicy. Mirrors rpc.Registry.SetAuthzPolicy.
-func (r *HandlerRegistry) SetAuthzPolicy(p *scope.Policy) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.authz = p
-}
-
-// authzPolicy returns the configured two-arm authorizer (or nil).
-func (r *HandlerRegistry) authzPolicy() *scope.Policy {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.authz
-}
-
-// AuthzPolicy returns the configured two-arm authorizer (or nil), letting a
-// composition root confirm SetAuthzPolicy seeded this mesh registry.
-func (r *HandlerRegistry) AuthzPolicy() *scope.Policy {
-	return r.authzPolicy()
 }
 
 // GetMiddleware returns global middleware followed by role-specific middleware.
@@ -856,23 +832,6 @@ func getUserIDFromContext(ctx context.Context) string {
 // ignored here: both are mutable request data and cannot establish platform,
 // organisation, or user identity.
 func (r *HandlerRegistry) validateTenantScope(ctx context.Context, h HandlerMeta) error {
-	// Two-arm authorization supersedes the ScopeTag presence tier when the handler
-	// exposes a non-nil Requirement (an optional interface a handler wrapper may
-	// implement). A handler that does not implement it, or whose Requirement is
-	// nil, falls through to the ScopeTag path below — behavior-preserving until a
-	// wrapper carries a Requirement.
-	if rp, ok := h.(interface{ Requirement() *scope.Requirement }); ok {
-		if req := rp.Requirement(); req != nil {
-			az := r.authzPolicy()
-			if az == nil {
-				return fmt.Errorf("%w: handler %s declares a Requirement but no authorization policy is configured", scope.ErrDenied, h.Name())
-			}
-			if okA, reason := az.Authorize(*req, scope.PrincipalForEnforcement(ctx)); !okA {
-				return fmt.Errorf("%w: handler %s denied by authorization policy: %s", scope.ErrDenied, h.Name(), reason)
-			}
-			return nil
-		}
-	}
 	declared := h.TenantScope()
 	if declared == scope.ScopeNone {
 		// Explicit opt-out — the one tag loom admits without a policy.
