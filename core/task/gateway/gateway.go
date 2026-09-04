@@ -28,8 +28,8 @@ type realClock struct{}
 
 func (realClock) Now() time.Time { return time.Now() }
 
-// OwnerLimiter implements fairness over immutable authenticated owners.
-type OwnerLimiter interface {
+// PartitionLimiter implements fairness over immutable authenticated owners.
+type PartitionLimiter interface {
 	Allow(now time.Time, owner ports.ExecutionOwnerKey) bool
 }
 
@@ -58,7 +58,7 @@ type Gateway struct {
 	queue   *queue.TaskQueue
 	config  GatewayConfig
 	clock   Clock
-	limiter OwnerLimiter
+	limiter PartitionLimiter
 	owner   ports.ExecutionPrincipalReader
 
 	offers      chan task.TaskOffer
@@ -111,7 +111,7 @@ type taskAdmission struct {
 type GatewayOption func(*Gateway)
 
 // WithLimiter injects a custom authenticated-owner limiter.
-func WithLimiter(l OwnerLimiter) GatewayOption {
+func WithLimiter(l PartitionLimiter) GatewayOption {
 	return func(g *Gateway) { g.limiter = l }
 }
 
@@ -334,10 +334,10 @@ func (g *Gateway) enqueue(t *task.Task, principal ports.ExecutionPrincipal, bind
 	return nil
 }
 
-// EstablishedExecutionOwner returns only the opaque owner key bound to the
+// EstablishedExecutionPartition returns only the opaque owner key bound to the
 // exact admitted task pointer. It is not an ID lookup: a decoded copy or
 // same-ID replacement is intentionally unbound.
-func (g *Gateway) EstablishedExecutionOwner(t *task.Task) (ports.ExecutionOwnerKey, bool) {
+func (g *Gateway) EstablishedExecutionPartition(t *task.Task) (ports.ExecutionOwnerKey, bool) {
 	if t == nil {
 		return ports.ExecutionOwnerKey{}, false
 	}
