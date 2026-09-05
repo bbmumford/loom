@@ -32,7 +32,7 @@ import (
 // of its key — the binding VerifyNodeKey enforces. Taking the ID from the key
 // rather than inventing one is deliberate: a hand-written ID would fail the bind
 // for a reason unrelated to the property under test.
-func trustPrincipal(t *testing.T, tenant string) (ports.Principal, ed25519.PrivateKey) {
+func trustPrincipal(t *testing.T, partition string) (ports.Principal, ed25519.PrivateKey) {
 	t.Helper()
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -45,7 +45,7 @@ func trustPrincipal(t *testing.T, tenant string) (ports.Principal, ed25519.Priva
 	return ports.Principal{
 		NodeID: ports.NodeID(string(id)),
 		PubKey: pub,
-		Tenant: tenant,
+		Tenant: partition,
 	}, priv
 }
 
@@ -204,7 +204,7 @@ func TestCheckTenantBranches(t *testing.T) {
 	p := NewPolicy(PolicyConfig{Tenants: []string{"hstles", "acme"}})
 
 	for _, tc := range []struct {
-		name, tenant string
+		name, partition string
 		wantErr      bool
 	}{
 		{"registered tenant", "hstles", false},
@@ -213,13 +213,13 @@ func TestCheckTenantBranches(t *testing.T) {
 		{"unstamped tenant bypasses", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			pr, _ := trustPrincipal(t, tc.tenant)
+			pr, _ := trustPrincipal(t, tc.partition)
 			err := p.AuthorizeRead(ctx, pr, ports.Topic("fleet.peer"))
 			if tc.wantErr && err == nil {
-				t.Fatalf("tenant %q was accepted", tc.tenant)
+				t.Fatalf("tenant %q was accepted", tc.partition)
 			}
 			if !tc.wantErr && err != nil {
-				t.Fatalf("tenant %q was rejected: %v", tc.tenant, err)
+				t.Fatalf("tenant %q was rejected: %v", tc.partition, err)
 			}
 		})
 	}
