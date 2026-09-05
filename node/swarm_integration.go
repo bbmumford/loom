@@ -188,9 +188,9 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	// slows swarm accept. The seed opens the self-owned topics plus the
 	// configured tenants — anything else surfaces as a would-reject to observe.
 	seed := directory.BaselinePolicyConfig()
-	for _, tc := range rt.cfg.Tenants {
-		if tc.TenantID != "" {
-			seed.Tenants = append(seed.Tenants, tc.TenantID)
+	for _, tc := range rt.cfg.Partitions {
+		if tc.PartitionID != "" {
+			seed.Tenants = append(seed.Tenants, tc.PartitionID)
 		}
 	}
 	trustShadow, err := newTrustShadow(rt.Context(), rt.cfg.SwarmTrustMode,

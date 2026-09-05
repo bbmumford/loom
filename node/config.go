@@ -19,11 +19,11 @@ type AnchorConfig struct {
 	PrivateKey string
 }
 
-// PartitionTransportConfig configures a single platform tenant's aether.
-// Each tenant gets its own PSK and either a dedicated UDP port or a slot
-// on the shared transport (preamble-based routing).
+// PartitionTransportConfig configures one partition's aether. Each partition
+// gets its own PSK and either a dedicated UDP port or a slot on the shared
+// transport (preamble-based routing).
 type PartitionTransportConfig struct {
-	TenantID    string   // Platform tenant identifier (required)
+	PartitionID string   // Opaque partition identifier (required)
 	NetworkKeys []string // PSKs — first is active, rest accepted for receiving (required)
 	Dedicated   bool     // If true, gets its own UDP port; if false, uses shared transport
 	UDPPort     int      // Only used when Dedicated=true
@@ -176,11 +176,11 @@ type Config struct {
 	// Used as a single-tenant fallback when Tenants is empty.
 	NetworkKeys []string
 
-	// Tenants configures per-tenant transports for multi-tenant mesh segmentation.
-	// Each tenant entry creates either a dedicated NoiseTransport (own UDP port)
-	// or registers with the shared transport (preamble protocol on VL1.UDPPort).
-	// If empty, NetworkKeys is used as a single default transport (backward compat).
-	Tenants []PartitionTransportConfig
+	// Partitions configures a per-partition transport for mesh segmentation.
+	// Each entry creates either a dedicated NoiseTransport (its own UDP port) or
+	// registers with the shared transport (preamble protocol on VL1.UDPPort).
+	// When empty, NetworkKeys supplies a single unpartitioned default transport.
+	Partitions []PartitionTransportConfig
 
 	// Anchor bootstrapping (Secure Snapshot)
 	Anchor AnchorConfig
@@ -353,7 +353,7 @@ func (c *Config) AuthKeys() []string {
 			seen[k] = true
 		}
 	}
-	for _, tc := range c.Tenants {
+	for _, tc := range c.Partitions {
 		for _, k := range tc.NetworkKeys {
 			if !seen[k] {
 				keys = append(keys, k)
@@ -375,33 +375,33 @@ func (c *Config) Validate() error {
 	// Network key validation: either NetworkKeys or Tenants must be provided.
 	// When Tenants is non-empty, each tenant carries its own keys.
 	// When Tenants is empty, NetworkKeys is used as single-tenant fallback.
-	if len(c.NetworkKeys) == 0 && len(c.Tenants) == 0 {
+	if len(c.NetworkKeys) == 0 && len(c.Partitions) == 0 {
 		return fmt.Errorf("at least one network key or tenant config is required")
 	}
 
 	// Validate tenant configs
-	seenTenants := make(map[string]bool, len(c.Tenants))
+	seenTenants := make(map[string]bool, len(c.Partitions))
 	seenPorts := make(map[int]string) // port → tenantID (for collision detection)
-	for i, tc := range c.Tenants {
-		if tc.TenantID == "" {
+	for i, tc := range c.Partitions {
+		if tc.PartitionID == "" {
 			return fmt.Errorf("tenant[%d]: tenant ID is required", i)
 		}
-		if seenTenants[tc.TenantID] {
-			return fmt.Errorf("tenant[%d]: duplicate tenant ID %q", i, tc.TenantID)
+		if seenTenants[tc.PartitionID] {
+			return fmt.Errorf("tenant[%d]: duplicate tenant ID %q", i, tc.PartitionID)
 		}
-		seenTenants[tc.TenantID] = true
+		seenTenants[tc.PartitionID] = true
 
 		if len(tc.NetworkKeys) == 0 {
-			return fmt.Errorf("tenant[%d] (%s): at least one network key is required", i, tc.TenantID)
+			return fmt.Errorf("tenant[%d] (%s): at least one network key is required", i, tc.PartitionID)
 		}
 		if tc.Dedicated {
 			if tc.UDPPort <= 0 {
-				return fmt.Errorf("tenant[%d] (%s): UDP port is required for dedicated transport", i, tc.TenantID)
+				return fmt.Errorf("tenant[%d] (%s): UDP port is required for dedicated transport", i, tc.PartitionID)
 			}
 			if other, exists := seenPorts[tc.UDPPort]; exists {
-				return fmt.Errorf("tenant[%d] (%s): UDP port %d conflicts with tenant %s", i, tc.TenantID, tc.UDPPort, other)
+				return fmt.Errorf("tenant[%d] (%s): UDP port %d conflicts with tenant %s", i, tc.PartitionID, tc.UDPPort, other)
 			}
-			seenPorts[tc.UDPPort] = tc.TenantID
+			seenPorts[tc.UDPPort] = tc.PartitionID
 		}
 	}
 

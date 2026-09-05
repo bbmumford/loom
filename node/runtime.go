@@ -884,7 +884,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 				},
 			}
 
-			if len(cfg.Tenants) == 0 {
+			if len(cfg.Partitions) == 0 {
 				// ── Single-tenant fallback (backward compat) ──────────────────
 				// No Tenants configured — create a single NoiseTransport from
 				// cfg.NetworkKeys and register it as "default".
@@ -910,7 +910,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 				// ── Multi-tenant mode ────────────────────────────────────────
 				// Determine if we need a shared transport (any non-dedicated tenant).
 				hasShared := false
-				for _, tc := range cfg.Tenants {
+				for _, tc := range cfg.Partitions {
 					if !tc.Dedicated {
 						hasShared = true
 						break
@@ -936,8 +936,8 @@ func Initialize(cfg Config) (*Runtime, error) {
 				}
 
 				// Register each tenant.
-				for _, tc := range cfg.Tenants {
-					tid := aether.ScopeID(tc.TenantID)
+				for _, tc := range cfg.Partitions {
+					tid := aether.ScopeID(tc.PartitionID)
 
 					if tc.Dedicated {
 						// Dedicated: own NoiseTransport on its own port.
@@ -948,13 +948,13 @@ func Initialize(cfg Config) (*Runtime, error) {
 						tr, err := noise.NewNoiseTransport(dedCfg)
 						if err != nil {
 							cancel()
-							return nil, fmt.Errorf("create dedicated transport for tenant %s: %w", tc.TenantID, err)
+							return nil, fmt.Errorf("create dedicated transport for tenant %s: %w", tc.PartitionID, err)
 						}
-						rt.attachIntraOrgForwarder(tr, "tenant:"+tc.TenantID)
+						rt.attachIntraOrgForwarder(tr, "tenant:"+tc.PartitionID)
 						rt.transportMgr.Register(tid, tr)
 						rt.listenTransports = append(rt.listenTransports, tr)
-						rt.listenTenantIDs = append(rt.listenTenantIDs, tc.TenantID)
-						log.Printf("[NODE] VL1 dedicated transport for tenant %s on :%d", tc.TenantID, tc.UDPPort)
+						rt.listenTenantIDs = append(rt.listenTenantIDs, tc.PartitionID)
+						log.Printf("[NODE] VL1 dedicated transport for tenant %s on :%d", tc.PartitionID, tc.UDPPort)
 					} else {
 						// Shared: register tenant keys with the shared transport,
 						// then map tenant → shared transport in the manager.
@@ -964,10 +964,10 @@ func Initialize(cfg Config) (*Runtime, error) {
 						}
 						if err := rt.sharedTransport.RegisterPartition(tid, keys); err != nil {
 							cancel()
-							return nil, fmt.Errorf("register tenant %s on shared transport: %w", tc.TenantID, err)
+							return nil, fmt.Errorf("register tenant %s on shared transport: %w", tc.PartitionID, err)
 						}
 						rt.transportMgr.Register(tid, rt.sharedTransport)
-						log.Printf("[NODE] VL1 tenant %s registered on shared transport", tc.TenantID)
+						log.Printf("[NODE] VL1 tenant %s registered on shared transport", tc.PartitionID)
 					}
 				}
 
@@ -976,7 +976,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 					aether.RegisterTransport(aether.ProtocolVL1, rt.listenTransports[0])
 				}
 				log.Printf("[NODE] VL1 multi-tenant initialized (%d tenants, %d transports)",
-					len(cfg.Tenants), len(rt.listenTransports))
+					len(cfg.Partitions), len(rt.listenTransports))
 			}
 
 			// Start session health monitor for VL1 sessions
@@ -2915,8 +2915,8 @@ func (rt *Runtime) dialNoiseUDP(ctx context.Context, target aether.Target) (aeth
 			}
 			// A shared transport resolves the partition from the session, so it
 			// leaves this empty; fall back to the first configured partition.
-			if tenantID == "" && len(rt.cfg.Tenants) > 0 {
-				tenantID = rt.cfg.Tenants[0].TenantID
+			if tenantID == "" && len(rt.cfg.Partitions) > 0 {
+				tenantID = rt.cfg.Partitions[0].PartitionID
 			}
 			if tenantID != "" {
 				dialCtx = manager.WithPartitionID(dialCtx, aether.ScopeID(tenantID))
