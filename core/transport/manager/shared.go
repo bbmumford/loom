@@ -15,18 +15,18 @@ import (
 )
 
 var (
-	ErrSharedPartitionNotFound  = errors.New("shared: tenant not registered")
-	ErrSharedPartitionExists    = errors.New("shared: tenant already registered")
-	ErrSharedNoPartitionInCtx   = errors.New("shared: no tenant ID in context (use TransportManager.Dial)")
-	ErrSharedNoKeysForPartition = errors.New("shared: no keys registered for tenant")
+	ErrSharedPartitionNotFound  = errors.New("shared: partition not registered")
+	ErrSharedPartitionExists    = errors.New("shared: partition already registered")
+	ErrSharedNoPartitionInCtx   = errors.New("shared: no partition ID in context (use TransportManager.Dial)")
+	ErrSharedNoKeysForPartition = errors.New("shared: no keys registered for partition")
 )
 
 // SharedTransport wraps a single NoiseTransport to serve multiple platform
-// tenants on the same UDP port. It uses the preamble protocol to identify
-// which tenant a connection belongs to, allowing per-tenant PSK selection.
+// partitions on the same UDP port. It uses the preamble protocol to identify
+// which partition a connection belongs to, allowing per-partition PSK selection.
 //
-// On the initiator side, SharedTransport reads the tenant ID from context
-// (injected by TransportManager.Dial) and passes the tenant's keys to the
+// On the initiator side, SharedTransport reads the partition ID from context
+// (injected by TransportManager.Dial) and passes the partition's keys to the
 // underlying handshake via WithDialOverride.
 //
 // On the listener side, the underlying NoiseTransport uses SharedTransport
@@ -35,7 +35,7 @@ type SharedTransport struct {
 	inner *noise.NoiseTransport
 
 	mu         sync.RWMutex
-	tenantKeys map[aether.ScopeID][][]byte // tenant → PSK keys (first = active)
+	partitionKeys map[aether.ScopeID][][]byte // partition → PSK keys (first = active)
 }
 
 // NewSharedTransport creates a shared transport backed by a NoiseTransport
@@ -45,7 +45,7 @@ type SharedTransport struct {
 // transport itself (e.g., for STUN). The TenantKeyResolver is set automatically.
 func NewSharedTransport(cfg noise.NoiseTransportConfig) (*SharedTransport, error) {
 	st := &SharedTransport{
-		tenantKeys: make(map[aether.ScopeID][][]byte),
+		partitionKeys: make(map[aether.ScopeID][][]byte),
 	}
 
 	// Install this SharedTransport as the key resolver for preamble mode.
@@ -59,7 +59,7 @@ func NewSharedTransport(cfg noise.NoiseTransportConfig) (*SharedTransport, error
 	return st, nil
 }
 
-// RegisterPartition adds a tenant with its network keys. The first key is used
+// RegisterPartition adds a partition with its network keys. The first key is used
 // for outbound connections (active key); additional keys are accepted for
 // inbound connections (key rotation overlap).
 func (s *SharedTransport) RegisterPartition(partitionID aether.ScopeID, keys [][]byte) error {
@@ -69,7 +69,7 @@ func (s *SharedTransport) RegisterPartition(partitionID aether.ScopeID, keys [][
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.tenantKeys[partitionID]; exists {
+	if _, exists := s.partitionKeys[partitionID]; exists {
 		return ErrSharedPartitionExists
 	}
 	// Deep copy keys to prevent external mutation.
@@ -77,11 +77,11 @@ func (s *SharedTransport) RegisterPartition(partitionID aether.ScopeID, keys [][
 	for i, k := range keys {
 		copied[i] = append([]byte(nil), k...)
 	}
-	s.tenantKeys[partitionID] = copied
+	s.partitionKeys[partitionID] = copied
 	return nil
 }
 
-// UpdatePartitionKeys replaces the keys for an existing tenant (used for key rotation).
+// UpdatePartitionKeys replaces the keys for an existing partition (used for key rotation).
 func (s *SharedTransport) UpdatePartitionKeys(partitionID aether.ScopeID, keys [][]byte) error {
 	if len(keys) == 0 {
 		return ErrSharedNoKeysForPartition
@@ -89,34 +89,34 @@ func (s *SharedTransport) UpdatePartitionKeys(partitionID aether.ScopeID, keys [
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.tenantKeys[partitionID]; !exists {
+	if _, exists := s.partitionKeys[partitionID]; !exists {
 		return ErrSharedPartitionNotFound
 	}
 	copied := make([][]byte, len(keys))
 	for i, k := range keys {
 		copied[i] = append([]byte(nil), k...)
 	}
-	s.tenantKeys[partitionID] = copied
+	s.partitionKeys[partitionID] = copied
 	return nil
 }
 
-// RemovePartition deregisters a tenant from the shared aether.
+// RemovePartition deregisters a partition from the shared aether.
 func (s *SharedTransport) RemovePartition(partitionID aether.ScopeID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.tenantKeys[partitionID]; !exists {
+	if _, exists := s.partitionKeys[partitionID]; !exists {
 		return ErrSharedPartitionNotFound
 	}
-	delete(s.tenantKeys, partitionID)
+	delete(s.partitionKeys, partitionID)
 	return nil
 }
 
-// PartitionCount returns the number of registered tenants.
+// PartitionCount returns the number of registered partitions.
 func (s *SharedTransport) PartitionCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	return len(s.tenantKeys)
+	return len(s.partitionKeys)
 }
 
 // ResolveKeys implements noise.TenantKeyResolver for the listener's preamble handling.
@@ -124,7 +124,7 @@ func (s *SharedTransport) ResolveKeys(partitionID string) ([][]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	keys, ok := s.tenantKeys[aether.ScopeID(partitionID)]
+	keys, ok := s.partitionKeys[aether.ScopeID(partitionID)]
 	if !ok || len(keys) == 0 {
 		return nil, fmt.Errorf("%w: %s", ErrSharedPartitionNotFound, partitionID)
 	}
@@ -144,7 +144,7 @@ func (s *SharedTransport) Dial(ctx context.Context, target aether.Target) (aethe
 	}
 
 	s.mu.RLock()
-	keys, exists := s.tenantKeys[partitionID]
+	keys, exists := s.partitionKeys[partitionID]
 	s.mu.RUnlock()
 	if !exists || len(keys) == 0 {
 		return nil, fmt.Errorf("%w: %s", ErrSharedPartitionNotFound, partitionID)
