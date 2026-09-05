@@ -331,10 +331,10 @@ type Runtime struct {
 
 	// Core components
 	identity         *NodeIdentity
-	transportMgr     *manager.TransportManager // per-tenant transport routing
+	transportMgr     *manager.TransportManager // per-partition transport routing
 	sharedTransport  *manager.SharedTransport  // shared preamble-based transport (may be nil)
 	listenTransports []aether.Transport        // unique transports needing Listen()
-	listenTenantIDs  []string                  // parallel: tenant ID per listener (""=from session)
+	listenPartitionIDs  []string                  // parallel: partition ID per listener (""=from session)
 	ledger           lad.Ledger
 	cache            *ladcache.DirectoryCache
 	// liveDir is the ports.LiveDirectory over the LAD cache. Mesh directory
@@ -640,7 +640,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 
 		// The LiveDirectory seam over the same
 		// cache. Read-only apart from OverrideLiveness; it delegates every
-		// query to the cache with the tenant the caller passes, so routing a
+		// query to the cache with the partition the caller passes, so routing a
 		// read through it is behaviour-identical for that caller.
 		if ld, err := directory.NewLADDirectory(rt.cache); err != nil {
 			log.Printf("[NODE] LiveDirectory seam unavailable: %v", err)
@@ -866,7 +866,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 		rt.startHealthCheck(30 * time.Second)
 
 		if cfg.VL1.Enabled {
-			// Create TransportManager for tenant-aware transport routing
+			// Create TransportManager for partition-aware transport routing
 			rt.transportMgr = manager.New()
 
 			// Base Noise config shared by all transports
@@ -885,8 +885,8 @@ func Initialize(cfg Config) (*Runtime, error) {
 			}
 
 			if len(cfg.Partitions) == 0 {
-				// ── Single-tenant fallback (backward compat) ──────────────────
-				// No Tenants configured — create a single NoiseTransport from
+				// ── Unpartitioned fallback ───────────────────────────────────
+				// No Partitions configured — create a single NoiseTransport from
 				// cfg.NetworkKeys and register it as "default".
 				singleCfg := baseCfg
 				singleCfg.NetworkKeys = cfg.NetworkKeys
@@ -900,15 +900,15 @@ func Initialize(cfg Config) (*Runtime, error) {
 				rt.attachIntraOrgForwarder(tr, "default")
 				rt.transportMgr.Register(aether.ScopeID("default"), tr)
 				rt.listenTransports = append(rt.listenTransports, tr)
-				rt.listenTenantIDs = append(rt.listenTenantIDs, "default")
+				rt.listenPartitionIDs = append(rt.listenPartitionIDs, "default")
 
 				// Register with global transport registry for selector fallback
 				aether.RegisterTransport(aether.ProtocolVL1, tr)
-				log.Printf("[NODE] VL1 Noise transport initialized (single-tenant, STUN: %v, Relay: %v)",
+				log.Printf("[NODE] VL1 Noise transport initialized (unpartitioned, STUN: %v, Relay: %v)",
 					singleCfg.STUNConfig.Enabled, singleCfg.RelayConfig.Enabled)
 			} else {
-				// ── Multi-tenant mode ────────────────────────────────────────
-				// Determine if we need a shared transport (any non-dedicated tenant).
+				// ── Partitioned mode ─────────────────────────────────────────
+				// Determine if we need a shared transport (any non-dedicated partition).
 				hasShared := false
 				for _, tc := range cfg.Partitions {
 					if !tc.Dedicated {
@@ -931,11 +931,11 @@ func Initialize(cfg Config) (*Runtime, error) {
 					rt.attachIntraOrgForwarder(st.Inner(), "shared")
 					rt.sharedTransport = st
 					rt.listenTransports = append(rt.listenTransports, st)
-					rt.listenTenantIDs = append(rt.listenTenantIDs, "") // resolved from session preamble
+					rt.listenPartitionIDs = append(rt.listenPartitionIDs, "") // resolved from session preamble
 					log.Printf("[NODE] VL1 shared transport initialized on :%d", cfg.VL1.UDPPort)
 				}
 
-				// Register each tenant.
+				// Register each partition.
 				for _, tc := range cfg.Partitions {
 					tid := aether.ScopeID(tc.PartitionID)
 
@@ -948,26 +948,26 @@ func Initialize(cfg Config) (*Runtime, error) {
 						tr, err := noise.NewNoiseTransport(dedCfg)
 						if err != nil {
 							cancel()
-							return nil, fmt.Errorf("create dedicated transport for tenant %s: %w", tc.PartitionID, err)
+							return nil, fmt.Errorf("create dedicated transport for partition %s: %w", tc.PartitionID, err)
 						}
-						rt.attachIntraOrgForwarder(tr, "tenant:"+tc.PartitionID)
+						rt.attachIntraOrgForwarder(tr, "partition:"+tc.PartitionID)
 						rt.transportMgr.Register(tid, tr)
 						rt.listenTransports = append(rt.listenTransports, tr)
-						rt.listenTenantIDs = append(rt.listenTenantIDs, tc.PartitionID)
-						log.Printf("[NODE] VL1 dedicated transport for tenant %s on :%d", tc.PartitionID, tc.UDPPort)
+						rt.listenPartitionIDs = append(rt.listenPartitionIDs, tc.PartitionID)
+						log.Printf("[NODE] VL1 dedicated transport for partition %s on :%d", tc.PartitionID, tc.UDPPort)
 					} else {
-						// Shared: register tenant keys with the shared transport,
-						// then map tenant → shared transport in the manager.
+						// Shared: register partition keys with the shared transport,
+						// then map partition → shared transport in the manager.
 						keys := make([][]byte, len(tc.NetworkKeys))
 						for i, k := range tc.NetworkKeys {
 							keys[i] = []byte(k)
 						}
 						if err := rt.sharedTransport.RegisterPartition(tid, keys); err != nil {
 							cancel()
-							return nil, fmt.Errorf("register tenant %s on shared transport: %w", tc.PartitionID, err)
+							return nil, fmt.Errorf("register partition %s on shared transport: %w", tc.PartitionID, err)
 						}
 						rt.transportMgr.Register(tid, rt.sharedTransport)
-						log.Printf("[NODE] VL1 tenant %s registered on shared transport", tc.PartitionID)
+						log.Printf("[NODE] VL1 partition %s registered on shared transport", tc.PartitionID)
 					}
 				}
 
@@ -975,7 +975,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 				if len(rt.listenTransports) > 0 {
 					aether.RegisterTransport(aether.ProtocolVL1, rt.listenTransports[0])
 				}
-				log.Printf("[NODE] VL1 multi-tenant initialized (%d tenants, %d transports)",
+				log.Printf("[NODE] VL1 partitioned mode initialized (%d partitions, %d transports)",
 					len(cfg.Partitions), len(rt.listenTransports))
 			}
 
@@ -1025,7 +1025,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 			// itself is idempotent and returns the existing integration).
 			//
 			// Transit mode is derived from the configured roles — anchor
-			// nodes forward multi-hop traffic for any tenant peer; other
+			// nodes forward multi-hop traffic for any partition peer; other
 			// nodes start TransitNone and can opt in later via
 			// SetTransitMode. cfg.Roles already includes "anchor" for
 			// anchor-capable nodes because Step 8 (anchor service) below
@@ -1653,22 +1653,21 @@ func (rt *Runtime) tryGoCtx(name string, fn func(context.Context)) bool {
 	return rt.tryGo(name, func() { fn(rt.ctx) })
 }
 
-// TransportManager returns the multi-tenant transport manager if VL1 is enabled.
+// TransportManager returns the partition transport manager if VL1 is enabled.
 func (rt *Runtime) TransportManager() *manager.TransportManager {
 	return rt.transportMgr
 }
 
-// Transport returns a single aether.Transport for backward-compat callers
-// (HSTLES endpoints that use single-tenant mode). In multi-tenant mode this
-// returns the first listen aether. Returns nil if VL1 is not enabled.
-//
-// New callers should use TransportManager() for tenant-aware routing.
+// Transport returns a single aether.Transport for a caller that configured no
+// partitions. When partitions ARE configured it returns the first listen
+// aether, which is only one of them — use TransportManager() to reach the rest.
+// Returns nil if VL1 is not enabled.
 func (rt *Runtime) Transport() aether.Transport {
 	return rt.DefaultTransport()
 }
 
 // DefaultTransport returns the first listen transport for callers that need a
-// single aether.Transport (e.g., STUN discovery, legacy single-tenant).
+// single aether.Transport (e.g., STUN discovery, or an unpartitioned node).
 // Returns nil if VL1 is not enabled.
 func (rt *Runtime) DefaultTransport() aether.Transport {
 	if len(rt.listenTransports) > 0 {
@@ -1879,7 +1878,7 @@ func (rt *Runtime) AddDiscoverer(d discovery.Discoverer) {
 // getNoiseQUICPacketConn returns the DemuxPacketConn from the Noise listener
 // for QUIC multiplexing on the shared UDP port. Returns nil if unavailable.
 func (rt *Runtime) getNoiseQUICPacketConn() net.PacketConn {
-	// Try single-tenant transport first, then shared transport
+	// Try the unpartitioned transport first, then the shared transport
 	for _, tr := range rt.listenTransports {
 		if nt, ok := tr.(interface{ QUICPacketConn() net.PacketConn }); ok {
 			if pc := nt.QUICPacketConn(); pc != nil {
@@ -2109,7 +2108,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	// arrived" (the delivery-gap reading) or "nothing was listening for one".
 	// Without these two counters those are indistinguishable, and the decision
 	// tree below silently assumes the former. attachIntraOrgForwarder is called
-	// unconditionally after every transport build (default/shared/tenant), so
+	// unconditionally after every transport build (default/shared/partition), so
 	// forwarder_absent SHOULD be 0 — but that is a source reading, and this makes
 	// it a runtime fact.
 	var forwarderAttached, forwarderAbsent uint64
@@ -2198,7 +2197,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	// measures what a caller holding the transport can actually reach — and
 	// *manager.SharedTransport does NOT satisfy TicketCapable (it forwards
 	// Dial/Listen/Close but not IssueTicket/ResumeSession), so a shared-transport
-	// tenant reports INCAPABLE here even though its Dial resumes internally.
+	// partition reports INCAPABLE here even though its Dial resumes internally.
 	// That divergence is the finding, and it is invisible if you unwrap.
 	var resumeCapable, resumeIncapable uint64
 	for _, tr := range rt.listenTransports {
@@ -2438,10 +2437,10 @@ func (rt *Runtime) UnregisterSession(nodeID aether.NodeID) {
 // table. Used by relay endpoints that accept WebSocket or QUIC connections
 // from agents when UDP is blocked.
 //
-// scopeID is the tenant/org scope the external session belongs to; it is
+// scopeID is the partition the external session belongs to; it is
 // threaded to aether's RelayCapable so the relay can enforce cross-scope
 // isolation on the bridge path. A relay that does not resolve
-// a per-peer tenant passes "" (dedicated mode = no restriction), which
+// a per-peer partition passes "" (dedicated mode = no restriction), which
 // preserves the unisolated relay behavior — the bridge path was never
 // scope-checked before. Passing a non-empty scope isolates this external
 // session so only same-scope (or dedicated) peers may relay to it.
@@ -2480,43 +2479,43 @@ func (rt *Runtime) HandleRelayFrame(sourceNodeID aether.NodeID, data []byte) {
 }
 
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-// Dynamic tenant management (for relay/shared endpoints)
+// Dynamic partition management (for relay/shared endpoints)
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// RegisterPartition dynamically adds a tenant to the shared aether.
-// Requires multi-tenant mode (Tenants config non-empty) so that a SharedTransport exists.
-func (rt *Runtime) RegisterPartition(tenantID string, keys [][]byte) error {
+// RegisterPartition dynamically adds a partition to the shared aether.
+// Requires Config.Partitions to be non-empty so that a SharedTransport exists.
+func (rt *Runtime) RegisterPartition(partitionID string, keys [][]byte) error {
 	if rt.sharedTransport == nil {
-		return fmt.Errorf("node: no shared transport (configure Tenants for multi-tenant mode)")
+		return fmt.Errorf("node: no shared transport (configure Config.Partitions)")
 	}
-	tid := aether.ScopeID(tenantID)
+	tid := aether.ScopeID(partitionID)
 	if err := rt.sharedTransport.RegisterPartition(tid, keys); err != nil {
 		return err
 	}
 	return rt.transportMgr.Register(tid, rt.sharedTransport)
 }
 
-// UpdatePartitionKeys replaces the network keys for an existing tenant (key rotation).
-func (rt *Runtime) UpdatePartitionKeys(tenantID string, keys [][]byte) error {
+// UpdatePartitionKeys replaces the network keys for an existing partition (key rotation).
+func (rt *Runtime) UpdatePartitionKeys(partitionID string, keys [][]byte) error {
 	if rt.sharedTransport == nil {
-		return fmt.Errorf("node: no shared transport (configure Tenants for multi-tenant mode)")
+		return fmt.Errorf("node: no shared transport (configure Config.Partitions)")
 	}
-	return rt.sharedTransport.UpdatePartitionKeys(aether.ScopeID(tenantID), keys)
+	return rt.sharedTransport.UpdatePartitionKeys(aether.ScopeID(partitionID), keys)
 }
 
-// RemovePartition removes a tenant from the shared transport and transport manager.
-func (rt *Runtime) RemovePartition(tenantID string) error {
+// RemovePartition removes a partition from the shared transport and transport manager.
+func (rt *Runtime) RemovePartition(partitionID string) error {
 	if rt.sharedTransport == nil {
-		return fmt.Errorf("node: no shared transport (configure Tenants for multi-tenant mode)")
+		return fmt.Errorf("node: no shared transport (configure Config.Partitions)")
 	}
-	tid := aether.ScopeID(tenantID)
+	tid := aether.ScopeID(partitionID)
 	if err := rt.sharedTransport.RemovePartition(tid); err != nil {
 		return err
 	}
 	return rt.transportMgr.Remove(tid)
 }
 
-// PartitionCount returns the number of registered tenants on the shared aether.
+// PartitionCount returns the number of registered partitions on the shared aether.
 // Returns 0 if no shared transport is configured.
 func (rt *Runtime) PartitionCount() int {
 	if rt.sharedTransport == nil {
@@ -2549,12 +2548,12 @@ func (rt *Runtime) recordLedgerAppendError() {
 }
 
 // directoryAdapter bridges DirectoryCache to VL1 Directory interface
-// The issue is that DirectoryCache.Reach uses string for tenant, but VL1 Directory wants aether.ScopeID
+// DirectoryCache.Reach takes the partition as a string; the VL1 Directory port takes aether.ScopeID
 type directoryAdapter struct {
 	cache *ladcache.DirectoryCache
 }
 
-func (d *directoryAdapter) Reach(ctx context.Context, tenant aether.ScopeID, filter lad.ReachQuery) ([]lad.ReachRecord, error) {
+func (d *directoryAdapter) Reach(ctx context.Context, partition aether.ScopeID, filter lad.ReachQuery) ([]lad.ReachRecord, error) {
 	// Convert aether.ScopeID (which is just a string type) to string
 	// Convert lad.ReachQuery to cache.ReachQuery (cache query is simpler, lacks MinScore)
 	cacheQuery := ladcache.ReachQuery{
@@ -2562,7 +2561,7 @@ func (d *directoryAdapter) Reach(ctx context.Context, tenant aether.ScopeID, fil
 		Role:   filter.Role,
 		Limit:  filter.Limit,
 	}
-	return d.cache.Reach(ctx, string(tenant), cacheQuery)
+	return d.cache.Reach(ctx, string(partition), cacheQuery)
 }
 
 // bootstrapFromAnchor attempts to fetch and verify a directory snapshot from configured Anchor Nodes.
@@ -2632,7 +2631,7 @@ func (rt *Runtime) bootstrapFromAnchor(ctx context.Context, cfg Config) (bool, e
 		}
 
 		// Secure Snapshot: Add authentication header using first available network key.
-		// AuthKeys() returns global keys first, then tenant keys.
+		// AuthKeys() returns global keys first, then partition keys.
 		if authKeys := cfg.AuthKeys(); len(authKeys) > 0 {
 			keyBytes, err := hex.DecodeString(authKeys[0])
 			if err == nil {
@@ -2793,7 +2792,7 @@ func (rt *Runtime) bootstrapPeers(ctx context.Context, cfg Config) error {
 	// Spawn the long-running ConnectionManager scan loop UNCONDITIONALLY.
 	// It is the sole driver of peer discovery, dial seeding and outbound mesh
 	// connection establishment. Gating it on bootstrap success would
-	// leave nodes that do not dial out (auth core, anchors, isolated tenants)
+	// leave nodes that do not dial out (auth core, anchors, isolated partitions)
 	// without an active connection manager — no outbound dialing, no mesh
 	// convergence, no RPC dispatch.
 	rt.Go("connmgr.scan_loop", func() {
@@ -2901,25 +2900,25 @@ func (rt *Runtime) dialNoiseUDP(ctx context.Context, target aether.Target) (aeth
 		return nil, fmt.Errorf("no transport manager")
 	}
 
-	// Dial with proper tenant isolation. SharedTransport requires tenant
+	// Dial with proper partition isolation. SharedTransport requires a partition
 	// context for PSK key selection and preamble encoding.
 	var lastErr error
 	for i, tr := range rt.listenTransports {
 		dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 
-		// Inject tenant context if this transport requires it
+		// Inject the partition onto the dial context if this transport requires it
 		if _, ok := tr.(*manager.SharedTransport); ok {
-			tenantID := ""
-			if i < len(rt.listenTenantIDs) && rt.listenTenantIDs[i] != "" {
-				tenantID = rt.listenTenantIDs[i]
+			partitionID := ""
+			if i < len(rt.listenPartitionIDs) && rt.listenPartitionIDs[i] != "" {
+				partitionID = rt.listenPartitionIDs[i]
 			}
 			// A shared transport resolves the partition from the session, so it
 			// leaves this empty; fall back to the first configured partition.
-			if tenantID == "" && len(rt.cfg.Partitions) > 0 {
-				tenantID = rt.cfg.Partitions[0].PartitionID
+			if partitionID == "" && len(rt.cfg.Partitions) > 0 {
+				partitionID = rt.cfg.Partitions[0].PartitionID
 			}
-			if tenantID != "" {
-				dialCtx = manager.WithPartitionID(dialCtx, aether.ScopeID(tenantID))
+			if partitionID != "" {
+				dialCtx = manager.WithPartitionID(dialCtx, aether.ScopeID(partitionID))
 			}
 		}
 
@@ -2960,20 +2959,20 @@ func (rt *Runtime) startVL1Listener(ctx context.Context) error {
 
 		log.Printf("[NODE] VL1 UDP listener started on %s", listener.Addr())
 
-		// Resolve fallback tenant for this listener.
-		// "" means tenant is resolved from session preamble (shared transport).
-		fallbackTenant := ""
-		if i < len(rt.listenTenantIDs) {
-			fallbackTenant = rt.listenTenantIDs[i]
+		// Resolve the fallback partition for this listener.
+		// "" means the partition is resolved from the session preamble (shared transport).
+		fallbackPartition := ""
+		if i < len(rt.listenPartitionIDs) {
+			fallbackPartition = rt.listenPartitionIDs[i]
 		}
 
 		// Accept incoming sessions via Aether negotiation.
 		// All sessions go through AcceptIncomingMeshSession for full Aether lifecycle.
 		// Derive transport type from the listener for latency records
 		transportType := "vl1" // default for VL1 listeners (typically noise-udp)
-		l, tenant, tt := listener, fallbackTenant, transportType
+		l, partition, tt := listener, fallbackPartition, transportType
 		rt.Go("vl1.accept_loop", func() {
-			rt.acceptIncomingSessionsWithMux(ctx, l, tenant, tt)
+			rt.acceptIncomingSessionsWithMux(ctx, l, partition, tt)
 		})
 	}
 
@@ -3000,7 +2999,7 @@ func (c *prefixedConn) Read(p []byte) (int, error) {
 // All sessions go through AcceptIncomingMeshSession for full Aether lifecycle.
 // The "WithMux" name is retained for backward compatibility with call sites.
 func (rt *Runtime) acceptIncomingSessionsWithMux(ctx context.Context, listener aether.Listener, fallbackPartition string, transportType string) {
-	log.Printf("[NODE] Listening for incoming Aether sessions (tenant fallback: %s)...", fallbackPartition)
+	log.Printf("[NODE] Listening for incoming Aether sessions (partition fallback: %s)...", fallbackPartition)
 
 	for {
 		select {
@@ -3031,14 +3030,14 @@ func (rt *Runtime) acceptIncomingSessionsWithMux(ctx context.Context, listener a
 				continue
 			}
 
-			tenantID := fallbackPartition
+			partitionID := fallbackPartition
 			if tas, ok := session.(aether.TenantAwareSession); ok {
 				if tid := tas.ScopeID(); tid != "" {
-					tenantID = tid
+					partitionID = tid
 				}
 			}
 
-			sessionCtx := handlers.WithTransportPartition(ctx, tenantID)
+			sessionCtx := handlers.WithTransportPartition(ctx, partitionID)
 
 			go func(conn aether.Connection, sCtx context.Context) {
 				defer func() {
@@ -3165,8 +3164,9 @@ func (rt *Runtime) PublishHandlersToLAD(ctx context.Context, roles []string, reg
 		handlerMetadata = append(handlerMetadata, metadata)
 	}
 
-	// Create role record with handler metadata
-	// Note: RoleRecord.TenantID will be omitted (HSTLES has no multi-tenancy)
+	// Create role record with handler metadata. lad.RoleRecord.TenantID is left
+	// unset: a role advert describes what this node serves, not who may reach
+	// it, and readers filter on the enclosing lad.Record instead.
 	roleRec := lad.RoleRecord{
 		NodeID:   string(rt.identity.NodeID),
 		Roles:    roles,
@@ -3180,8 +3180,8 @@ func (rt *Runtime) PublishHandlersToLAD(ctx context.Context, roles []string, reg
 		return fmt.Errorf("marshal role record: %w", err)
 	}
 
-	// Publish to ledger
-	// Note: Record.TenantID will be omitted (HSTLES has no multi-tenancy)
+	// Publish to ledger. lad.Record.TenantID is left unset, which publishes this
+	// advert to every reader rather than to one partition's readers.
 	rec := lad.Record{
 		Topic:        lad.TopicRole,
 		NodeID:       string(rt.identity.NodeID),
@@ -3331,7 +3331,8 @@ func (rt *Runtime) verifyAuthToken(token string) bool {
 		return false
 	}
 
-	// Verify signature against ALL available network keys (global + tenant, supports rotation)
+	// Verify signature against ALL available network keys (global + per-partition,
+	// so a snapshot signed with a key mid-rotation still verifies)
 	expectedPayload := fmt.Sprintf("mesh-snapshot:%d", timestamp)
 
 	for _, keyHex := range rt.cfg.AuthKeys() {
@@ -4798,12 +4799,11 @@ func (rt *Runtime) BestGradeToHandler(handler string) Grade {
 			break
 		}
 	}
-	// Routed through the LiveDirectory seam. Behaviour is
-	// identical for this caller: it consumed only RoleRecord.NodeID, which is
-	// exactly what NodesByRole returns, and the adapter delegates to the same
-	// cache.Roles(ctx, tenant, RoleQuery{Role: role}) call. The empty tenant
-	// is the literal bucket this site has always queried — now stated rather
-	// than implied.
+	// Routed through the LiveDirectory seam, which is enough here because this
+	// caller needs only the node IDs NodesByRole returns. The empty partition
+	// argument names the unpartitioned bucket explicitly: role adverts are
+	// published there (see the lad.Record above, whose TenantID is left unset),
+	// so a non-empty partition would find nothing.
 	if rt.liveDir == nil {
 		return GradeF
 	}
