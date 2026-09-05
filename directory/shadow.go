@@ -59,14 +59,14 @@ func (r *ShadowReport) add(format string, args ...any) {
 // tenant), per-node reach sets, and handler adverts for every FQN either
 // side knows. Ordering differences are normalized away; content differences
 // are mismatches.
-func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDirectory, tenant ports.Partition, roles []string) (*ShadowReport, error) {
+func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDirectory, partition ports.Partition, roles []string) (*ShadowReport, error) {
 	rep := &ShadowReport{}
 
-	aMembers, err := authoritative.Members(ctx, tenant)
+	aMembers, err := authoritative.Members(ctx, partition)
 	if err != nil {
 		return nil, fmt.Errorf("shadow: authoritative members: %w", err)
 	}
-	sMembers, err := shadow.Members(ctx, tenant)
+	sMembers, err := shadow.Members(ctx, partition)
 	if err != nil {
 		return nil, fmt.Errorf("shadow: shadow members: %w", err)
 	}
@@ -98,11 +98,11 @@ func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDir
 	// Role index parity.
 	for _, role := range roles {
 		rep.ComparedRoles++
-		aNodes, err := authoritative.NodesByRole(ctx, tenant, role)
+		aNodes, err := authoritative.NodesByRole(ctx, partition, role)
 		if err != nil {
 			return nil, err
 		}
-		sNodes, err := shadow.NodesByRole(ctx, tenant, role)
+		sNodes, err := shadow.NodesByRole(ctx, partition, role)
 		if err != nil {
 			return nil, err
 		}
@@ -114,11 +114,11 @@ func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDir
 	// Reach parity per member.
 	for id := range aByID {
 		rep.ComparedReach++
-		aReach, err := authoritative.Reach(ctx, tenant, id)
+		aReach, err := authoritative.Reach(ctx, partition, id)
 		if err != nil {
 			return nil, err
 		}
-		sReach, err := shadow.Reach(ctx, tenant, id)
+		sReach, err := shadow.Reach(ctx, partition, id)
 		if err != nil {
 			return nil, err
 		}
@@ -132,15 +132,15 @@ func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDir
 	// name you already hold — so the comparison set comes from the sides via
 	// the optional HandlerEnumerator capability. A side that cannot enumerate
 	// degrades the axis rather than shrinking it silently.
-	fqns, degraded := collectHandlerFQNs(ctx, tenant, authoritative, shadow)
+	fqns, degraded := collectHandlerFQNs(ctx, partition, authoritative, shadow)
 	rep.Degraded = append(rep.Degraded, degraded...)
 	for _, fqn := range fqns {
 		rep.ComparedHandlers++
-		aH, err := authoritative.HandlersByName(ctx, tenant, fqn)
+		aH, err := authoritative.HandlersByName(ctx, partition, fqn)
 		if err != nil {
 			return nil, err
 		}
-		sH, err := shadow.HandlersByName(ctx, tenant, fqn)
+		sH, err := shadow.HandlersByName(ctx, partition, fqn)
 		if err != nil {
 			return nil, err
 		}
@@ -220,14 +220,14 @@ func CompareFingerprints(ctx context.Context, a, b ports.LiveDirectory) (bool, e
 // legitimate is letting its silence read as agreement. CompareDirectories
 // degrades the axis instead.
 type HandlerEnumerator interface {
-	HandlerFQNs(ctx context.Context, tenant ports.Partition) ([]string, error)
+	HandlerFQNs(ctx context.Context, partition ports.Partition) ([]string, error)
 }
 
 // collectHandlerFQNs derives the FQN comparison set from the sides that can
 // enumerate, and names the sides that cannot. The second return value lists
 // degraded axes; a non-empty list fails InParity, because the alternative is
 // a handler comparison over an empty set reporting agreement.
-func collectHandlerFQNs(ctx context.Context, tenant ports.Partition, sides ...ports.LiveDirectory) ([]string, []string) {
+func collectHandlerFQNs(ctx context.Context, partition ports.Partition, sides ...ports.LiveDirectory) ([]string, []string) {
 	set := map[string]bool{}
 	var degraded []string
 	for i, side := range sides {
@@ -241,7 +241,7 @@ func collectHandlerFQNs(ctx context.Context, tenant ports.Partition, sides ...po
 				"handlers: %s side (%T) cannot enumerate handler FQNs — axis not compared", name, side))
 			continue
 		}
-		fqns, err := enum.HandlerFQNs(ctx, tenant)
+		fqns, err := enum.HandlerFQNs(ctx, partition)
 		if err != nil {
 			degraded = append(degraded, fmt.Sprintf(
 				"handlers: %s side failed to enumerate handler FQNs: %v", name, err))

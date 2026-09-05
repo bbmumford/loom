@@ -114,16 +114,16 @@ func (d *LADDirectory) Close() error {
 // MemberRecord for identity, RoleRecord for service roles, ReachRecord for
 // region. LAD's own Members() already synthesises members from signed reach
 // metadata for nodes with no explicit member record, so this inherits that.
-func (d *LADDirectory) Members(ctx context.Context, tenant ports.Partition) ([]ports.Member, error) {
-	recs, err := d.cache.Members(ctx, string(tenant))
+func (d *LADDirectory) Members(ctx context.Context, partition ports.Partition) ([]ports.Member, error) {
+	recs, err := d.cache.Members(ctx, string(partition))
 	if err != nil {
 		return nil, fmt.Errorf("directory: LAD members: %w", err)
 	}
-	roles, err := d.rolesByNode(ctx, tenant)
+	roles, err := d.rolesByNode(ctx, partition)
 	if err != nil {
 		return nil, err
 	}
-	reach, err := d.reachByNode(ctx, tenant)
+	reach, err := d.reachByNode(ctx, partition)
 	if err != nil {
 		return nil, err
 	}
@@ -136,8 +136,8 @@ func (d *LADDirectory) Members(ctx context.Context, tenant ports.Partition) ([]p
 	return out, nil
 }
 
-func (d *LADDirectory) Member(ctx context.Context, tenant ports.Partition, id ports.NodeID) (ports.Member, bool, error) {
-	ms, err := d.Members(ctx, tenant)
+func (d *LADDirectory) Member(ctx context.Context, partition ports.Partition, id ports.NodeID) (ports.Member, bool, error) {
+	ms, err := d.Members(ctx, partition)
 	if err != nil {
 		return ports.Member{}, false, err
 	}
@@ -184,8 +184,8 @@ func (d *LADDirectory) member(m lad.MemberRecord, roles map[string][]string, rea
 	return out
 }
 
-func (d *LADDirectory) NodesByRole(ctx context.Context, tenant ports.Partition, role string) ([]ports.NodeID, error) {
-	rs, err := d.cache.Roles(ctx, string(tenant), ladcache.RoleQuery{Role: role})
+func (d *LADDirectory) NodesByRole(ctx context.Context, partition ports.Partition, role string) ([]ports.NodeID, error) {
+	rs, err := d.cache.Roles(ctx, string(partition), ladcache.RoleQuery{Role: role})
 	if err != nil {
 		return nil, fmt.Errorf("directory: LAD roles: %w", err)
 	}
@@ -205,8 +205,8 @@ func (d *LADDirectory) NodesByRole(ctx context.Context, tenant ports.Partition, 
 // member record is invisible to Members and must not be invisible here
 // (#M-626). Roles are sorted to match ports.Member.Roles (#R-1607 ④), and the
 // result is ordered by NodeID so two directories are comparable.
-func (d *LADDirectory) RoleAdverts(ctx context.Context, tenant ports.Partition) ([]ports.RoleAdvert, error) {
-	rs, err := d.cache.Roles(ctx, string(tenant), ladcache.RoleQuery{})
+func (d *LADDirectory) RoleAdverts(ctx context.Context, partition ports.Partition) ([]ports.RoleAdvert, error) {
+	rs, err := d.cache.Roles(ctx, string(partition), ladcache.RoleQuery{})
 	if err != nil {
 		return nil, fmt.Errorf("directory: LAD role adverts: %w", err)
 	}
@@ -224,8 +224,8 @@ func (d *LADDirectory) RoleAdverts(ctx context.Context, tenant ports.Partition) 
 // dial candidates. The reach layer names the Noise transport "udp" while the
 // mesh address table names it "noise-udp"; that mapping is normalised here and
 // must stay consistent with transportString (plan B.5).
-func (d *LADDirectory) Reach(ctx context.Context, tenant ports.Partition, id ports.NodeID) ([]ports.ReachAddress, error) {
-	rs, err := d.cache.Reach(ctx, string(tenant), ladcache.ReachQuery{NodeID: string(id)})
+func (d *LADDirectory) Reach(ctx context.Context, partition ports.Partition, id ports.NodeID) ([]ports.ReachAddress, error) {
+	rs, err := d.cache.Reach(ctx, string(partition), ladcache.ReachQuery{NodeID: string(id)})
 	if err != nil {
 		return nil, fmt.Errorf("directory: LAD reach: %w", err)
 	}
@@ -284,8 +284,8 @@ func (d *LADDirectory) Latency(_ context.Context, from, to ports.NodeID) (ports.
 // HandlersByName answers which nodes advertise an RPC handler FQN. LAD stores
 // handler metadata on RoleRecord (and on MemberRecord for nodes that publish
 // it there), so both are consulted.
-func (d *LADDirectory) HandlersByName(ctx context.Context, tenant ports.Partition, name string) ([]ports.HandlerAdvert, error) {
-	rs, err := d.cache.Roles(ctx, string(tenant), ladcache.RoleQuery{Handler: name})
+func (d *LADDirectory) HandlersByName(ctx context.Context, partition ports.Partition, name string) ([]ports.HandlerAdvert, error) {
+	rs, err := d.cache.Roles(ctx, string(partition), ladcache.RoleQuery{Handler: name})
 	if err != nil {
 		return nil, fmt.Errorf("directory: LAD handler roles: %w", err)
 	}
@@ -309,8 +309,8 @@ func (d *LADDirectory) HandlersByName(ctx context.Context, tenant ports.Partitio
 
 // HandlerFQNs implements HandlerEnumerator so a LAD↔Swarm comparison compares
 // the handler axis instead of degrading it.
-func (d *LADDirectory) HandlerFQNs(ctx context.Context, tenant ports.Partition) ([]string, error) {
-	rs, err := d.cache.Roles(ctx, string(tenant), ladcache.RoleQuery{})
+func (d *LADDirectory) HandlerFQNs(ctx context.Context, partition ports.Partition) ([]string, error) {
+	rs, err := d.cache.Roles(ctx, string(partition), ladcache.RoleQuery{})
 	if err != nil {
 		return nil, fmt.Errorf("directory: LAD handler enumeration: %w", err)
 	}
@@ -322,7 +322,7 @@ func (d *LADDirectory) HandlerFQNs(ctx context.Context, tenant ports.Partition) 
 			}
 		}
 	}
-	ms, err := d.cache.Members(ctx, string(tenant))
+	ms, err := d.cache.Members(ctx, string(partition))
 	if err != nil {
 		return nil, fmt.Errorf("directory: LAD handler enumeration (members): %w", err)
 	}
@@ -454,8 +454,8 @@ func (d *LADDirectory) allRecords(_ context.Context) ([]ports.Record, ports.Wate
 
 // ---------- projection helpers ----------
 
-func (d *LADDirectory) rolesByNode(ctx context.Context, tenant ports.Partition) (map[string][]string, error) {
-	rs, err := d.cache.Roles(ctx, string(tenant), ladcache.RoleQuery{})
+func (d *LADDirectory) rolesByNode(ctx context.Context, partition ports.Partition) (map[string][]string, error) {
+	rs, err := d.cache.Roles(ctx, string(partition), ladcache.RoleQuery{})
 	if err != nil {
 		return nil, fmt.Errorf("directory: LAD roles: %w", err)
 	}
@@ -466,8 +466,8 @@ func (d *LADDirectory) rolesByNode(ctx context.Context, tenant ports.Partition) 
 	return out, nil
 }
 
-func (d *LADDirectory) reachByNode(ctx context.Context, tenant ports.Partition) (map[string]lad.ReachRecord, error) {
-	rs, err := d.cache.Reach(ctx, string(tenant), ladcache.ReachQuery{})
+func (d *LADDirectory) reachByNode(ctx context.Context, partition ports.Partition) (map[string]lad.ReachRecord, error) {
+	rs, err := d.cache.Reach(ctx, string(partition), ladcache.ReachQuery{})
 	if err != nil {
 		return nil, fmt.Errorf("directory: LAD reach: %w", err)
 	}

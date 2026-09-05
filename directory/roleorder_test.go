@@ -74,22 +74,22 @@ func newRoleOrderSwarmDir(t *testing.T) *SwarmDirectory {
 }
 
 // ladMemberRoles projects the roles through LADDirectory.
-func ladMemberRoles(t *testing.T, id, tenant string, roles []string) []string {
+func ladMemberRoles(t *testing.T, id, partition string, roles []string) []string {
 	t.Helper()
 	c := ladcache.NewDirectoryCache()
-	mb, _ := json.Marshal(lad.MemberRecord{NodeID: id, TenantID: tenant, CreatedAt: time.Now()})
-	if err := c.Apply(lad.Record{Topic: lad.TopicMember, TenantID: tenant, NodeID: id, Body: mb, Timestamp: time.Now()}); err != nil {
+	mb, _ := json.Marshal(lad.MemberRecord{NodeID: id, TenantID: partition, CreatedAt: time.Now()})
+	if err := c.Apply(lad.Record{Topic: lad.TopicMember, TenantID: partition, NodeID: id, Body: mb, Timestamp: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
-	rb, _ := json.Marshal(lad.RoleRecord{NodeID: id, TenantID: tenant, Roles: roles, Updated: time.Now()})
-	if err := c.Apply(lad.Record{Topic: lad.TopicRole, TenantID: tenant, NodeID: id, Body: rb, Timestamp: time.Now()}); err != nil {
+	rb, _ := json.Marshal(lad.RoleRecord{NodeID: id, TenantID: partition, Roles: roles, Updated: time.Now()})
+	if err := c.Apply(lad.Record{Topic: lad.TopicRole, TenantID: partition, NodeID: id, Body: rb, Timestamp: time.Now()}); err != nil {
 		t.Fatal(err)
 	}
 	d, err := NewLADDirectory(c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	m, ok, err := d.Member(context.Background(), ports.Partition(tenant), ports.NodeID(id))
+	m, ok, err := d.Member(context.Background(), ports.Partition(partition), ports.NodeID(id))
 	if err != nil || !ok {
 		t.Fatalf("LADDirectory does not know the fixture node (ok=%v err=%v)", ok, err)
 	}

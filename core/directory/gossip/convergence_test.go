@@ -28,20 +28,20 @@ var seedTime = time.Unix(1_700_000_000, 0)
 // single peer. It is the unit the convergence tests move across the exchange; it
 // goes in through the same Apply the responder uses, so a seeded record is
 // indistinguishable from a gossiped one.
-func seedMember(t *testing.T, c *cache.DirectoryCache, tenant, node string) {
+func seedMember(t *testing.T, c *cache.DirectoryCache, partition, node string) {
 	t.Helper()
-	body, err := json.Marshal(lad.MemberRecord{TenantID: tenant, NodeID: node, CreatedAt: seedTime})
+	body, err := json.Marshal(lad.MemberRecord{TenantID: partition, NodeID: node, CreatedAt: seedTime})
 	if err != nil {
-		t.Fatalf("marshal member %s/%s: %v", tenant, node, err)
+		t.Fatalf("marshal member %s/%s: %v", partition, node, err)
 	}
 	if err := c.Apply(lad.Record{
 		Topic:     lad.TopicMember,
-		TenantID:  tenant,
+		TenantID:  partition,
 		NodeID:    node,
 		Body:      body,
 		Timestamp: seedTime,
 	}); err != nil {
-		t.Fatalf("apply member %s/%s: %v", tenant, node, err)
+		t.Fatalf("apply member %s/%s: %v", partition, node, err)
 	}
 }
 
