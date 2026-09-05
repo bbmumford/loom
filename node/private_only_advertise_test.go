@@ -25,7 +25,7 @@ import (
 //	DM-P09  transport is GRADED — "an ordered preference from a fast datagram
 //	        protocol down to a universally-reachable one" — which has nothing to
 //	        order if the node publishes zero candidates.
-//	DM-P07  SOVEREIGNTY: a standalone tenant mesh runs "without the central
+//	DM-P07  SOVEREIGNTY: a standalone partition mesh runs "without the central
 //	        service", i.e. precisely the class of node with no public hostname.
 //	DM-P03  the design's actual vocabulary for "advertise nothing" is to forbid a
 //	        node an OVERLAY ADDRESS, and it applies that to exactly one class

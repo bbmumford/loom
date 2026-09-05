@@ -31,7 +31,7 @@ import (
 //     will return ErrUnsupportedMode and the caller will get a
 //     spurious failure that should have fallen through to the mesh.
 //   - DispatchBytes: full local execution INCLUDING middleware +
-//     tenant scope enforcement so a local call has the same security
+//     partition scope enforcement so a local call has the same security
 //     semantics as a remote one.
 //
 // Set via SetLocalDispatcher at endpoint boot, BEFORE any caller fires.

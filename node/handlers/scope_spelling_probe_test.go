@@ -62,7 +62,7 @@ func TestSpellingProbe_ReaderShapedArrivalIsDenied(t *testing.T) {
 
 // TestSpellingProbe_TypedIdentityIsTheOnlyAdmissionPath locks the replacement
 // boundary: map spelling is irrelevant, while the canonical typed identity
-// admits the exact same platform tenant.
+// admits the exact same platform partition.
 func TestSpellingProbe_TypedIdentityIsTheOnlyAdmissionPath(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "probe.control", scope: ScopeTenant}

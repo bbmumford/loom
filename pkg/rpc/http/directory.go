@@ -18,7 +18,7 @@ import (
 // `/rpc/_directory` introspection endpoint.
 //
 // The fields are the metadata the e2e probe generator needs to decide
-// how to call a handler — its FQN, its tenant scope (so probes know
+// how to call a handler — its FQN, its partition scope (so probes know
 // what auth context to set up), its tags (so the destructive class
 // can be skipped), and the Go type names of its request and response
 // (which let the probe synthesise a JSON body that's at least

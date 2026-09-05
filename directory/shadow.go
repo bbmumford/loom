@@ -56,7 +56,7 @@ func (r *ShadowReport) add(format string, args ...any) {
 
 // CompareDirectories runs the capability-by-capability parity check between
 // the authoritative side and the shadow side: membership (+ roles, service,
-// tenant), per-node reach sets, and handler adverts for every FQN either
+// partition), per-node reach sets, and handler adverts for every FQN either
 // side knows. Ordering differences are normalized away; content differences
 // are mismatches.
 func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDirectory, partition ports.Partition, roles []string) (*ShadowReport, error) {

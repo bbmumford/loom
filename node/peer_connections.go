@@ -983,7 +983,7 @@ type ConnectionManager struct {
 	// unregisterDeleted counts cleanups that did mutate dispatch so the
 	// two together quantify how often the guard mattered.
 	unregisterSkippedNotHolder atomic.Uint64
-	unregisterDeleted         atomic.Uint64
+	unregisterDeleted          atomic.Uint64
 }
 
 func (m *ConnectionManager) sessionLifecycleLock(nodeID string) *sync.Mutex {

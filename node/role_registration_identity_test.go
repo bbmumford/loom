@@ -38,8 +38,8 @@ func (h *blockingRoleRPCHandler) Role() string                { return h.role }
 func (h *blockingRoleRPCHandler) RequiresAuth() bool          { return false }
 func (h *blockingRoleRPCHandler) AllowedAuthTypes() []string  { return nil }
 func (h *blockingRoleRPCHandler) Scopes() []string            { return nil }
-func (h *blockingRoleRPCHandler) Scope() handlers.Scope { return handlers.ScopeNone }
-func (h *blockingRoleRPCHandler) AllowedPartitions() []string    { return nil }
+func (h *blockingRoleRPCHandler) Scope() handlers.Scope       { return handlers.ScopeNone }
+func (h *blockingRoleRPCHandler) AllowedPartitions() []string { return nil }
 func (h *blockingRoleRPCHandler) ExecuteRPC(
 	ctx context.Context,
 	req *handlers.RPCRequest,

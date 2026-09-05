@@ -34,7 +34,7 @@ var (
 type SharedTransport struct {
 	inner *noise.NoiseTransport
 
-	mu         sync.RWMutex
+	mu            sync.RWMutex
 	partitionKeys map[aether.ScopeID][][]byte // partition → PSK keys (first = active)
 }
 

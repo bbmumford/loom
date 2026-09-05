@@ -420,7 +420,7 @@ func (e *Executor) executeTask(ctx context.Context, task *meshtask.Task, fence s
 		TraceID:     task.ID, // Use task ID for tracing
 	}
 
-	// Execute via the same auth + tenant + middleware lifecycle as compose.
+	// Execute via the same auth + partition + middleware lifecycle as compose.
 	dbgTaskExec.Printf("Executing handler: %s for task %s", handlerName, task.ID)
 	taskResult, err := e.registry.DispatchTaskWithAuth(ctx, nodeTask, e.auth)
 

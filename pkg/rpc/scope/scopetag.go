@@ -22,7 +22,7 @@
 // naming rpc.ScopeTenant / handlers.ScopeOrg and keep compiling.
 package scope
 
-// ScopeTag is the opaque tenant/scope label a handler declares at registration.
+// ScopeTag is the opaque partition/scope label a handler declares at registration.
 // It is deliberately a defined type: an arbitrary string must not be assignable
 // as a scope declaration, and its zero value must remain detectably invalid.
 // The string representation still survives JSON / protobuf / wire round-trips

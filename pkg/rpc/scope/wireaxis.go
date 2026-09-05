@@ -12,7 +12,7 @@ package scope
 // scalar proto field. loom assigns these names no meaning beyond "the value that
 // travelled under this axis name" — a consumer's PresencePolicy and its
 // ports.TransportAxisPin decide which axis pins against the transport-established
-// tenant. The names below describe an axis by its TRANSPORT RELATIONSHIP, not by
+// partition. The names below describe an axis by its TRANSPORT RELATIONSHIP, not by
 // an identity level: they are the vocabulary a producer stamps and a consumer
 // reads by, and both sides must agree on the string.
 const (

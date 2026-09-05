@@ -34,37 +34,37 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 		}
 	}
 	return func(declared scope.ScopeTag, id scope.AuthenticatedIdentity) (bool, string) {
-		tenant := id.Scope(scope.AxisTransportPinned)
+		partition := id.Scope(scope.AxisTransportPinned)
 		switch declared {
 		case scope.ScopeNone:
 			return true, ""
 		case scope.ScopePlatform:
-			if tenant == "" {
+			if partition == "" {
 				return false, "platform tenant required"
 			}
-			if _, ok := allow[tenant]; !ok {
+			if _, ok := allow[partition]; !ok {
 				return false, "tenant not in platform allowlist"
 			}
 		case scope.ScopeTenant:
-			if tenant == "" {
+			if partition == "" {
 				return false, "tenant required"
 			}
 		case scope.ScopeOrg:
-			if tenant == "" {
+			if partition == "" {
 				return false, "tenant required"
 			}
 			if id.Scope(scope.AxisWithinTransport) == "" {
 				return false, "organisation required"
 			}
 		case scope.ScopeUser:
-			if tenant == "" {
+			if partition == "" {
 				return false, "tenant required"
 			}
 			if id.Subject == "" {
 				return false, "user required"
 			}
 		case scope.ScopeProfile:
-			if tenant == "" {
+			if partition == "" {
 				return false, "tenant required"
 			}
 		default:
@@ -76,10 +76,10 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 
 // idAxes builds an opaque identity from the deployed axes, omitting any empty
 // axis (an absent axis must stay absent).
-func idAxes(tenant, org, user string) rpc.AuthenticatedScopeIdentity {
+func idAxes(partition, org, user string) rpc.AuthenticatedScopeIdentity {
 	id := rpc.AuthenticatedScopeIdentity{Subject: user}
-	if tenant != "" {
-		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisTransportPinned, Value: tenant})
+	if partition != "" {
+		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisTransportPinned, Value: partition})
 	}
 	if org != "" {
 		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisWithinTransport, Value: org})

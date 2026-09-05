@@ -330,13 +330,13 @@ type Runtime struct {
 	punchCoord *punchCoordinator
 
 	// Core components
-	identity         *NodeIdentity
-	transportMgr     *manager.TransportManager // per-partition transport routing
-	sharedTransport  *manager.SharedTransport  // shared preamble-based transport (may be nil)
-	listenTransports []aether.Transport        // unique transports needing Listen()
-	listenPartitionIDs  []string                  // parallel: partition ID per listener (""=from session)
-	ledger           lad.Ledger
-	cache            *ladcache.DirectoryCache
+	identity           *NodeIdentity
+	transportMgr       *manager.TransportManager // per-partition transport routing
+	sharedTransport    *manager.SharedTransport  // shared preamble-based transport (may be nil)
+	listenTransports   []aether.Transport        // unique transports needing Listen()
+	listenPartitionIDs []string                  // parallel: partition ID per listener (""=from session)
+	ledger             lad.Ledger
+	cache              *ladcache.DirectoryCache
 	// liveDir is the ports.LiveDirectory over the LAD cache. Mesh directory
 	// reads route through it instead of
 	// touching the cache directly. Nil when the cache is (VL1 disabled).
@@ -469,16 +469,16 @@ type Runtime struct {
 	// MeshMetrics so admission pressure is observable.
 	composeTaskAdmissionMu sync.Mutex
 	composeTaskInFlight    atomic.Int64
-	composeTaskByPartition     map[ports.ExecutionPartitionKey]int64
+	composeTaskByPartition map[ports.ExecutionPartitionKey]int64
 	composeTaskRejected    atomic.Uint64
 
 	// composeTaskCompletions makes every accepted Deferred task handle
 	// queryable after it reaches a terminal state. The order slice bounds the
 	// in-memory history; optional external observation is configured through
 	// Config.ComposeTaskCompletionObserver.
-	composeTaskCompletionMu    sync.RWMutex
-	composeTaskCompletions     map[string]composeTaskCompletionRecord
-	composeTaskCompletionOrder []string
+	composeTaskCompletionMu        sync.RWMutex
+	composeTaskCompletions         map[string]composeTaskCompletionRecord
+	composeTaskCompletionOrder     []string
 	composeTaskCompletionPartition map[ports.ExecutionPartitionKey][]string
 
 	// bootstrap connections accepted when running as a bootstrap host

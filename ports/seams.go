@@ -142,7 +142,7 @@ type ExecutionPrincipalReader interface {
 
 // AuthenticatedPrincipalStamper is the preferred receive-side identity seam.
 // The RPC server calls it only after the typed wire principal's platform
-// tenant has matched the server-resolved transport ScopeID. Implementations
+// partition has matched the server-resolved transport ScopeID. Implementations
 // project that one immutable snapshot onto their private product context keys;
 // they must not consult RPCRequest.Context or merge caller fragments.
 //
@@ -157,7 +157,7 @@ type AuthenticatedPrincipalStamper interface {
 }
 
 // TransportAxisPin is the OPTIONAL consumer seam that names which received
-// identity axis a node reconciles against its transport-established tenant.
+// identity axis a node reconciles against its transport-established partition.
 // The RPC server gates that axis's wire value for equality with the transport
 // tenant before the reconstructed identity enters dispatch — the cross-tenant
 // forge gate: a mesh peer bound to transport tenant T cannot present a
@@ -191,7 +191,7 @@ type TransportAxisPin interface {
 type ScopeStamper interface {
 	// WithWireIdentity stamps the mesh-propagated userId + scope-list onto
 	// ctx as an authenticated principal. Called once per inbound RPC after
-	// the tenant lift, before dispatch. An empty userId + nil scopes is a
+	// the partition lift, before dispatch. An empty userId + nil scopes is a
 	// no-op the implementation may skip.
 	WithWireIdentity(ctx context.Context, userID string, scopes []string) context.Context
 }

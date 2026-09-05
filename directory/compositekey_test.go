@@ -282,7 +282,7 @@ func TestComparisonThatCouldNotEnumerateHandlersIsNotParity(t *testing.T) {
 // Tenant scoping is a REAL filter, not a decorative parameter (#R-1455 ③).
 //
 // Before the port went tenant-explicit, SwarmDirectory.Members returned every
-// tenant's members to every caller — a cross-tenant read the tenant-implicit
+// tenant's members to every caller — a cross-partition read the partition-implicit
 // signature could not even express, so nothing could have caught it. Adding
 // the parameter without enforcing it would be worse than leaving it out: the
 // signature would promise isolation the code does not provide.
@@ -293,7 +293,7 @@ func TestTenantScopingActuallyFilters(t *testing.T) {
 	idA, pubA, _ := testIdentity(t)
 	idB, pubB, _ := testIdentity(t)
 
-	// peerRecord tags tenant=hstles; build a second node on another tenant.
+	// peerRecord tags partition=hstles; build a second node on another partition.
 	if err := d.Ingest(ctx, peerRecord(t, idA, pubA, 100<<16, []string{"auth"}, "svc-a")); err != nil {
 		t.Fatal(err)
 	}
@@ -312,7 +312,7 @@ func TestTenantScopingActuallyFilters(t *testing.T) {
 			"tenant; the parameter is not being enforced", testTenantID, len(ms), ms)
 	}
 
-	// Control: the other tenant's node IS present, so the 1 above is a filter
+	// Control: the other partition's node IS present, so the 1 above is a filter
 	// result and not an ingest failure.
 	os, err := d.Members(ctx, ports.Partition("other-tenant"))
 	if err != nil {

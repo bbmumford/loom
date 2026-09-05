@@ -26,7 +26,7 @@ func TestNewScopeIdentity_AxesAndPartition(t *testing.T) {
 func TestNewScopePresencePolicy_Tiers(t *testing.T) {
 	p := NewScopePresencePolicy("orbtr.ai")
 	platform := NewScopeIdentity("orbtr.ai", "", "")
-	tenant := NewScopeIdentity("t1", "", "")
+	partition := NewScopeIdentity("t1", "", "")
 	full := NewScopeIdentity("t1", "org1", "usr1")
 	none := NewScopeIdentity("", "", "")
 
@@ -38,16 +38,16 @@ func TestNewScopePresencePolicy_Tiers(t *testing.T) {
 	}{
 		{"none admits anyone", ScopeNone, none, true},
 		{"platform needs allowlisted pinned", ScopePlatform, platform, true},
-		{"platform denies non-allowlisted", ScopePlatform, tenant, false},
+		{"platform denies non-allowlisted", ScopePlatform, partition, false},
 		{"platform denies empty", ScopePlatform, none, false},
-		{"tenant needs pinned", ScopeTenant, tenant, true},
+		{"tenant needs pinned", ScopeTenant, partition, true},
 		{"tenant denies empty", ScopeTenant, none, false},
-		{"partition (neutral) needs pinned", ScopePartition, tenant, true},
+		{"partition (neutral) needs pinned", ScopePartition, partition, true},
 		{"org needs pinned+within", ScopeOrg, full, true},
-		{"org denies pinned-only", ScopeOrg, tenant, false},
+		{"org denies pinned-only", ScopeOrg, partition, false},
 		{"user needs pinned+subject", ScopeUser, full, true},
-		{"user denies no-subject", ScopeUser, tenant, false},
-		{"profile needs pinned", ScopeProfile, tenant, true},
+		{"user denies no-subject", ScopeUser, partition, false},
+		{"profile needs pinned", ScopeProfile, partition, true},
 		{"unknown fails closed", ScopeUnknown, full, false},
 	}
 	for _, c := range cases {

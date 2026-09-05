@@ -20,7 +20,7 @@ import (
 // mesh_resume_capable_transports census exists to expose.
 //
 // *noise.NoiseTransport implements aether.TicketCapable (IssueTicket +
-// ResumeSession). loom wraps it in *manager.SharedTransport for multi-tenant
+// ResumeSession). loom wraps it in *manager.SharedTransport for multi-partition
 // ports, and that wrapper forwards Dial/Listen/Close but NOT the ticket methods
 // — so the optional interface is silently dropped at the wrapper. Any caller
 // that type-asserts TicketCapable on a shared transport gets false, even though
@@ -33,7 +33,7 @@ import (
 // ⚠ IF THIS TEST FLIPS: someone added IssueTicket/ResumeSession forwarding to
 // SharedTransport. That is a fine change — but update the census comment in
 // runtime.go, because the "incapable" bucket will stop counting shared-transport
-// tenants and the reading changes.
+// partitions and the reading changes.
 func TestMeshResume_SharedTransportDropsTicketCapable(t *testing.T) {
 	// POSITIVE CONTROL FIRST. Without it, a typo in the interface name would
 	// make both assertions report "not capable" and the test would pass while

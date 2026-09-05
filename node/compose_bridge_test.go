@@ -36,8 +36,8 @@ func (h *composeTaskProbe) Role() string                { return "compose-test" 
 func (h *composeTaskProbe) RequiresAuth() bool          { return h.requiresAuth }
 func (h *composeTaskProbe) AllowedAuthTypes() []string  { return nil }
 func (h *composeTaskProbe) Scopes() []string            { return nil }
-func (h *composeTaskProbe) Scope() handlers.Scope { return h.scope }
-func (h *composeTaskProbe) AllowedPartitions() []string    { return nil }
+func (h *composeTaskProbe) Scope() handlers.Scope       { return h.scope }
+func (h *composeTaskProbe) AllowedPartitions() []string { return nil }
 
 func (h *composeTaskProbe) ExecuteTask(ctx context.Context, task *handlers.Task) (*handlers.TaskResult, error) {
 	h.ran <- ctx

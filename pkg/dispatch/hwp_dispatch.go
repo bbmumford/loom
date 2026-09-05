@@ -862,7 +862,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 
 // buildRPCRequest creates an RPCRequest with deadline propagation and unique ID.
 // platformTenant is injected as "tenantId" in the RPC context map so receiving
-// handlers can enforce Scope (e.g., HSTLES identity handlers require tenant context).
+// handlers can enforce Scope (e.g., HSTLES identity handlers require partition context).
 // gradeTimeout overrides the default if positive (from session grade).
 func buildRPCRequest(role, method string, payload []byte, remaining time.Duration, platformTenant string, gradeTimeout ...time.Duration) *pb.RPCRequest {
 	return buildRPCRequestCtx(nil, role, method, payload, remaining, platformTenant, gradeTimeout...)
@@ -942,7 +942,7 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 	rpcCtx := map[string]string{"role": role}
 	// tenantId is the PLATFORM identity from startup config — never the end
 	// user's org, and never taken from ctx. See SetPlatformTenant and
-	// rpc.TenantFromContext; a caller needing an end-user tenant relies on
+	// rpc.TenantFromContext; a caller needing an end-user partition relies on
 	// server-side resolution from userId+scopes (platform §4.2, #R-1598 ①).
 	if platformTenant != "" {
 		rpcCtx["tenantId"] = platformTenant

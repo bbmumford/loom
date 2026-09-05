@@ -17,7 +17,7 @@ import (
 	"github.com/bbmumford/loom/pkg/rpc"
 )
 
-// TenantInjector mutates the parsed request message to stamp tenant/org
+// TenantInjector mutates the parsed request message to stamp partition/org
 // context derived from the HTTP request (typically session cookie or
 // bearer). Bridges that don't need this leave it nil.
 type TenantInjector = func(r *http.Request, msg proto.Message)
@@ -185,7 +185,7 @@ func composeMiddleware(chain []rpc.Middleware, h http.Handler) http.Handler {
 	return h
 }
 
-// dispatch handles JSON→proto unmarshaling, tenant injection, local/proxy
+// dispatch handles JSON→proto unmarshaling, partition injection, local/proxy
 // dispatch, and proto→JSON response marshaling. The Handler pointer is
 // supplied by HandleRPC (or by per-FQN routes) so we don't re-Get.
 func (b *Bridge) dispatch(w http.ResponseWriter, r *http.Request, h *rpc.Handler) {

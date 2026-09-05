@@ -39,17 +39,17 @@ func (noopLimiter) Allow(time.Time, ports.ExecutionPartitionKey) bool { return t
 
 // GatewayConfig configures offer/bid/assignment behaviour.
 type GatewayConfig struct {
-	ID                     string
-	QueuePolicy            queue.QueuePolicy
-	BidPolicy              bidding.BidPolicy
-	LeaseDuration          time.Duration
-	OfferTTL               time.Duration
-	MaxInFlightOffers      int
-	MaxQueueDepth          int
+	ID                         string
+	QueuePolicy                queue.QueuePolicy
+	BidPolicy                  bidding.BidPolicy
+	LeaseDuration              time.Duration
+	OfferTTL                   time.Duration
+	MaxInFlightOffers          int
+	MaxQueueDepth              int
 	MaxOutstandingPerPartition int
-	MaxAttempts            int
-	RequeueDelay           time.Duration
-	LeaseCheckInterval     time.Duration
+	MaxAttempts                int
+	RequeueDelay               time.Duration
+	LeaseCheckInterval         time.Duration
 }
 
 // Gateway coordinates task scheduling for a mesh role.
@@ -78,7 +78,7 @@ type Gateway struct {
 	admissionsBySubmitted map[*task.Task]*taskAdmission
 	admissionsByTask      map[*task.Task]*taskAdmission
 	admissionsByID        map[string]*taskAdmission
-	partitionOutstanding      map[ports.ExecutionPartitionKey]int
+	partitionOutstanding  map[ports.ExecutionPartitionKey]int
 	closing               chan struct{}
 	stopOnce              sync.Once // MESH-H08: makes Stop idempotent (close(g.closing) once)
 	stopped               bool
@@ -99,12 +99,12 @@ type assignmentState struct {
 }
 
 type taskAdmission struct {
-	submitted      *task.Task
-	current        *task.Task
-	principal      ports.ExecutionPrincipal
-	owner          ports.ExecutionPartitionKey
-	pinnedID       string
-	pinnedTenantID string
+	submitted         *task.Task
+	current           *task.Task
+	principal         ports.ExecutionPrincipal
+	owner             ports.ExecutionPartitionKey
+	pinnedID          string
+	pinnedPartitionID string
 }
 
 // GatewayOption allows optional configuration injection.
@@ -182,7 +182,7 @@ func NewGateway(cfg GatewayConfig, opts ...GatewayOption) (*Gateway, error) {
 		admissionsBySubmitted: make(map[*task.Task]*taskAdmission),
 		admissionsByTask:      make(map[*task.Task]*taskAdmission),
 		admissionsByID:        make(map[string]*taskAdmission),
-		partitionOutstanding:      make(map[ports.ExecutionPartitionKey]int),
+		partitionOutstanding:  make(map[ports.ExecutionPartitionKey]int),
 		closing:               make(chan struct{}),
 	}
 	for _, opt := range opts {
@@ -312,12 +312,12 @@ func (g *Gateway) enqueue(t *task.Task, principal ports.ExecutionPrincipal, bind
 	}
 
 	admission := &taskAdmission{
-		submitted:      t,
-		current:        owned,
-		principal:      principal,
-		owner:          owner,
-		pinnedID:       owned.ID,
-		pinnedTenantID: owned.TenantID,
+		submitted:         t,
+		current:           owned,
+		principal:         principal,
+		owner:             owner,
+		pinnedID:          owned.ID,
+		pinnedPartitionID: owned.TenantID,
 	}
 	g.admissionsBySubmitted[t] = admission
 	g.admissionsByTask[owned] = admission
@@ -367,7 +367,7 @@ func (g *Gateway) AuthorizeAssignment(
 	if !ok || admission.principal == nil || !admission.owner.Valid() {
 		return ctx, ports.ExecutionPartitionKey{}, nil, errors.New("task: assignment has no established execution principal")
 	}
-	if t.ID != admission.pinnedID || t.TenantID != admission.pinnedTenantID {
+	if t.ID != admission.pinnedID || t.TenantID != admission.pinnedPartitionID {
 		return ctx, ports.ExecutionPartitionKey{}, nil, errors.New("task: assignment identity changed after admission")
 	}
 	owner := admission.owner
@@ -394,7 +394,7 @@ func (g *Gateway) AuthorizeAssignment(
 	current := g.admissionsByTask[t]
 	stopped := g.stopped
 	sameAdmission := current == admission && admission.current == t
-	identityChanged := t.ID != admission.pinnedID || t.TenantID != admission.pinnedTenantID
+	identityChanged := t.ID != admission.pinnedID || t.TenantID != admission.pinnedPartitionID
 	g.mu.Unlock()
 	if stopped {
 		release()
@@ -706,7 +706,7 @@ func (g *Gateway) scheduleRetryLocked(original *task.Task) {
 	delete(g.admissionsByTask, original)
 	admission.current = clone
 	admission.pinnedID = clone.ID
-	admission.pinnedTenantID = clone.TenantID
+	admission.pinnedPartitionID = clone.TenantID
 	g.admissionsByTask[clone] = admission
 	time.AfterFunc(g.config.RequeueDelay, func() {
 		g.mu.Lock()

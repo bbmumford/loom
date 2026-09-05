@@ -51,8 +51,8 @@ type MeshLedger struct {
 	// it, two concurrent same-topic Appends both read the same Head and compute
 	// the same Seq, colliding on PRIMARY KEY (topic, seq) so one INSERT fails.
 	appendMu sync.Mutex
-	stopChan    chan struct{}
-	stopOnce    sync.Once
+	stopChan chan struct{}
+	stopOnce sync.Once
 
 	// Compaction configuration
 	retentionDays int

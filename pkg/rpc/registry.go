@@ -71,7 +71,7 @@ func (r *Registry) AuthzPolicy() *scope.Policy {
 // caller's backing arrays. We copy them so a caller that later mutates
 // their own slice (e.g. `mw = append(mw, extra)`) cannot retroactively
 // modify what the registry hands out via Get/All/ByRole.
-// prepareStored validates the handler's tenant scope and returns its FQN, role,
+// prepareStored validates the handler's partition scope and returns its FQN, role,
 // and a defensively-copied stored Handler. It takes no lock and touches no map,
 // so it is the shared lock-free half of Register and the atomic batch core:
 // scope validation and the Middleware/Tags copy live here once. Collision

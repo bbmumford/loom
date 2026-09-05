@@ -70,9 +70,9 @@ func (devPlatform) OpenUDPListener(network, address string) (*net.UDPConn, error
 	return net.ListenUDP(network, udpAddr)
 }
 
-func (devPlatform) IsCloud() bool               { return false }
-func (devPlatform) Provider() string            { return "dev" }
-func (devPlatform) EnvTags() map[string]string  { return map[string]string{} }
+func (devPlatform) IsCloud() bool              { return false }
+func (devPlatform) Provider() string           { return "dev" }
+func (devPlatform) EnvTags() map[string]string { return map[string]string{} }
 func (devPlatform) PreferredSources() []AddressSource {
 	// dev ordering per the host package: interface first, STUN primary
 	// discovery on bare metal, UPnP last resort.

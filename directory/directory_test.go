@@ -56,8 +56,8 @@ func peerRecord(t *testing.T, id ports.NodeID, pub ed25519.PublicKey, hlc uint64
 	}
 }
 
-// peerBodyWithTenant builds a PeerRecord body on an explicit tenant, so tests
-// can construct multi-tenant state.
+// peerBodyWithTenant builds a PeerRecord body on an explicit partition, so tests
+// can construct multi-partition state.
 func peerBodyWithTenant(t *testing.T, pub ed25519.PublicKey, roles []string, service, partition string) []byte {
 	t.Helper()
 	pr := &swarmpb.PeerRecord{

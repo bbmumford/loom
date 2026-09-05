@@ -17,7 +17,7 @@ import (
 )
 
 // Policy is the standard fail-closed ports.TrustPolicy: rooted in
-// CONFIGURED state (tenant set, anchor keys, explicit role entitlements,
+// CONFIGURED state (partition set, anchor keys, explicit role entitlements,
 // revocations), never in gossiped/self-advertised state. Everything not
 // explicitly allowed is denied; every deny returns an error naming the
 // failed check so operators can diagnose without code-diving.
@@ -169,7 +169,7 @@ func (p *Policy) AuthorizePublish(_ context.Context, pr ports.Principal, topic p
 	return fmt.Errorf("trust: topic %s matches no publish rule (fail closed)", topic)
 }
 
-// AuthorizeRead implements ports.TrustPolicy. Reads are tenant-gated plus
+// AuthorizeRead implements ports.TrustPolicy. Reads are partition-gated plus
 // key-bound; secret payload access control is cryptographic (the DEK wrap),
 // so read authorization here is deliberately coarser than publish.
 func (p *Policy) AuthorizeRead(_ context.Context, pr ports.Principal, topic ports.Topic) error {

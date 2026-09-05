@@ -22,12 +22,12 @@ import (
 // receive path reconstructs the opaque identity and this policy judges it.
 func customerScopePolicy() rpcscope.PresencePolicyFunc {
 	return func(declared handlers.Scope, id rpcscope.AuthenticatedIdentity) (bool, string) {
-		tenant := id.Scope(rpcscope.AxisTransportPinned)
+		partition := id.Scope(rpcscope.AxisTransportPinned)
 		switch declared {
 		case handlers.ScopeNone:
 			return true, ""
 		case handlers.ScopeOrg:
-			if tenant == "" {
+			if partition == "" {
 				return false, "authenticated platform tenant context required"
 			}
 			if id.Scope(rpcscope.AxisWithinTransport) == "" {
@@ -35,7 +35,7 @@ func customerScopePolicy() rpcscope.PresencePolicyFunc {
 			}
 			return true, ""
 		default:
-			if tenant == "" {
+			if partition == "" {
 				return false, "authenticated platform tenant context required"
 			}
 			return true, ""
@@ -84,8 +84,8 @@ func (customerPrincipalValidator) WithAuthenticatedPrincipal(
 	return rpcscope.WithAuthenticatedPrincipal(ctx, principal)
 }
 
-// TransportPinnedAxis names the platform-tenant axis as the one the RPC server
-// gates against the transport tenant (ports.TransportAxisPin) — the consumer
+// TransportPinnedAxis names the platform-partition axis as the one the RPC server
+// gates against the transport partition (ports.TransportAxisPin) — the consumer
 // supplies the name; loom never hard-codes it.
 func (customerPrincipalValidator) TransportPinnedAxis() string {
 	return rpcscope.AxisTransportPinned
@@ -146,7 +146,7 @@ func TestRPCServerRejectsPrincipalTamperingBeforeHandler(t *testing.T) {
 	}{
 		{
 			// Forge: a peer bound to transport orbtr presents a principal whose
-			// pinned (platform-tenant) axis is another tenant. The gate rejects it.
+			// pinned (platform-partition) axis is another partition. The gate rejects it.
 			name: "pinned-axis forge",
 			mutate: func(req *pb.RPCRequest) {
 				req.Principal.Axes[0].Value = "foreign-platform"
@@ -156,7 +156,7 @@ func TestRPCServerRejectsPrincipalTamperingBeforeHandler(t *testing.T) {
 		},
 		{
 			// Forge by omission: the pinned axis is absent, so its value cannot
-			// equal the transport tenant.
+			// equal the transport partition.
 			name: "pinned-axis absent",
 			mutate: func(req *pb.RPCRequest) {
 				req.Principal.Axes = req.Principal.Axes[1:] // drop platform_tenant
@@ -198,10 +198,10 @@ func TestRPCServerRejectsPrincipalTamperingBeforeHandler(t *testing.T) {
 }
 
 // TestRPCServerAdmitsWithinTenantCustomerOrg is the no-over-pin proof: only the
-// platform-tenant axis is transport-pinned, so a principal whose customer-org
-// axis is any value WITHIN the transport tenant is admitted and round-trips
+// platform-partition axis is transport-pinned, so a principal whose customer-org
+// axis is any value WITHIN the transport partition is admitted and round-trips
 // unchanged. Pinning the customer-org axis too would deny legitimate
-// within-tenant multi-org traffic (the availability regression orb's stage-4
+// within-partition multi-org traffic (the availability regression orb's stage-4
 // spec warns against).
 func TestRPCServerAdmitsWithinTenantCustomerOrg(t *testing.T) {
 	registry := handlers.NewHandlerRegistry()
@@ -292,8 +292,8 @@ func (h *platformOnlyProbe) Role() string                { return "orbtr.test" }
 func (h *platformOnlyProbe) RequiresAuth() bool          { return false }
 func (h *platformOnlyProbe) AllowedAuthTypes() []string  { return nil }
 func (h *platformOnlyProbe) Scopes() []string            { return nil }
-func (h *platformOnlyProbe) Scope() handlers.Scope { return handlers.ScopeTenant }
-func (h *platformOnlyProbe) AllowedPartitions() []string    { return nil }
+func (h *platformOnlyProbe) Scope() handlers.Scope       { return handlers.ScopeTenant }
+func (h *platformOnlyProbe) AllowedPartitions() []string { return nil }
 func (h *platformOnlyProbe) ExecuteRPC(
 	ctx context.Context,
 	_ *handlers.RPCRequest,
@@ -311,8 +311,8 @@ type stampingTenantValidator struct{}
 func (stampingTenantValidator) ValidateExecutionAuth(context.Context, ports.SecureHandler) error {
 	return nil
 }
-func (stampingTenantValidator) WithTenantID(ctx context.Context, tenantID string) context.Context {
-	return rpcscope.WithAuthenticatedScope(ctx, rpcscope.AxisTransportPinned, tenantID)
+func (stampingTenantValidator) WithTenantID(ctx context.Context, partitionID string) context.Context {
+	return rpcscope.WithAuthenticatedScope(ctx, rpcscope.AxisTransportPinned, partitionID)
 }
 func (stampingTenantValidator) WithAuthenticatedPrincipal(
 	ctx context.Context,
@@ -329,7 +329,7 @@ func (stampingTenantValidator) WithAuthenticatedPrincipal(
 // calls WithTenantID, so the platform axis stays empty and the platform-scoped
 // handler is DENIED (calls==0). Restoring the deleted
 // `else if tid := req.Context["tenantId"]; tid != "" { WithTenantID }` branch turns
-// this RED: WithTenantID stamps the platform tenant and the handler is invoked.
+// this RED: WithTenantID stamps the platform partition and the handler is invoked.
 func TestRPCServerRejectsWireTenantWithoutAuthenticatedTransport(t *testing.T) {
 	registry := handlers.NewHandlerRegistry()
 	registry.SetPresencePolicy(customerScopePolicy())
@@ -340,7 +340,7 @@ func TestRPCServerRejectsWireTenantWithoutAuthenticatedTransport(t *testing.T) {
 	server := NewRPCServer(registry)
 	server.SetAuthValidator(stampingTenantValidator{})
 
-	// Deliberately NO handlers.WithTransportPartition: the only tenant signal is the
+	// Deliberately NO handlers.WithTransportPartition: the only partition signal is the
 	// mutable req.Context map, which must never establish authority.
 	req := &pb.RPCRequest{
 		Id:      "wire-tenant-no-transport",

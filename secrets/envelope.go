@@ -14,7 +14,7 @@ import (
 )
 
 // TopicPrefix is the swarm topic family carrying sealed role config bundles,
-// alongside the existing agent.keys.<tenant> / agent.network-psk.<tenant>.<epoch>
+// alongside the existing agent.keys.<partition> / agent.network-psk.<partition>.<epoch>
 // taxonomy.
 const TopicPrefix = "role.secrets."
 

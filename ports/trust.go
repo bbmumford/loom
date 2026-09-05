@@ -32,14 +32,14 @@ const (
 // shadow migration: no record may affect roles, reachability, routing,
 // handlers, anchor snapshots, or secret recipients before passing it.
 //
-// It is rooted in configured tenant/anchor identity and explicit role
+// It is rooted in configured partition/anchor identity and explicit role
 // entitlement. It explicitly does NOT derive from self-advertised state:
 // RoleTable.IsAnchorWithPubKey (the current observer gate) is a
 // compatibility filter, not a trust root — an attacker advertising a role
 // must never become a secret recipient or an accepted observer through it.
 //
 // Every method returns nil to allow and a non-nil error to deny; ambiguity
-// (unknown key, unknown tenant, missing entitlement data) DENIES.
+// (unknown key, unknown partition, missing entitlement data) DENIES.
 type TrustPolicy interface {
 	// VerifyNodeKey checks NodeID == DeriveNodeID(pub) and that the key is
 	// not revoked. Signature verification against a record's embedded key

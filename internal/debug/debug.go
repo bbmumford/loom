@@ -119,7 +119,7 @@ func (l *Logger) Printf(format string, args ...interface{}) {
 	if !l.isEnabled() {
 		return
 	}
-	
+
 	msg := fmt.Sprintf(format, args...)
 	l.logger.Printf("[DEBUG:%s] %s", l.namespace, msg)
 }
@@ -129,7 +129,7 @@ func (l *Logger) Println(args ...interface{}) {
 	if !l.isEnabled() {
 		return
 	}
-	
+
 	msg := fmt.Sprint(args...)
 	l.logger.Printf("[DEBUG:%s] %s", l.namespace, msg)
 }
@@ -199,7 +199,7 @@ func (l *Logger) Benchmark(name string, start time.Time) {
 	if !l.isEnabled() {
 		return
 	}
-	
+
 	elapsed := time.Since(start)
 	l.Printf("[BENCHMARK] %s took %v", name, elapsed)
 }
@@ -209,10 +209,10 @@ func (l *Logger) Trace(funcName string) func() {
 	if !l.isEnabled() {
 		return func() {}
 	}
-	
+
 	start := time.Now()
 	l.Printf("[TRACE] → %s", funcName)
-	
+
 	return func() {
 		l.Printf("[TRACE] ← %s (duration: %v)", funcName, time.Since(start))
 	}

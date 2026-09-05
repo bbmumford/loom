@@ -35,7 +35,7 @@ type AuthenticatedIdentity struct {
 	Subject string
 	// partition is the opaque server-established partition scope ("whose data") a
 	// store selector keys on. loom stores and returns it without interpreting it:
-	// it carries no notion of owner, customer, org, or tenant — it is an opaque
+	// it carries no notion of owner, customer, org, or partition — it is an opaque
 	// string the consuming project's injected identity policy (the trusted ingress
 	// that resolved it) sets via WithPartition. A store selects on this value with
 	// exact-match, deny-before-read.
