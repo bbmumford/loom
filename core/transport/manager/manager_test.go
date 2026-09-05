@@ -159,8 +159,8 @@ func TestDial_RoutesToCorrectTransport(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dial: %v", err)
 	}
-	if sess.TenantID() != "tenant-a" {
-		t.Errorf("tenant = %q, want %q", sess.TenantID(), "tenant-a")
+	if sess.PartitionID() != "tenant-a" {
+		t.Errorf("tenant = %q, want %q", sess.PartitionID(), "tenant-a")
 	}
 	if sess.RemoteNodeID() != "vl1_test" {
 		t.Errorf("remote = %q, want %q", sess.RemoteNodeID(), "vl1_test")
@@ -195,7 +195,7 @@ func TestListTenants(t *testing.T) {
 	mgr.Register("beta", &mockTransport{})
 	mgr.Register("gamma", &mockTransport{})
 
-	ids := mgr.ListTenants()
+	ids := mgr.ListPartitions()
 	if len(ids) != 3 {
 		t.Errorf("len = %d, want 3", len(ids))
 	}
@@ -284,7 +284,7 @@ func TestConcurrentAccess(t *testing.T) {
 			tid := aether.ScopeID(fmt.Sprintf("t-%d", n))
 			mgr.Register(tid, &mockTransport{})
 			mgr.Get(tid)
-			mgr.ListTenants()
+			mgr.ListPartitions()
 			mgr.Count()
 		}(i)
 	}
@@ -299,8 +299,8 @@ func TestPartitionSession_Wrap(t *testing.T) {
 	inner := &mockSession{nodeID: "vl1_abc"}
 	sess := WrapSession(inner, "my-tenant")
 
-	if sess.TenantID() != "my-tenant" {
-		t.Errorf("tenant = %q, want %q", sess.TenantID(), "my-tenant")
+	if sess.PartitionID() != "my-tenant" {
+		t.Errorf("tenant = %q, want %q", sess.PartitionID(), "my-tenant")
 	}
 	if sess.RemoteNodeID() != "vl1_abc" {
 		t.Errorf("remote = %q, want %q", sess.RemoteNodeID(), "vl1_abc")

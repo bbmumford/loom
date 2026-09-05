@@ -180,7 +180,7 @@ func TestSharedTransport_Dial_UnknownTenant(t *testing.T) {
 	}
 
 	// Dial with unknown tenant in context
-	ctx := WithTenantID(context.Background(), "unknown-tenant")
+	ctx := WithPartitionID(context.Background(), "unknown-tenant")
 	_, err = st.Dial(ctx, aether.Target{
 		NodeID:  "test-node",
 		Address: "127.0.0.1:9999",

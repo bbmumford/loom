@@ -2913,13 +2913,13 @@ func (rt *Runtime) dialNoiseUDP(ctx context.Context, target aether.Target) (aeth
 			if i < len(rt.listenTenantIDs) && rt.listenTenantIDs[i] != "" {
 				tenantID = rt.listenTenantIDs[i]
 			}
-			// If tenant ID is empty (shared transport resolves from session),
-			// use the first configured tenant from the transport manager
+			// A shared transport resolves the partition from the session, so it
+			// leaves this empty; fall back to the first configured partition.
 			if tenantID == "" && len(rt.cfg.Tenants) > 0 {
 				tenantID = rt.cfg.Tenants[0].TenantID
 			}
 			if tenantID != "" {
-				dialCtx = manager.WithTenantID(dialCtx, aether.ScopeID(tenantID))
+				dialCtx = manager.WithPartitionID(dialCtx, aether.ScopeID(tenantID))
 			}
 		}
 

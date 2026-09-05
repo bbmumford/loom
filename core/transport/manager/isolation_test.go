@@ -234,11 +234,11 @@ func TestInfrastructureServesAllTenants(t *testing.T) {
 	defer sessB.Close()
 
 	// Verify client-side PartitionSession wrappers carry correct tenant IDs.
-	if sessA.TenantID() != "tenant-a" {
-		t.Errorf("sessA.TenantID() = %q, want %q", sessA.TenantID(), "tenant-a")
+	if sessA.PartitionID() != "tenant-a" {
+		t.Errorf("sessA.PartitionID() = %q, want %q", sessA.PartitionID(), "tenant-a")
 	}
-	if sessB.TenantID() != "tenant-b" {
-		t.Errorf("sessB.TenantID() = %q, want %q", sessB.TenantID(), "tenant-b")
+	if sessB.PartitionID() != "tenant-b" {
+		t.Errorf("sessB.PartitionID() = %q, want %q", sessB.PartitionID(), "tenant-b")
 	}
 
 	// Wait for both accepts to complete.
