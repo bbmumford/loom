@@ -16,7 +16,7 @@ type BaseHandler struct {
 	role            string
 	requiresAuth    bool
 	requiredScopes  []string
-	tenantScope     Scope
+	scope           Scope
 	executeRPCFunc  func(ctx context.Context, req *RPCRequest) (*RPCResponse, error)
 	executeTaskFunc func(ctx context.Context, task *Task) (*TaskResult, error)
 	validateFunc    func(req interface{}) error
@@ -28,7 +28,7 @@ type BaseHandlerConfig struct {
 	Role           string
 	RequiresAuth   bool
 	RequiredScopes []string
-	Scope    Scope
+	Scope          Scope
 	ExecuteRPC     func(ctx context.Context, req *RPCRequest) (*RPCResponse, error)
 	ExecuteTask    func(ctx context.Context, task *Task) (*TaskResult, error)
 	Validate       func(req interface{}) error
@@ -41,7 +41,7 @@ func NewBaseHandler(cfg BaseHandlerConfig) *BaseHandler {
 		role:            cfg.Role,
 		requiresAuth:    cfg.RequiresAuth,
 		requiredScopes:  cfg.RequiredScopes,
-		tenantScope:     cfg.Scope,
+		scope:           cfg.Scope,
 		executeRPCFunc:  cfg.ExecuteRPC,
 		executeTaskFunc: cfg.ExecuteTask,
 		validateFunc:    cfg.Validate,
@@ -63,7 +63,8 @@ func (h *BaseHandler) RequiresAuth() bool {
 	return h.requiresAuth
 }
 
-// Scopes returns required scopes (was previously named RequiredScopes in interface)
+// Scopes returns the scope strings a caller must hold, never nil so a caller
+// can range over the result without a length check.
 func (h *BaseHandler) Scopes() []string {
 	if h.requiredScopes == nil {
 		return []string{}
@@ -76,22 +77,20 @@ func (h *BaseHandler) AllowedAuthTypes() []string {
 	return []string{} // Default: any auth type if RequiresAuth is true
 }
 
-// Scope returns the required tenant isolation level. The zero value is
-// intentionally invalid: BaseHandler users must declare a tier in
-// BaseHandlerConfig, including ScopeNone for a deliberate public opt-out.
+// Scope returns the opaque scope label this handler declares. The zero value is
+// intentionally invalid so that omitting Scope in BaseHandlerConfig is rejected
+// at registration rather than read as "no scope required"; a deliberately public
+// handler declares ScopeNone.
 //
-// handlers.Scope and rpc.ScopeTag are the SAME type identity —
-// both alias the canonical declaration in rpc/scope. A handler may override
-// with either the handlers.Scope* or rpc.Scope* spelling (canonical,
-// includes Profile) constant set; they are literally the same values with
-// two names during the migration. See rpc/scope/tenantscope.go for the
-// canonical enum and finding rev-069 for the rationale.
+// handlers.Scope and rpc.ScopeTag are the same type identity — both alias the
+// single declaration in pkg/rpc/scope/scopetag.go, so the handlers.Scope* and
+// rpc.Scope* constants are interchangeable values and cannot drift.
 func (h *BaseHandler) Scope() Scope {
-	return h.tenantScope
+	return h.scope
 }
 
-// AllowedPartitions returns an optional tenant whitelist.
-// Default: empty (all tenants allowed).
+// AllowedPartitions returns an optional partition allow-list. Empty means the
+// scope label alone governs, without narrowing to named partitions.
 func (h *BaseHandler) AllowedPartitions() []string {
 	return nil
 }

@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"strings"
 
-	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // rpcContextKey is the typed key used to stamp the RPCRequest.Context map
@@ -111,7 +111,7 @@ func OrgFromContext(ctx context.Context) string {
 // EnforceScope. It aliases the leaf scope package so the legacy handlers
 // registry and this package consume the same value and evaluator without an
 // import cycle.
-type AuthenticatedScopeIdentity = tenantScope.AuthenticatedIdentity
+type AuthenticatedScopeIdentity = rpcscope.AuthenticatedIdentity
 
 // WithAuthenticatedScopeIdentity stamps one complete authenticated identity
 // snapshot. Only trusted transport/session/product adapters may call this:
@@ -120,12 +120,12 @@ func WithAuthenticatedScopeIdentity(
 	ctx context.Context,
 	identity AuthenticatedScopeIdentity,
 ) context.Context {
-	return tenantScope.WithAuthenticatedIdentity(ctx, identity)
+	return rpcscope.WithAuthenticatedIdentity(ctx, identity)
 }
 
 // AuthenticatedScopeIdentityFromContext reads the typed scope identity.
 func AuthenticatedScopeIdentityFromContext(ctx context.Context) AuthenticatedScopeIdentity {
-	return tenantScope.AuthenticatedIdentityFromContext(ctx)
+	return rpcscope.AuthenticatedIdentityFromContext(ctx)
 }
 
 // OpClassFromContext extracts opClass (set by the caller via
@@ -161,7 +161,7 @@ func ParseScopes(raw string) []string {
 // should use errors.Is at boundaries (e.g. HTTP bridge → 403, server-side
 // dispatch → 403 wire error). The wrapping error includes the FQN +
 // offending fields for diagnostic logging.
-var ErrScopeDenied = tenantScope.ErrDenied
+var ErrScopeDenied = rpcscope.ErrDenied
 
 // EnforceScope rejects calls whose ctx fails the handler's declared
 // Scope. loom itself decides only three things and delegates the rest:
@@ -183,7 +183,7 @@ var ErrScopeDenied = tenantScope.ErrDenied
 // keep the 3-arg form). When a handler declares a Requirement it is judged by
 // that authorizer, not its Scope tag; a caller that supplies none, or a nil one,
 // fails a Requirement-bearing handler CLOSED (symmetric to a nil PresencePolicy).
-func EnforceScope(ctx context.Context, h *Handler, policy tenantScope.PresencePolicy, authz ...*tenantScope.Policy) error {
+func EnforceScope(ctx context.Context, h *Handler, policy rpcscope.PresencePolicy, authz ...*rpcscope.Policy) error {
 	if h == nil {
 		return fmt.Errorf("%w: nil handler", ErrScopeDenied)
 	}
@@ -191,14 +191,14 @@ func EnforceScope(ctx context.Context, h *Handler, policy tenantScope.PresencePo
 	// a Requirement. A nil Requirement (the zero value) falls through to the Scope
 	// path below, so this is behavior-preserving until handlers populate it.
 	if h.Requirement != nil {
-		var az *tenantScope.Policy
+		var az *rpcscope.Policy
 		if len(authz) > 0 {
 			az = authz[0]
 		}
 		if az == nil {
 			return fmt.Errorf("%w: handler %s declares a Requirement but no authorization policy is configured", ErrScopeDenied, h.FQN())
 		}
-		if ok, reason := az.Authorize(*h.Requirement, tenantScope.PrincipalForEnforcement(ctx)); !ok {
+		if ok, reason := az.Authorize(*h.Requirement, rpcscope.PrincipalForEnforcement(ctx)); !ok {
 			return fmt.Errorf("%w: handler %s denied by authorization policy: %s", ErrScopeDenied, h.FQN(), reason)
 		}
 		return nil
@@ -206,7 +206,7 @@ func EnforceScope(ctx context.Context, h *Handler, policy tenantScope.PresencePo
 	if h.Scope == ScopeNone {
 		return nil
 	}
-	if h.Scope == tenantScope.ScopeUnset {
+	if h.Scope == rpcscope.ScopeUnset {
 		return fmt.Errorf("%w: handler %s has an undeclared scope (ScopeUnset) — declare a scope tier explicitly", ErrScopeDenied, h.FQN())
 	}
 	if policy == nil {
@@ -214,7 +214,7 @@ func EnforceScope(ctx context.Context, h *Handler, policy tenantScope.PresencePo
 		// handler that opted into enforcement.
 		return fmt.Errorf("%w: handler %s requires a presence policy but none is configured", ErrScopeDenied, h.FQN())
 	}
-	ok, reason := policy.CheckPresence(h.Scope, tenantScope.AuthenticatedIdentityFromContext(ctx))
+	ok, reason := policy.CheckPresence(h.Scope, rpcscope.AuthenticatedIdentityFromContext(ctx))
 	if !ok {
 		return fmt.Errorf("%w: handler %s denied by presence policy: %s", ErrScopeDenied, h.FQN(), reason)
 	}

@@ -23,7 +23,7 @@ import (
 	"github.com/bbmumford/loom/internal/securityctx"
 	"github.com/bbmumford/loom/node/handlers"
 	"github.com/bbmumford/loom/pkg/rpc"
-	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/pkg/trace"
 	"github.com/bbmumford/loom/ports"
 )
@@ -783,12 +783,12 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 	// Reconstruct the opaque identity generically from the wire axes — aether
 	// named none — dropping any axis with an empty name or value (an absent axis
 	// must stay absent, never a "" presence). The subject travels in Subject.
-	axes := make([]tenantScope.ScopeValue, 0, len(wire.Axes))
+	axes := make([]rpcscope.ScopeValue, 0, len(wire.Axes))
 	for _, a := range wire.Axes {
 		if a.GetName() == "" || a.GetValue() == "" {
 			continue
 		}
-		axes = append(axes, tenantScope.ScopeValue{Name: a.GetName(), Value: a.GetValue()})
+		axes = append(axes, rpcscope.ScopeValue{Name: a.GetName(), Value: a.GetValue()})
 	}
 
 	// Cross-tenant forge gate: the consuming project names which axis pins
@@ -823,15 +823,15 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 		)
 	}
 
-	identity, err := tenantScope.NewCompleteIdentity(wire.Subject, axes...)
+	identity, err := rpcscope.NewCompleteIdentity(wire.Subject, axes...)
 	if err != nil {
 		return ctx, err
 	}
-	principal, err := tenantScope.NewAuthenticatedPrincipal(identity, wire.Scopes)
+	principal, err := rpcscope.NewAuthenticatedPrincipal(identity, wire.Scopes)
 	if err != nil {
 		return ctx, err
 	}
-	ctx = tenantScope.WithAuthenticatedPrincipal(ctx, principal)
+	ctx = rpcscope.WithAuthenticatedPrincipal(ctx, principal)
 	if stamper, ok := s.authValidator.(ports.AuthenticatedPrincipalStamper); ok {
 		ctx = stamper.WithAuthenticatedPrincipal(ctx, principal)
 	}

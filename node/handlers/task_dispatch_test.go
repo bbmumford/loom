@@ -11,7 +11,7 @@ import (
 	"reflect"
 	"testing"
 
-	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 type taskDispatchProbe struct {
@@ -133,7 +133,7 @@ func TestTaskScopeIgnoresMetadataIdentityHints(t *testing.T) {
 		t.Fatalf("denied task reached handler/middleware: calls=%d events=%v", calls, events)
 	}
 
-	exact := tenantScope.WithAuthenticatedIdentity(platformOnly, scopeIdentity("orbtr", "org-1", "user-1"))
+	exact := rpcscope.WithAuthenticatedIdentity(platformOnly, scopeIdentity("orbtr", "org-1", "user-1"))
 	result, err = registry.DispatchTask(exact, task)
 	if err != nil || result == nil || result.Status != TaskStatusCompleted {
 		t.Fatalf("exact authenticated DispatchTask=(%+v, %v)", result, err)

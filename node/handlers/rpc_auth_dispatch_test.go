@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/ports"
 )
 
@@ -134,7 +134,7 @@ func TestAuthenticatedRPCScopeIgnoresRequestIdentityHints(t *testing.T) {
 		t.Fatalf("middleware ran before scope denial: %v", events)
 	}
 
-	exact := tenantScope.WithAuthenticatedIdentity(platformOnly, scopeIdentity("orbtr", "org-1", "user-1"))
+	exact := rpcscope.WithAuthenticatedIdentity(platformOnly, scopeIdentity("orbtr", "org-1", "user-1"))
 	resp, err = registry.DispatchRPCWithAuth(exact, req, auth)
 	if err != nil || resp == nil || !resp.Success {
 		t.Fatalf("exact authenticated DispatchRPCWithAuth=(%+v, %v)", resp, err)

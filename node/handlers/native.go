@@ -21,15 +21,15 @@ import (
 // The type parameters ensure compile-time type safety between the handler method
 // and the native Go types. The sender (mesh dispatch) must also use JSON.
 type NativeRPCWrapper[Req any, Resp any] struct {
-	name           string
-	role           string
-	auth           bool
-	authTypes      []string
-	scopes         []string
-	tenantScope    Scope
-	allowedTenants []string
-	handler        func(ctx context.Context, req Req) (Resp, error)
-	newRequest     func() Req
+	name              string
+	role              string
+	auth              bool
+	authTypes         []string
+	scopes            []string
+	scope             Scope
+	allowedPartitions []string
+	handler           func(ctx context.Context, req Req) (Resp, error)
+	newRequest        func() Req
 }
 
 // NewNativeRPCWrapper creates a NativeRPCWrapper with JSON serialization.
@@ -64,18 +64,18 @@ func (w *NativeRPCWrapper[Req, Resp]) WithAuth(required bool, authTypes []string
 // WithScope declares the handler's opaque scope label and the partition
 // allow-list enforcement consults. Returns self for chaining.
 func (w *NativeRPCWrapper[Req, Resp]) WithScope(scope Scope, allowed []string) *NativeRPCWrapper[Req, Resp] {
-	w.tenantScope = scope
-	w.allowedTenants = allowed
+	w.scope = scope
+	w.allowedPartitions = allowed
 	return w
 }
 
-func (w *NativeRPCWrapper[Req, Resp]) Name() string               { return w.name }
-func (w *NativeRPCWrapper[Req, Resp]) Role() string               { return w.role }
-func (w *NativeRPCWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
-func (w *NativeRPCWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.authTypes }
-func (w *NativeRPCWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
-func (w *NativeRPCWrapper[Req, Resp]) Scope() Scope         { return w.tenantScope }
-func (w *NativeRPCWrapper[Req, Resp]) AllowedPartitions() []string   { return w.allowedTenants }
+func (w *NativeRPCWrapper[Req, Resp]) Name() string                { return w.name }
+func (w *NativeRPCWrapper[Req, Resp]) Role() string                { return w.role }
+func (w *NativeRPCWrapper[Req, Resp]) RequiresAuth() bool          { return w.auth }
+func (w *NativeRPCWrapper[Req, Resp]) AllowedAuthTypes() []string  { return w.authTypes }
+func (w *NativeRPCWrapper[Req, Resp]) Scopes() []string            { return w.scopes }
+func (w *NativeRPCWrapper[Req, Resp]) Scope() Scope                { return w.scope }
+func (w *NativeRPCWrapper[Req, Resp]) AllowedPartitions() []string { return w.allowedPartitions }
 
 func (w *NativeRPCWrapper[Req, Resp]) ExecuteRPC(ctx context.Context, req *RPCRequest) (*RPCResponse, error) {
 	start := time.Now()
@@ -125,15 +125,15 @@ func (w *NativeRPCWrapper[Req, Resp]) ExecuteRPC(ctx context.Context, req *RPCRe
 
 // NativeTaskWrapper implements TaskHandler using JSON serialization and Go generics.
 type NativeTaskWrapper[Req any, Resp any] struct {
-	name           string
-	role           string
-	auth           bool
-	authTypes      []string
-	scopes         []string
-	tenantScope    Scope
-	allowedTenants []string
-	handler        func(ctx context.Context, req Req) (Resp, error)
-	newRequest     func() Req
+	name              string
+	role              string
+	auth              bool
+	authTypes         []string
+	scopes            []string
+	scope             Scope
+	allowedPartitions []string
+	handler           func(ctx context.Context, req Req) (Resp, error)
+	newRequest        func() Req
 }
 
 // NewNativeTaskWrapper creates a NativeTaskWrapper with JSON serialization.
@@ -162,18 +162,18 @@ func (w *NativeTaskWrapper[Req, Resp]) WithAuth(required bool, authTypes []strin
 // WithScope declares the handler's opaque scope label and the partition
 // allow-list enforcement consults. Returns self for chaining.
 func (w *NativeTaskWrapper[Req, Resp]) WithScope(scope Scope, allowed []string) *NativeTaskWrapper[Req, Resp] {
-	w.tenantScope = scope
-	w.allowedTenants = allowed
+	w.scope = scope
+	w.allowedPartitions = allowed
 	return w
 }
 
-func (w *NativeTaskWrapper[Req, Resp]) Name() string               { return w.name }
-func (w *NativeTaskWrapper[Req, Resp]) Role() string               { return w.role }
-func (w *NativeTaskWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
-func (w *NativeTaskWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.authTypes }
-func (w *NativeTaskWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
-func (w *NativeTaskWrapper[Req, Resp]) Scope() Scope         { return w.tenantScope }
-func (w *NativeTaskWrapper[Req, Resp]) AllowedPartitions() []string   { return w.allowedTenants }
+func (w *NativeTaskWrapper[Req, Resp]) Name() string                { return w.name }
+func (w *NativeTaskWrapper[Req, Resp]) Role() string                { return w.role }
+func (w *NativeTaskWrapper[Req, Resp]) RequiresAuth() bool          { return w.auth }
+func (w *NativeTaskWrapper[Req, Resp]) AllowedAuthTypes() []string  { return w.authTypes }
+func (w *NativeTaskWrapper[Req, Resp]) Scopes() []string            { return w.scopes }
+func (w *NativeTaskWrapper[Req, Resp]) Scope() Scope                { return w.scope }
+func (w *NativeTaskWrapper[Req, Resp]) AllowedPartitions() []string { return w.allowedPartitions }
 
 func (w *NativeTaskWrapper[Req, Resp]) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error) {
 	start := time.Now()

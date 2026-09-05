@@ -13,16 +13,16 @@ import (
 
 	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/bbmumford/loom/node/handlers"
-	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/ports"
 )
 
 // customerScopePolicy is a CONSUMER-side reference PresencePolicy admitting a
 // customer-org principal. loom no longer contains presence semantics — the
 // receive path reconstructs the opaque identity and this policy judges it.
-func customerScopePolicy() tenantScope.PresencePolicyFunc {
-	return func(declared handlers.Scope, id tenantScope.AuthenticatedIdentity) (bool, string) {
-		tenant := id.Scope(tenantScope.AxisTransportPinned)
+func customerScopePolicy() rpcscope.PresencePolicyFunc {
+	return func(declared handlers.Scope, id rpcscope.AuthenticatedIdentity) (bool, string) {
+		tenant := id.Scope(rpcscope.AxisTransportPinned)
 		switch declared {
 		case handlers.ScopeNone:
 			return true, ""
@@ -30,7 +30,7 @@ func customerScopePolicy() tenantScope.PresencePolicyFunc {
 			if tenant == "" {
 				return false, "authenticated platform tenant context required"
 			}
-			if id.Scope(tenantScope.AxisWithinTransport) == "" {
+			if id.Scope(rpcscope.AxisWithinTransport) == "" {
 				return false, "authenticated organisation context required"
 			}
 			return true, ""
@@ -45,7 +45,7 @@ func customerScopePolicy() tenantScope.PresencePolicyFunc {
 
 type customerPrincipalProbe struct {
 	calls int32
-	got   tenantScope.AuthenticatedPrincipal
+	got   rpcscope.AuthenticatedPrincipal
 }
 
 func (h *customerPrincipalProbe) Name() string               { return "orbtr.test.CustomerOrg" }
@@ -62,7 +62,7 @@ func (h *customerPrincipalProbe) ExecuteRPC(
 	_ *handlers.RPCRequest,
 ) (*handlers.RPCResponse, error) {
 	atomic.AddInt32(&h.calls, 1)
-	h.got, _ = tenantScope.AuthenticatedPrincipalFromContext(ctx)
+	h.got, _ = rpcscope.AuthenticatedPrincipalFromContext(ctx)
 	return &handlers.RPCResponse{Success: true}, nil
 }
 
@@ -79,16 +79,16 @@ func (customerPrincipalValidator) WithTenantID(ctx context.Context, _ string) co
 }
 func (customerPrincipalValidator) WithAuthenticatedPrincipal(
 	ctx context.Context,
-	principal tenantScope.AuthenticatedPrincipal,
+	principal rpcscope.AuthenticatedPrincipal,
 ) context.Context {
-	return tenantScope.WithAuthenticatedPrincipal(ctx, principal)
+	return rpcscope.WithAuthenticatedPrincipal(ctx, principal)
 }
 
 // TransportPinnedAxis names the platform-tenant axis as the one the RPC server
 // gates against the transport tenant (ports.TransportAxisPin) — the consumer
 // supplies the name; loom never hard-codes it.
 func (customerPrincipalValidator) TransportPinnedAxis() string {
-	return tenantScope.AxisTransportPinned
+	return rpcscope.AxisTransportPinned
 }
 
 func customerPrincipalRequest() *pb.RPCRequest {
@@ -98,8 +98,8 @@ func customerPrincipalRequest() *pb.RPCRequest {
 		Principal: &pb.AuthenticatedPrincipal{
 			Subject: "user-A",
 			Axes: []*pb.ScopeAxis{
-				{Name: tenantScope.AxisTransportPinned, Value: "orbtr"},
-				{Name: tenantScope.AxisWithinTransport, Value: "org-A"},
+				{Name: rpcscope.AxisTransportPinned, Value: "orbtr"},
+				{Name: rpcscope.AxisWithinTransport, Value: "org-A"},
 			},
 			Scopes: []string{"org.read", "org.write"},
 		},
@@ -125,8 +125,8 @@ func TestRPCServerBindsTypedPrincipalFromTenantTransport(t *testing.T) {
 	if got := atomic.LoadInt32(&probe.calls); got != 1 {
 		t.Fatalf("handler calls = %d", got)
 	}
-	if identity := probe.got.Identity(); identity.Scope(tenantScope.AxisTransportPinned) != "orbtr" ||
-		identity.Scope(tenantScope.AxisWithinTransport) != "org-A" ||
+	if identity := probe.got.Identity(); identity.Scope(rpcscope.AxisTransportPinned) != "orbtr" ||
+		identity.Scope(rpcscope.AxisWithinTransport) != "org-A" ||
 		identity.Subject != "user-A" {
 		t.Fatalf("handler identity = %#v", identity)
 	}
@@ -222,7 +222,7 @@ func TestRPCServerAdmitsWithinTenantCustomerOrg(t *testing.T) {
 	if !resp.Success {
 		t.Fatalf("within-tenant customer org denied (over-pin regression): %s", resp.Error)
 	}
-	if got := probe.got.Identity().Scope(tenantScope.AxisWithinTransport); got != "org-Z" {
+	if got := probe.got.Identity().Scope(rpcscope.AxisWithinTransport); got != "org-Z" {
 		t.Fatalf("customer-org axis round-trip = %q, want org-Z", got)
 	}
 }
@@ -312,13 +312,13 @@ func (stampingTenantValidator) ValidateExecutionAuth(context.Context, ports.Secu
 	return nil
 }
 func (stampingTenantValidator) WithTenantID(ctx context.Context, tenantID string) context.Context {
-	return tenantScope.WithAuthenticatedScope(ctx, tenantScope.AxisTransportPinned, tenantID)
+	return rpcscope.WithAuthenticatedScope(ctx, rpcscope.AxisTransportPinned, tenantID)
 }
 func (stampingTenantValidator) WithAuthenticatedPrincipal(
 	ctx context.Context,
-	principal tenantScope.AuthenticatedPrincipal,
+	principal rpcscope.AuthenticatedPrincipal,
 ) context.Context {
-	return tenantScope.WithAuthenticatedPrincipal(ctx, principal)
+	return rpcscope.WithAuthenticatedPrincipal(ctx, principal)
 }
 
 // TestRPCServerRejectsWireTenantWithoutAuthenticatedTransport is the mutation-

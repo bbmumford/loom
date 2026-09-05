@@ -20,15 +20,15 @@ import (
 // Generated code creates instances via NewRPCWrapper. The type parameters ensure
 // compile-time type safety between the handler method and the proto types.
 type GenericRPCWrapper[Req, Resp proto.Message] struct {
-	name           string
-	role           string
-	auth           bool
-	authTypes      []string
-	scopes         []string
-	tenantScope    Scope
-	allowedTenants []string
-	handler        func(ctx context.Context, req Req) (Resp, error)
-	newRequest     func() Req
+	name              string
+	role              string
+	auth              bool
+	authTypes         []string
+	scopes            []string
+	scope             Scope
+	allowedPartitions []string
+	handler           func(ctx context.Context, req Req) (Resp, error)
+	newRequest        func() Req
 }
 
 // NewRPCWrapper creates a GenericRPCWrapper with proto serialization.
@@ -63,18 +63,18 @@ func (w *GenericRPCWrapper[Req, Resp]) WithAuth(required bool, authTypes []strin
 // WithScope declares the handler's opaque scope label and the partition
 // allow-list enforcement consults. Returns self for chaining.
 func (w *GenericRPCWrapper[Req, Resp]) WithScope(scope Scope, allowed []string) *GenericRPCWrapper[Req, Resp] {
-	w.tenantScope = scope
-	w.allowedTenants = allowed
+	w.scope = scope
+	w.allowedPartitions = allowed
 	return w
 }
 
-func (w *GenericRPCWrapper[Req, Resp]) Name() string               { return w.name }
-func (w *GenericRPCWrapper[Req, Resp]) Role() string               { return w.role }
-func (w *GenericRPCWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
-func (w *GenericRPCWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.authTypes }
-func (w *GenericRPCWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
-func (w *GenericRPCWrapper[Req, Resp]) Scope() Scope         { return w.tenantScope }
-func (w *GenericRPCWrapper[Req, Resp]) AllowedPartitions() []string   { return w.allowedTenants }
+func (w *GenericRPCWrapper[Req, Resp]) Name() string                { return w.name }
+func (w *GenericRPCWrapper[Req, Resp]) Role() string                { return w.role }
+func (w *GenericRPCWrapper[Req, Resp]) RequiresAuth() bool          { return w.auth }
+func (w *GenericRPCWrapper[Req, Resp]) AllowedAuthTypes() []string  { return w.authTypes }
+func (w *GenericRPCWrapper[Req, Resp]) Scopes() []string            { return w.scopes }
+func (w *GenericRPCWrapper[Req, Resp]) Scope() Scope                { return w.scope }
+func (w *GenericRPCWrapper[Req, Resp]) AllowedPartitions() []string { return w.allowedPartitions }
 
 func (w *GenericRPCWrapper[Req, Resp]) ExecuteRPC(ctx context.Context, req *RPCRequest) (*RPCResponse, error) {
 	start := time.Now()
@@ -124,15 +124,15 @@ func (w *GenericRPCWrapper[Req, Resp]) ExecuteRPC(ctx context.Context, req *RPCR
 
 // GenericTaskWrapper implements TaskHandler using proto serialization and Go generics.
 type GenericTaskWrapper[Req proto.Message, Resp proto.Message] struct {
-	name           string
-	role           string
-	auth           bool
-	authTypes      []string
-	scopes         []string
-	tenantScope    Scope
-	allowedTenants []string
-	handler        func(ctx context.Context, req Req) (Resp, error)
-	newRequest     func() Req
+	name              string
+	role              string
+	auth              bool
+	authTypes         []string
+	scopes            []string
+	scope             Scope
+	allowedPartitions []string
+	handler           func(ctx context.Context, req Req) (Resp, error)
+	newRequest        func() Req
 }
 
 // NewTaskWrapper creates a GenericTaskWrapper with proto serialization.
@@ -161,18 +161,18 @@ func (w *GenericTaskWrapper[Req, Resp]) WithAuth(required bool, authTypes []stri
 // WithScope declares the handler's opaque scope label and the partition
 // allow-list enforcement consults. Returns self for chaining.
 func (w *GenericTaskWrapper[Req, Resp]) WithScope(scope Scope, allowed []string) *GenericTaskWrapper[Req, Resp] {
-	w.tenantScope = scope
-	w.allowedTenants = allowed
+	w.scope = scope
+	w.allowedPartitions = allowed
 	return w
 }
 
-func (w *GenericTaskWrapper[Req, Resp]) Name() string               { return w.name }
-func (w *GenericTaskWrapper[Req, Resp]) Role() string               { return w.role }
-func (w *GenericTaskWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
-func (w *GenericTaskWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.authTypes }
-func (w *GenericTaskWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
-func (w *GenericTaskWrapper[Req, Resp]) Scope() Scope         { return w.tenantScope }
-func (w *GenericTaskWrapper[Req, Resp]) AllowedPartitions() []string   { return w.allowedTenants }
+func (w *GenericTaskWrapper[Req, Resp]) Name() string                { return w.name }
+func (w *GenericTaskWrapper[Req, Resp]) Role() string                { return w.role }
+func (w *GenericTaskWrapper[Req, Resp]) RequiresAuth() bool          { return w.auth }
+func (w *GenericTaskWrapper[Req, Resp]) AllowedAuthTypes() []string  { return w.authTypes }
+func (w *GenericTaskWrapper[Req, Resp]) Scopes() []string            { return w.scopes }
+func (w *GenericTaskWrapper[Req, Resp]) Scope() Scope                { return w.scope }
+func (w *GenericTaskWrapper[Req, Resp]) AllowedPartitions() []string { return w.allowedPartitions }
 
 func (w *GenericTaskWrapper[Req, Resp]) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error) {
 	start := time.Now()
