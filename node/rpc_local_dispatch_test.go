@@ -34,7 +34,7 @@ import (
 type rpcOnlyHandler struct {
 	name   string
 	role   string
-	scope  handlers.TenantScope
+	scope  handlers.Scope
 	ran    bool
 	result []byte
 }
@@ -49,8 +49,8 @@ func (h *rpcOnlyHandler) Role() string {
 func (h *rpcOnlyHandler) RequiresAuth() bool          { return false }
 func (h *rpcOnlyHandler) AllowedAuthTypes() []string  { return nil }
 func (h *rpcOnlyHandler) Scopes() []string            { return nil }
-func (h *rpcOnlyHandler) Scope() handlers.TenantScope { return h.scope }
-func (h *rpcOnlyHandler) AllowedTenants() []string    { return nil }
+func (h *rpcOnlyHandler) Scope() handlers.Scope { return h.scope }
+func (h *rpcOnlyHandler) AllowedPartitions() []string    { return nil }
 
 func (h *rpcOnlyHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	h.ran = true
@@ -68,8 +68,8 @@ func (h *taskOnlyHandler) Role() string                { return "system" }
 func (h *taskOnlyHandler) RequiresAuth() bool          { return false }
 func (h *taskOnlyHandler) AllowedAuthTypes() []string  { return nil }
 func (h *taskOnlyHandler) Scopes() []string            { return nil }
-func (h *taskOnlyHandler) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *taskOnlyHandler) AllowedTenants() []string    { return nil }
+func (h *taskOnlyHandler) Scope() handlers.Scope { return handlers.ScopeNone }
+func (h *taskOnlyHandler) AllowedPartitions() []string    { return nil }
 
 func (h *taskOnlyHandler) ExecuteTask(ctx context.Context, t *handlers.Task) (*handlers.TaskResult, error) {
 	return &handlers.TaskResult{TaskID: t.ID}, nil
@@ -104,7 +104,7 @@ func TestHasHandlerRejectsATaskOnlyHandlerSoTheCallFallsThroughToTheMesh(t *test
 // local call needlessly crosses the wire.
 func TestHasHandlerAcceptsARealRPCHandler(t *testing.T) {
 	reg := handlers.NewHandlerRegistry()
-	if err := reg.RegisterRPC(&rpcOnlyHandler{name: "orbtr.io.x.Real", scope: handlers.TenantScopeNone}); err != nil {
+	if err := reg.RegisterRPC(&rpcOnlyHandler{name: "orbtr.io.x.Real", scope: handlers.ScopeNone}); err != nil {
 		t.Fatalf("RegisterRPC: %v", err)
 	}
 	a := &localDispatcherAdapter{registry: reg}
@@ -168,7 +168,7 @@ func TestTheNilGuardsFailClosed(t *testing.T) {
 // which does exactly that — so it is not hypothetical in this codebase.
 func TestDispatchBytesEnforcesTenantScopeJustLikeARemoteCall(t *testing.T) {
 	reg := handlers.NewHandlerRegistry()
-	h := &rpcOnlyHandler{name: "orbtr.io.x.TenantScoped", scope: handlers.TenantScopeTenant}
+	h := &rpcOnlyHandler{name: "orbtr.io.x.TenantScoped", scope: handlers.ScopeTenant}
 	if err := reg.RegisterRPC(h); err != nil {
 		t.Fatalf("RegisterRPC: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestDispatchBytesEnforcesTenantScopeJustLikeARemoteCall(t *testing.T) {
 // test above passes against a DispatchBytes that refuses everything.
 func TestDispatchBytesReturnsThePayloadOfAnUnscopedHandler(t *testing.T) {
 	reg := handlers.NewHandlerRegistry()
-	h := &rpcOnlyHandler{name: "orbtr.io.x.Open", scope: handlers.TenantScopeNone, result: []byte("pong")}
+	h := &rpcOnlyHandler{name: "orbtr.io.x.Open", scope: handlers.ScopeNone, result: []byte("pong")}
 	if err := reg.RegisterRPC(h); err != nil {
 		t.Fatalf("RegisterRPC: %v", err)
 	}
@@ -239,8 +239,8 @@ func (h *failingHandler) Role() string                { return "system" }
 func (h *failingHandler) RequiresAuth() bool          { return false }
 func (h *failingHandler) AllowedAuthTypes() []string  { return nil }
 func (h *failingHandler) Scopes() []string            { return nil }
-func (h *failingHandler) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *failingHandler) AllowedTenants() []string    { return nil }
+func (h *failingHandler) Scope() handlers.Scope { return handlers.ScopeNone }
+func (h *failingHandler) AllowedPartitions() []string    { return nil }
 func (h *failingHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	return &handlers.RPCResponse{ID: req.ID, Success: false, Error: "handler said no"}, nil
 }
@@ -255,7 +255,7 @@ var _ handlers.RPCHandler = (*failingHandler)(nil)
 // would go out over the mesh, which is slower but not obviously broken.
 func TestInstallLocalDispatcherBindsTheRegistryItWasHanded(t *testing.T) {
 	reg := handlers.NewHandlerRegistry()
-	if err := reg.RegisterRPC(&rpcOnlyHandler{name: "orbtr.io.x.Installed", scope: handlers.TenantScopeNone}); err != nil {
+	if err := reg.RegisterRPC(&rpcOnlyHandler{name: "orbtr.io.x.Installed", scope: handlers.ScopeNone}); err != nil {
 		t.Fatalf("RegisterRPC: %v", err)
 	}
 

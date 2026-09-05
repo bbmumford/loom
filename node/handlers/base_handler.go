@@ -16,7 +16,7 @@ type BaseHandler struct {
 	role            string
 	requiresAuth    bool
 	requiredScopes  []string
-	tenantScope     TenantScope
+	tenantScope     Scope
 	executeRPCFunc  func(ctx context.Context, req *RPCRequest) (*RPCResponse, error)
 	executeTaskFunc func(ctx context.Context, task *Task) (*TaskResult, error)
 	validateFunc    func(req interface{}) error
@@ -28,7 +28,7 @@ type BaseHandlerConfig struct {
 	Role           string
 	RequiresAuth   bool
 	RequiredScopes []string
-	TenantScope    TenantScope
+	Scope    Scope
 	ExecuteRPC     func(ctx context.Context, req *RPCRequest) (*RPCResponse, error)
 	ExecuteTask    func(ctx context.Context, task *Task) (*TaskResult, error)
 	Validate       func(req interface{}) error
@@ -41,7 +41,7 @@ func NewBaseHandler(cfg BaseHandlerConfig) *BaseHandler {
 		role:            cfg.Role,
 		requiresAuth:    cfg.RequiresAuth,
 		requiredScopes:  cfg.RequiredScopes,
-		tenantScope:     cfg.TenantScope,
+		tenantScope:     cfg.Scope,
 		executeRPCFunc:  cfg.ExecuteRPC,
 		executeTaskFunc: cfg.ExecuteTask,
 		validateFunc:    cfg.Validate,
@@ -76,23 +76,23 @@ func (h *BaseHandler) AllowedAuthTypes() []string {
 	return []string{} // Default: any auth type if RequiresAuth is true
 }
 
-// TenantScope returns the required tenant isolation level. The zero value is
+// Scope returns the required tenant isolation level. The zero value is
 // intentionally invalid: BaseHandler users must declare a tier in
-// BaseHandlerConfig, including TenantScopeNone for a deliberate public opt-out.
+// BaseHandlerConfig, including ScopeNone for a deliberate public opt-out.
 //
-// handlers.TenantScope and rpc.TenantScope are now the SAME type identity —
+// handlers.Scope and rpc.ScopeTag are the SAME type identity —
 // both alias the canonical declaration in rpc/scope. A handler may override
-// with either the handlers.TenantScope* (legacy) or rpc.Scope* (canonical,
+// with either the handlers.Scope* or rpc.Scope* spelling (canonical,
 // includes Profile) constant set; they are literally the same values with
 // two names during the migration. See rpc/scope/tenantscope.go for the
 // canonical enum and finding rev-069 for the rationale.
-func (h *BaseHandler) Scope() TenantScope {
+func (h *BaseHandler) Scope() Scope {
 	return h.tenantScope
 }
 
-// AllowedTenants returns an optional tenant whitelist.
+// AllowedPartitions returns an optional tenant whitelist.
 // Default: empty (all tenants allowed).
-func (h *BaseHandler) AllowedTenants() []string {
+func (h *BaseHandler) AllowedPartitions() []string {
 	return nil
 }
 

@@ -97,7 +97,7 @@ func idAxes(tenant, org, user string) rpc.AuthenticatedScopeIdentity {
 
 // stubHandler builds a registry handler with the given scope. Func echoes
 // the request back as the response.
-func stubHandler(scope rpc.TenantScope) rpc.Handler {
+func stubHandler(scope rpc.ScopeTag) rpc.Handler {
 	return rpc.Handler{
 		Namespace: "test",
 		Domain:    "rev081",
@@ -235,7 +235,7 @@ func TestExecuteLocal_ScopeOrg_IgnoresMutableWireHints(t *testing.T) {
 // nil policy denies. A gateway that proxies scoped handlers must install a
 // policy.
 func TestExecuteProxy_NilPolicy_FailsClosed(t *testing.T) {
-	for _, s := range []rpc.TenantScope{rpc.ScopePlatform, rpc.ScopeTenant, rpc.ScopeOrg} {
+	for _, s := range []rpc.ScopeTag{rpc.ScopePlatform, rpc.ScopeTenant, rpc.ScopeOrg} {
 		reg := rpc.NewRegistry() // no SetPresencePolicy → nil policy
 		h := rpc.Handler{
 			Namespace: "test",

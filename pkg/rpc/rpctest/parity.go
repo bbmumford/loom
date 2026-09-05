@@ -81,7 +81,7 @@ func AssertRegisterTypesParity(
 	// Build FQN -> Scope map from the registered handlers. Also assert
 	// each has a non-nil Func — a nil Func here means the caller wired
 	// Register incorrectly (e.g. typeStubs / funcsByOp keys drifted).
-	registered := make(map[string]rpc.TenantScope, reg.Count())
+	registered := make(map[string]rpc.ScopeTag, reg.Count())
 	for _, hh := range reg.All() {
 		registered[hh.FQN()] = hh.Scope
 		if hh.Func == nil {
@@ -91,7 +91,7 @@ func AssertRegisterTypesParity(
 
 	// Build FQN -> Scope map from Types(). Reject duplicates and any
 	// non-nil Func (proxy-registration contract requires Func-free).
-	typesMap := make(map[string]rpc.TenantScope)
+	typesMap := make(map[string]rpc.ScopeTag)
 	for _, hh := range types() {
 		fqn := hh.FQN()
 		if _, dup := typesMap[fqn]; dup {

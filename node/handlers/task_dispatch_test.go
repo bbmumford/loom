@@ -17,7 +17,7 @@ import (
 type taskDispatchProbe struct {
 	name         string
 	requiresAuth bool
-	scope        TenantScope
+	scope        Scope
 	run          func(context.Context, *Task) (*TaskResult, error)
 }
 
@@ -26,13 +26,13 @@ func (h *taskDispatchProbe) Role() string               { return "task-dispatch-
 func (h *taskDispatchProbe) RequiresAuth() bool         { return h.requiresAuth }
 func (h *taskDispatchProbe) AllowedAuthTypes() []string { return nil }
 func (h *taskDispatchProbe) Scopes() []string           { return nil }
-func (h *taskDispatchProbe) Scope() TenantScope {
+func (h *taskDispatchProbe) Scope() Scope {
 	if h.scope == "" {
-		return TenantScopeNone
+		return ScopeNone
 	}
 	return h.scope
 }
-func (h *taskDispatchProbe) AllowedTenants() []string { return nil }
+func (h *taskDispatchProbe) AllowedPartitions() []string { return nil }
 func (h *taskDispatchProbe) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error) {
 	return h.run(ctx, task)
 }
@@ -99,7 +99,7 @@ func TestTaskScopeIgnoresMetadataIdentityHints(t *testing.T) {
 	var events []string
 	handler := &taskDispatchProbe{
 		name:  "org.task",
-		scope: TenantScopeOrg,
+		scope: ScopeOrg,
 		run: func(_ context.Context, task *Task) (*TaskResult, error) {
 			calls++
 			return &TaskResult{TaskID: task.ID, Status: TaskStatusCompleted}, nil

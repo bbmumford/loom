@@ -4,8 +4,8 @@
  */
 
 // Package scope holds the single canonical ScopeTag label shared by the rpc
-// package (rpc.TenantScope, rpc.Scope*) and the legacy handlers package
-// (mesh/node/handlers.TenantScope, handlers.TenantScope*). Both surfaces
+// package (rpc.ScopeTag, rpc.Scope*) and the legacy handlers package
+// (mesh/node/handlers.Scope, handlers.Scope*). Both surfaces
 // re-export the symbols declared here via Go type aliases and constant
 // forwards, so a value round-trips between the two packages without any
 // possibility of drift.
@@ -19,7 +19,7 @@
 //
 // The value constants are retained (rather than collapsed to a single opaque
 // string) to avoid a 434-site consumer churn: existing call sites keep
-// naming rpc.ScopeTenant / handlers.TenantScopeOrg and keep compiling.
+// naming rpc.ScopeTenant / handlers.ScopeOrg and keep compiling.
 package scope
 
 // ScopeTag is the opaque tenant/scope label a handler declares at registration.
@@ -35,9 +35,9 @@ type ScopeTag string
 // MUST NOT change without a coordinated redeploy. loom carries them as opaque
 // labels; only a consumer's PresencePolicy assigns them meaning.
 //
-// The rpc package re-exports these as rpc.Scope{None,Platform,Tenant,Org,
+// The rpc package re-exports these as rpc.ScopeTag{None,Platform,Tenant,Org,
 // User,Profile,Partition,Unknown}; the handlers package re-exports them as
-// handlers.TenantScope{None,Platform,Tenant,Org,User,Profile,Partition,Unknown}.
+// handlers.Scope{None,Platform,Tenant,Org,User,Profile,Partition,Unknown}.
 // Both surfaces MUST stay 1:1 with this list.
 const (
 	// ScopeUnset is the invalid zero value. It means no scope decision was

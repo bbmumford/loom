@@ -92,7 +92,7 @@ func (a *scriptedActivator) Activate(ctx context.Context, env ports.ActivationEn
 	for _, name := range a.registers {
 		if _, err := a.rt.Registry().RegisterRPCScoped(
 			env.RegistrationScope(),
-			&rpcOnlyHandler{name: name, role: a.role, scope: handlers.TenantScopeNone},
+			&rpcOnlyHandler{name: name, role: a.role, scope: handlers.ScopeNone},
 		); err != nil {
 			return err
 		}

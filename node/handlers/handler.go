@@ -20,41 +20,33 @@ import (
 // Split handler interfaces (preferred — use these for new code)
 // ---------------------------------------------------------------------------
 
-// TenantScope defines the tenant isolation level for a handler.
+// Scope is the opaque scope label a handler declares at registration. It is the
+// same type the rpc package exposes as rpc.ScopeTag: both name the single
+// declaration in pkg/rpc/scope, so a value crosses between them without
+// conversion and the two surfaces cannot drift.
 //
-// Deprecated: rpc.TenantScope is the canonical caller-facing scope symbol.
-// Both rpc.TenantScope and this handlers.TenantScope now alias the SAME
-// underlying declaration in rpc/scope — they are the same type identity,
-// not merely "structurally identical string aliases". A value assigned in
-// one package is directly usable in the other with no cast or conversion.
-// New code MUST import "github.com/bbmumford/loom/pkg/rpc" and use
-// rpc.TenantScope + rpc.Scope*; this handlers-side alias remains only so
-// the ~434 legacy call sites continue to compile during the migration.
-//
-// Do NOT add new constants HERE — declare them in rpc/scope/scopetag.go
-// and forward them from both re-exports. Finding rev-069.
-type TenantScope = scope.ScopeTag
+// loom assigns a label no meaning. It reads only ScopeNone (the enforcement
+// opt-out) and the two non-declarable sentinels; every other label is handed
+// unread to the consumer's PresencePolicy, which decides what it requires.
+type Scope = scope.ScopeTag
 
-// TenantScope* forwards to the canonical constants in rpc/scope. Because
-// each constant is a direct forward, drift between handlers.TenantScope*
-// and rpc.Scope* is now IMPOSSIBLE at compile time — both re-exports pull
-// from the same declaration.
-//
-// Deprecated: use rpc.Scope{None,Platform,Tenant,Org,User,Profile,Partition,Unknown}
-// for new code. These symbols remain to avoid a big-bang rename in ~434
-// legacy call sites, but will be deleted once migration completes.
+// Scope* forward to the canonical constants in pkg/rpc/scope, which is also
+// where a new label must be declared — declaring one here instead would make
+// this surface and rpc.Scope* disagree.
 const (
-	TenantScopeNone      = scope.ScopeNone      // Opts out of scope enforcement. Mirrors rpc.ScopeNone.
-	TenantScopePlatform  = scope.ScopePlatform  // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopePlatform.
-	TenantScopeTenant    = scope.ScopeTenant    // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeTenant.
-	TenantScopeOrg       = scope.ScopeOrg       // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeOrg.
-	TenantScopeUser      = scope.ScopeUser      // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeUser.
-	TenantScopeProfile   = scope.ScopeProfile   // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopeProfile.
-	TenantScopePartition = scope.ScopePartition // Opaque label; a PresencePolicy assigns meaning. Mirrors rpc.ScopePartition.
-	// TenantScopeUnknown is the fail-closed sentinel, mirroring rpc.ScopeUnknown.
-	// validateScope rejects any handler bound to this scope.
-	// Never set it manually — it exists so decay-to-empty-string cannot fail open.
-	TenantScopeUnknown = scope.ScopeUnknown
+	ScopeNone      = scope.ScopeNone      // Opts out of scope enforcement.
+	ScopePlatform  = scope.ScopePlatform  // Opaque label; a PresencePolicy assigns meaning.
+	ScopeTenant    = scope.ScopeTenant    // Opaque label; a PresencePolicy assigns meaning.
+	ScopeOrg       = scope.ScopeOrg       // Opaque label; a PresencePolicy assigns meaning.
+	ScopeUser      = scope.ScopeUser      // Opaque label; a PresencePolicy assigns meaning.
+	ScopeProfile   = scope.ScopeProfile   // Opaque label; a PresencePolicy assigns meaning.
+	ScopePartition = scope.ScopePartition // Opaque label; a PresencePolicy assigns meaning.
+
+	// ScopeUnknown is the fail-closed sentinel a proto scope decays to when it
+	// is unrecognised. validateScope rejects any handler bound to it, so a
+	// decayed value denies instead of reading as "no scope required". Never set
+	// it manually.
+	ScopeUnknown = scope.ScopeUnknown
 )
 
 // HandlerMeta contains metadata common to all handler types.
@@ -78,14 +70,14 @@ type HandlerMeta interface {
 	// Scopes returns required JWT scopes (e.g., ["auth.login"])
 	Scopes() []string
 
-	// TenantScope returns the required tenant isolation level.
-	// Returns TenantScopeNone for deliberately unrestricted handlers. The zero
+	// Scope returns the required tenant isolation level.
+	// Returns ScopeNone for deliberately unrestricted handlers. The zero
 	// value is invalid and registration rejects it.
-	Scope() TenantScope
+	Scope() Scope
 
-	// AllowedTenants returns an optional tenant whitelist.
-	// Empty slice = all tenants allowed (subject to TenantScope).
-	AllowedTenants() []string
+	// AllowedPartitions returns an optional tenant whitelist.
+	// Empty slice = all tenants allowed (subject to Scope).
+	AllowedPartitions() []string
 }
 
 // RPCHandler handles synchronous request/response operations.
@@ -328,7 +320,7 @@ func (r *HandlerRegistry) Use(mw Middleware) {
 }
 
 // SetPresencePolicy configures the consumer-supplied evaluator that decides,
-// for every declared scope other than TenantScopeNone, whether the
+// for every declared scope other than ScopeNone, whether the
 // server-established identity satisfies it. loom carries the opaque scope tag
 // and identity but interprets neither. A nil policy fails closed:
 // validateScope denies every non-None handler when no policy is set.
@@ -462,7 +454,7 @@ func (r *HandlerRegistry) registerMeta(
 		return RegistrationHandle{}, fmt.Errorf("handler name cannot be empty")
 	}
 	if declared := h.Scope(); !scope.IsDeclared(declared) {
-		return RegistrationHandle{}, fmt.Errorf("handler %s has a non-declarable scope %q: declare a concrete scope tag (the TenantScopeUnset zero value and the TenantScopeUnknown proto-decay sentinel are refused)", name, declared)
+		return RegistrationHandle{}, fmt.Errorf("handler %s has a non-declarable scope %q: declare a concrete scope tag (the ScopeUnset zero value and the ScopeUnknown proto-decay sentinel are refused)", name, declared)
 	}
 
 	r.mu.Lock()

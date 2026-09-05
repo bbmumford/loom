@@ -32,8 +32,8 @@ type executorPrincipalKey struct{}
 func newExecutorRegistry() *handlers.HandlerRegistry {
 	reg := handlers.NewHandlerRegistry()
 	reg.SetPresencePolicy(scope.PresencePolicyFunc(
-		func(declared handlers.TenantScope, id scope.AuthenticatedIdentity) (bool, string) {
-			if declared == handlers.TenantScopeNone {
+		func(declared handlers.Scope, id scope.AuthenticatedIdentity) (bool, string) {
+			if declared == handlers.ScopeNone {
 				return true, ""
 			}
 			if id.Scope(scope.AxisTransportPinned) == "" {
@@ -152,8 +152,8 @@ func (h *executorTaskProbe) Role() string               { return "executor-test"
 func (h *executorTaskProbe) RequiresAuth() bool         { return true }
 func (h *executorTaskProbe) AllowedAuthTypes() []string { return nil }
 func (h *executorTaskProbe) Scopes() []string           { return nil }
-func (h *executorTaskProbe) Scope() handlers.TenantScope {
-	return handlers.TenantScopeTenant
+func (h *executorTaskProbe) Scope() handlers.Scope {
+	return handlers.ScopeTenant
 }
 
 type blockingExecutorTaskProbe struct {
@@ -168,10 +168,10 @@ func (*blockingExecutorTaskProbe) Role() string               { return "executor
 func (*blockingExecutorTaskProbe) RequiresAuth() bool         { return true }
 func (*blockingExecutorTaskProbe) AllowedAuthTypes() []string { return nil }
 func (*blockingExecutorTaskProbe) Scopes() []string           { return nil }
-func (*blockingExecutorTaskProbe) Scope() handlers.TenantScope {
-	return handlers.TenantScopeTenant
+func (*blockingExecutorTaskProbe) Scope() handlers.Scope {
+	return handlers.ScopeTenant
 }
-func (*blockingExecutorTaskProbe) AllowedTenants() []string { return nil }
+func (*blockingExecutorTaskProbe) AllowedPartitions() []string { return nil }
 func (h *blockingExecutorTaskProbe) ExecuteTask(
 	_ context.Context,
 	task *handlers.Task,
@@ -183,7 +183,7 @@ func (h *blockingExecutorTaskProbe) ExecuteTask(
 		Status: handlers.TaskStatusCompleted,
 	}, nil
 }
-func (h *executorTaskProbe) AllowedTenants() []string { return nil }
+func (h *executorTaskProbe) AllowedPartitions() []string { return nil }
 func (h *executorTaskProbe) ExecuteTask(
 	ctx context.Context,
 	task *handlers.Task,

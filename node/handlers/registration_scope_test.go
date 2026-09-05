@@ -15,7 +15,7 @@ import (
 
 type registrationScopeHandler struct {
 	name  string
-	scope TenantScope
+	scope Scope
 }
 
 func (h *registrationScopeHandler) Name() string               { return h.name }
@@ -23,8 +23,8 @@ func (h *registrationScopeHandler) Role() string               { return "test.sc
 func (h *registrationScopeHandler) RequiresAuth() bool         { return false }
 func (h *registrationScopeHandler) AllowedAuthTypes() []string { return nil }
 func (h *registrationScopeHandler) Scopes() []string           { return nil }
-func (h *registrationScopeHandler) Scope() TenantScope         { return h.scope }
-func (h *registrationScopeHandler) AllowedTenants() []string   { return nil }
+func (h *registrationScopeHandler) Scope() Scope         { return h.scope }
+func (h *registrationScopeHandler) AllowedPartitions() []string   { return nil }
 func (h *registrationScopeHandler) ExecuteRPC(context.Context, *RPCRequest) (*RPCResponse, error) {
 	return &RPCResponse{Success: true}, nil
 }
@@ -37,7 +37,7 @@ func (h *registrationScopeHandler) HandleStream(context.Context, MessageStream) 
 
 // TestHandlerRegistryRejectsSentinelTenantScopeBeforeMutation proves the legacy
 // handlers registration path refuses ONLY the two non-declarable sentinels
-// (TenantScopeUnset zero value, TenantScopeUnknown proto-decay marker) before
+// (TenantScopeUnset zero value, ScopeUnknown proto-decay marker) before
 // mutating the handler map — matching the rpc.Registry path. A consumer-defined
 // opaque axis admits (see TestHandlerRegistryAcceptsOpaqueConsumerAxis); loom
 // no longer enumerates a fixed ladder at registration.
@@ -53,10 +53,10 @@ func TestHandlerRegistryRejectsSentinelTenantScopeBeforeMutation(t *testing.T) {
 	}
 	scopes := []struct {
 		name  string
-		scope TenantScope
+		scope Scope
 	}{
 		{name: "zero"},
-		{name: "unknown", scope: TenantScopeUnknown},
+		{name: "unknown", scope: ScopeUnknown},
 	}
 
 	for _, registrar := range registrars {
@@ -98,7 +98,7 @@ func TestHandlerRegistryAcceptsOpaqueConsumerAxis(t *testing.T) {
 	for _, registrar := range registrars {
 		t.Run(registrar.name, func(t *testing.T) {
 			reg := NewHandlerRegistry()
-			h := &registrationScopeHandler{name: registrar.name + ".partition", scope: TenantScope("partition")}
+			h := &registrationScopeHandler{name: registrar.name + ".partition", scope: Scope("partition")}
 			if err := registrar.call(reg, h); err != nil {
 				t.Fatalf("registration rejected opaque consumer axis: %v", err)
 			}
@@ -111,13 +111,13 @@ func TestHandlerRegistryAcceptsOpaqueConsumerAxis(t *testing.T) {
 
 func TestHandlerRegistryAcceptsExplicitTenantScopeNone(t *testing.T) {
 	reg := NewHandlerRegistry()
-	h := &registrationScopeHandler{name: "public.health", scope: TenantScopeNone}
+	h := &registrationScopeHandler{name: "public.health", scope: ScopeNone}
 	if err := reg.RegisterRPC(h); err != nil {
-		t.Fatalf("RegisterRPC explicit TenantScopeNone: %v", err)
+		t.Fatalf("RegisterRPC explicit ScopeNone: %v", err)
 	}
 	stored, ok := reg.GetMeta(h.name)
-	if !ok || stored.Scope() != TenantScopeNone {
-		t.Fatalf("stored explicit TenantScopeNone = (%+v, %v)", stored, ok)
+	if !ok || stored.Scope() != ScopeNone {
+		t.Fatalf("stored explicit ScopeNone = (%+v, %v)", stored, ok)
 	}
 }
 
@@ -141,7 +141,7 @@ func TestRegistrationScopeReservesButDoesNotExposeHandlersUntilPublication(t *te
 	first := &roleRegistrationScopeHandler{
 		registrationScopeHandler: &registrationScopeHandler{
 			name:  "owned-role.pending",
-			scope: TenantScopeNone,
+			scope: ScopeNone,
 		},
 		role: "owned-role",
 	}
@@ -178,7 +178,7 @@ func TestRegistrationScopeReservesButDoesNotExposeHandlersUntilPublication(t *te
 	late := &roleRegistrationScopeHandler{
 		registrationScopeHandler: &registrationScopeHandler{
 			name:  "owned-role.late",
-			scope: TenantScopeNone,
+			scope: ScopeNone,
 		},
 		role: "owned-role",
 	}
@@ -203,14 +203,14 @@ func TestRegistrationScopePublicationRacesWithLateRegistrationAtomically(t *test
 		first := &roleRegistrationScopeHandler{
 			registrationScopeHandler: &registrationScopeHandler{
 				name:  "owned-role.initial",
-				scope: TenantScopeNone,
+				scope: ScopeNone,
 			},
 			role: "owned-role",
 		}
 		late := &roleRegistrationScopeHandler{
 			registrationScopeHandler: &registrationScopeHandler{
 				name:  "owned-role.concurrent",
-				scope: TenantScopeNone,
+				scope: ScopeNone,
 			},
 			role: "owned-role",
 		}
@@ -266,7 +266,7 @@ func TestClosingUnpublishedRegistrationScopeReleasesExactReservations(t *testing
 	pending := &roleRegistrationScopeHandler{
 		registrationScopeHandler: &registrationScopeHandler{
 			name:  "owned-role.aborted",
-			scope: TenantScopeNone,
+			scope: ScopeNone,
 		},
 		role: "owned-role",
 	}
@@ -286,7 +286,7 @@ func TestUnregisterExactPreservesSameNameReplacementAndRejectsForeignHandle(t *t
 	other := NewHandlerRegistry()
 	h := &registrationScopeHandler{
 		name:  "exact.identity",
-		scope: TenantScopeNone,
+		scope: ScopeNone,
 	}
 	firstScope, err := reg.OpenRegistrationScope(
 		h.Role(),
@@ -330,7 +330,7 @@ func TestRegistrationScopeRejectsWrongRoleAndSealedOrFabricatedCapability(t *tes
 	}
 	wrongRole := &registrationScopeHandler{
 		name:  "wrong.role",
-		scope: TenantScopeNone,
+		scope: ScopeNone,
 	}
 	if _, err := reg.RegisterHandlerScoped(registrationScope, wrongRole); err == nil ||
 		!strings.Contains(err.Error(), "does not match") {
@@ -345,7 +345,7 @@ func TestRegistrationScopeRejectsWrongRoleAndSealedOrFabricatedCapability(t *tes
 	}
 	rightRole := &registrationScopeHandler{
 		name:  "sealed.scope",
-		scope: TenantScopeNone,
+		scope: ScopeNone,
 	}
 	// Override the fixture role through a small wrapper.
 	scoped := &roleRegistrationScopeHandler{registrationScopeHandler: rightRole, role: "owned-role"}
@@ -411,7 +411,7 @@ func TestRegistrationScopeIdentitySeparatesConcurrentRolesAndRegistries(t *testi
 		return &roleRegistrationScopeHandler{
 			registrationScopeHandler: &registrationScopeHandler{
 				name:  name,
-				scope: TenantScopeNone,
+				scope: ScopeNone,
 			},
 			role: role,
 		}

@@ -113,7 +113,7 @@ func TestEnforceScope_None(t *testing.T) {
 // consumer policy loom cannot judge presence, so any declared (non-None)
 // handler is denied rather than silently admitted.
 func TestEnforceScope_NilPolicyDeniesNonNone(t *testing.T) {
-	for _, s := range []TenantScope{ScopeTenant, ScopeOrg, ScopeUser, ScopeProfile, ScopePlatform} {
+	for _, s := range []ScopeTag{ScopeTenant, ScopeOrg, ScopeUser, ScopeProfile, ScopePlatform} {
 		h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: s}
 		ctx := WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "acme", "u1"))
 		if err := EnforceScope(ctx, h, nil); !errors.Is(err, ErrScopeDenied) {
@@ -140,7 +140,7 @@ type twoArmCapHolder map[string]bool
 func (c twoArmCapHolder) HasCapability(_ scope.AuthenticatedPrincipal, cap string) bool { return c[cap] }
 
 // TestEnforceScope_Requirement_TwoArm proves a handler that declares a Requirement
-// is judged by the two-arm authorizer, superseding its Scope tag: the nexus arm
+// is judged by the two-arm authorizer, superseding its ScopeTag tag: the nexus arm
 // admits a census-resolved identity and denies an unresolved one; the capability
 // arm turns on the held cap; and a Requirement with no authorizer fails CLOSED.
 func TestEnforceScope_Requirement_TwoArm(t *testing.T) {
@@ -149,7 +149,7 @@ func TestEnforceScope_Requirement_TwoArm(t *testing.T) {
 	resolved := WithAuthenticatedScopeIdentity(context.Background(), scope.NewScopeIdentity("orbtr", "acme", "u1"))
 	bare := WithAuthenticatedScopeIdentity(context.Background(), scope.AuthenticatedIdentity{})
 
-	// Scope is None, but the Requirement supersedes it and governs the verdict.
+	// ScopeTag is None, but the Requirement supersedes it and governs the verdict.
 	hNexus := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopeNone, Requirement: &nexus}
 
 	// A Requirement with no authorizer supplied fails closed.

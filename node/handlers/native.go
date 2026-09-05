@@ -26,7 +26,7 @@ type NativeRPCWrapper[Req any, Resp any] struct {
 	auth           bool
 	authTypes      []string
 	scopes         []string
-	tenantScope    TenantScope
+	tenantScope    Scope
 	allowedTenants []string
 	handler        func(ctx context.Context, req Req) (Resp, error)
 	newRequest     func() Req
@@ -61,8 +61,9 @@ func (w *NativeRPCWrapper[Req, Resp]) WithAuth(required bool, authTypes []string
 	return w
 }
 
-// WithTenantScope configures tenant isolation. Returns self for chaining.
-func (w *NativeRPCWrapper[Req, Resp]) WithTenantScope(scope TenantScope, allowed []string) *NativeRPCWrapper[Req, Resp] {
+// WithScope declares the handler's opaque scope label and the partition
+// allow-list enforcement consults. Returns self for chaining.
+func (w *NativeRPCWrapper[Req, Resp]) WithScope(scope Scope, allowed []string) *NativeRPCWrapper[Req, Resp] {
 	w.tenantScope = scope
 	w.allowedTenants = allowed
 	return w
@@ -73,8 +74,8 @@ func (w *NativeRPCWrapper[Req, Resp]) Role() string               { return w.rol
 func (w *NativeRPCWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
 func (w *NativeRPCWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.authTypes }
 func (w *NativeRPCWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
-func (w *NativeRPCWrapper[Req, Resp]) Scope() TenantScope         { return w.tenantScope }
-func (w *NativeRPCWrapper[Req, Resp]) AllowedTenants() []string   { return w.allowedTenants }
+func (w *NativeRPCWrapper[Req, Resp]) Scope() Scope         { return w.tenantScope }
+func (w *NativeRPCWrapper[Req, Resp]) AllowedPartitions() []string   { return w.allowedTenants }
 
 func (w *NativeRPCWrapper[Req, Resp]) ExecuteRPC(ctx context.Context, req *RPCRequest) (*RPCResponse, error) {
 	start := time.Now()
@@ -129,7 +130,7 @@ type NativeTaskWrapper[Req any, Resp any] struct {
 	auth           bool
 	authTypes      []string
 	scopes         []string
-	tenantScope    TenantScope
+	tenantScope    Scope
 	allowedTenants []string
 	handler        func(ctx context.Context, req Req) (Resp, error)
 	newRequest     func() Req
@@ -158,8 +159,9 @@ func (w *NativeTaskWrapper[Req, Resp]) WithAuth(required bool, authTypes []strin
 	return w
 }
 
-// WithTenantScope configures tenant isolation. Returns self for chaining.
-func (w *NativeTaskWrapper[Req, Resp]) WithTenantScope(scope TenantScope, allowed []string) *NativeTaskWrapper[Req, Resp] {
+// WithScope declares the handler's opaque scope label and the partition
+// allow-list enforcement consults. Returns self for chaining.
+func (w *NativeTaskWrapper[Req, Resp]) WithScope(scope Scope, allowed []string) *NativeTaskWrapper[Req, Resp] {
 	w.tenantScope = scope
 	w.allowedTenants = allowed
 	return w
@@ -170,8 +172,8 @@ func (w *NativeTaskWrapper[Req, Resp]) Role() string               { return w.ro
 func (w *NativeTaskWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
 func (w *NativeTaskWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.authTypes }
 func (w *NativeTaskWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
-func (w *NativeTaskWrapper[Req, Resp]) Scope() TenantScope         { return w.tenantScope }
-func (w *NativeTaskWrapper[Req, Resp]) AllowedTenants() []string   { return w.allowedTenants }
+func (w *NativeTaskWrapper[Req, Resp]) Scope() Scope         { return w.tenantScope }
+func (w *NativeTaskWrapper[Req, Resp]) AllowedPartitions() []string   { return w.allowedTenants }
 
 func (w *NativeTaskWrapper[Req, Resp]) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error) {
 	start := time.Now()

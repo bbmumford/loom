@@ -245,7 +245,7 @@ func (b *Bridge) dispatch(w http.ResponseWriter, r *http.Request, h *rpc.Handler
 // rpc/dispatch.go:53-57) so the HTTP bridge enforces the same security
 // surface as the mesh-side dispatcher:
 //
-//  1. EnforceScope fails closed on the handler's declared TenantScope
+//  1. EnforceScope fails closed on the handler's declared Scope
 //     tier when the stamped ctx (tenantId/userId/orgId) doesn't
 //     match. Without this the bridge silently bypassed the declared
 //     scope on every handler reached through /rpc/{handler} or per-FQN

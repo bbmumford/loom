@@ -212,10 +212,10 @@ func (h *holepunchRPCHandler) Role() string               { return "system" }
 func (h *holepunchRPCHandler) RequiresAuth() bool         { return false }
 func (h *holepunchRPCHandler) AllowedAuthTypes() []string { return nil }
 func (h *holepunchRPCHandler) Scopes() []string           { return nil }
-func (h *holepunchRPCHandler) Scope() handlers.TenantScope {
-	return handlers.TenantScopeNone
+func (h *holepunchRPCHandler) Scope() handlers.Scope {
+	return handlers.ScopeNone
 }
-func (h *holepunchRPCHandler) AllowedTenants() []string { return nil }
+func (h *holepunchRPCHandler) AllowedPartitions() []string { return nil }
 
 // punchProbeWindow bounds the responder-side probe goroutine: it must
 // outlast the wait-until-T0 plus the probe burst, but not linger.

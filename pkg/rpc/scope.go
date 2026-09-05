@@ -157,14 +157,14 @@ func ParseScopes(raw string) []string {
 }
 
 // ErrScopeDenied is the sentinel returned by EnforceScope when a handler's
-// declared TenantScope cannot be satisfied by the caller's context. Callers
+// declared Scope cannot be satisfied by the caller's context. Callers
 // should use errors.Is at boundaries (e.g. HTTP bridge → 403, server-side
 // dispatch → 403 wire error). The wrapping error includes the FQN +
 // offending fields for diagnostic logging.
 var ErrScopeDenied = tenantScope.ErrDenied
 
 // EnforceScope rejects calls whose ctx fails the handler's declared
-// TenantScope. loom itself decides only three things and delegates the rest:
+// Scope. loom itself decides only three things and delegates the rest:
 //
 //   - ScopeNone admits unconditionally — it is the handler's explicit opt-out
 //     of scope enforcement (liveness, /heartbeat, OAuth init).

@@ -25,7 +25,7 @@ type GenericRPCWrapper[Req, Resp proto.Message] struct {
 	auth           bool
 	authTypes      []string
 	scopes         []string
-	tenantScope    TenantScope
+	tenantScope    Scope
 	allowedTenants []string
 	handler        func(ctx context.Context, req Req) (Resp, error)
 	newRequest     func() Req
@@ -60,8 +60,9 @@ func (w *GenericRPCWrapper[Req, Resp]) WithAuth(required bool, authTypes []strin
 	return w
 }
 
-// WithTenantScope configures tenant isolation. Returns self for chaining.
-func (w *GenericRPCWrapper[Req, Resp]) WithTenantScope(scope TenantScope, allowed []string) *GenericRPCWrapper[Req, Resp] {
+// WithScope declares the handler's opaque scope label and the partition
+// allow-list enforcement consults. Returns self for chaining.
+func (w *GenericRPCWrapper[Req, Resp]) WithScope(scope Scope, allowed []string) *GenericRPCWrapper[Req, Resp] {
 	w.tenantScope = scope
 	w.allowedTenants = allowed
 	return w
@@ -72,8 +73,8 @@ func (w *GenericRPCWrapper[Req, Resp]) Role() string               { return w.ro
 func (w *GenericRPCWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
 func (w *GenericRPCWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.authTypes }
 func (w *GenericRPCWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
-func (w *GenericRPCWrapper[Req, Resp]) Scope() TenantScope         { return w.tenantScope }
-func (w *GenericRPCWrapper[Req, Resp]) AllowedTenants() []string   { return w.allowedTenants }
+func (w *GenericRPCWrapper[Req, Resp]) Scope() Scope         { return w.tenantScope }
+func (w *GenericRPCWrapper[Req, Resp]) AllowedPartitions() []string   { return w.allowedTenants }
 
 func (w *GenericRPCWrapper[Req, Resp]) ExecuteRPC(ctx context.Context, req *RPCRequest) (*RPCResponse, error) {
 	start := time.Now()
@@ -128,7 +129,7 @@ type GenericTaskWrapper[Req proto.Message, Resp proto.Message] struct {
 	auth           bool
 	authTypes      []string
 	scopes         []string
-	tenantScope    TenantScope
+	tenantScope    Scope
 	allowedTenants []string
 	handler        func(ctx context.Context, req Req) (Resp, error)
 	newRequest     func() Req
@@ -157,8 +158,9 @@ func (w *GenericTaskWrapper[Req, Resp]) WithAuth(required bool, authTypes []stri
 	return w
 }
 
-// WithTenantScope configures tenant isolation. Returns self for chaining.
-func (w *GenericTaskWrapper[Req, Resp]) WithTenantScope(scope TenantScope, allowed []string) *GenericTaskWrapper[Req, Resp] {
+// WithScope declares the handler's opaque scope label and the partition
+// allow-list enforcement consults. Returns self for chaining.
+func (w *GenericTaskWrapper[Req, Resp]) WithScope(scope Scope, allowed []string) *GenericTaskWrapper[Req, Resp] {
 	w.tenantScope = scope
 	w.allowedTenants = allowed
 	return w
@@ -169,8 +171,8 @@ func (w *GenericTaskWrapper[Req, Resp]) Role() string               { return w.r
 func (w *GenericTaskWrapper[Req, Resp]) RequiresAuth() bool         { return w.auth }
 func (w *GenericTaskWrapper[Req, Resp]) AllowedAuthTypes() []string { return w.authTypes }
 func (w *GenericTaskWrapper[Req, Resp]) Scopes() []string           { return w.scopes }
-func (w *GenericTaskWrapper[Req, Resp]) Scope() TenantScope         { return w.tenantScope }
-func (w *GenericTaskWrapper[Req, Resp]) AllowedTenants() []string   { return w.allowedTenants }
+func (w *GenericTaskWrapper[Req, Resp]) Scope() Scope         { return w.tenantScope }
+func (w *GenericTaskWrapper[Req, Resp]) AllowedPartitions() []string   { return w.allowedTenants }
 
 func (w *GenericTaskWrapper[Req, Resp]) ExecuteTask(ctx context.Context, task *Task) (*TaskResult, error) {
 	start := time.Now()

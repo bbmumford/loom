@@ -38,8 +38,8 @@ func (h *blockingRoleRPCHandler) Role() string                { return h.role }
 func (h *blockingRoleRPCHandler) RequiresAuth() bool          { return false }
 func (h *blockingRoleRPCHandler) AllowedAuthTypes() []string  { return nil }
 func (h *blockingRoleRPCHandler) Scopes() []string            { return nil }
-func (h *blockingRoleRPCHandler) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *blockingRoleRPCHandler) AllowedTenants() []string    { return nil }
+func (h *blockingRoleRPCHandler) Scope() handlers.Scope { return handlers.ScopeNone }
+func (h *blockingRoleRPCHandler) AllowedPartitions() []string    { return nil }
 func (h *blockingRoleRPCHandler) ExecuteRPC(
 	ctx context.Context,
 	req *handlers.RPCRequest,
@@ -101,7 +101,7 @@ func TestRoleActivationDoesNotOwnUnrelatedConcurrentRegistration(t *testing.T) {
 				&rpcOnlyHandler{
 					name:  ownedName,
 					role:  "auth",
-					scope: handlers.TenantScopeNone,
+					scope: handlers.ScopeNone,
 				},
 			)
 			return err
@@ -118,7 +118,7 @@ func TestRoleActivationDoesNotOwnUnrelatedConcurrentRegistration(t *testing.T) {
 	if err := rt.Registry().RegisterRPC(&rpcOnlyHandler{
 		name:  unrelatedName,
 		role:  "system",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 	}); err != nil {
 		t.Fatalf("unrelated RegisterRPC: %v", err)
 	}
@@ -150,7 +150,7 @@ func TestScopedRoleHandlerRemainsInvisibleUntilExactActivationSucceeds(t *testin
 				&rpcOnlyHandler{
 					name:  name,
 					role:  "auth",
-					scope: handlers.TenantScopeNone,
+					scope: handlers.ScopeNone,
 				},
 			); err != nil {
 				return err
@@ -178,7 +178,7 @@ func TestScopedRoleHandlerRemainsInvisibleUntilExactActivationSucceeds(t *testin
 	if err := rt.Registry().RegisterRPC(&rpcOnlyHandler{
 		name:  name,
 		role:  "auth",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 	}); err == nil || !strings.Contains(err.Error(), "reserved") {
 		t.Fatalf("pending same-name registration = %v, want reservation error", err)
 	}
@@ -207,7 +207,7 @@ func TestFailedRoleActivationReleasesUnpublishedRegistration(t *testing.T) {
 				&rpcOnlyHandler{
 					name:  name,
 					role:  "auth",
-					scope: handlers.TenantScopeNone,
+					scope: handlers.ScopeNone,
 				},
 			); err != nil {
 				return err
@@ -231,7 +231,7 @@ func TestFailedRoleActivationReleasesUnpublishedRegistration(t *testing.T) {
 	if err := rt.Registry().RegisterRPC(&rpcOnlyHandler{
 		name:  name,
 		role:  "auth",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 	}); err != nil {
 		t.Fatalf("failed activation stranded the name reservation: %v", err)
 	}
@@ -243,7 +243,7 @@ func TestFailedScopedRegistrationPreservesPreexistingLiveCapability(t *testing.T
 	live := &rpcOnlyHandler{
 		name:  name,
 		role:  "auth",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 	}
 	if err := rt.Registry().RegisterRPC(live); err != nil {
 		t.Fatalf("RegisterRPC(live): %v", err)
@@ -256,7 +256,7 @@ func TestFailedScopedRegistrationPreservesPreexistingLiveCapability(t *testing.T
 				&rpcOnlyHandler{
 					name:  name,
 					role:  "auth",
-					scope: handlers.TenantScopeNone,
+					scope: handlers.ScopeNone,
 				},
 			)
 			return err
@@ -300,7 +300,7 @@ func TestSimultaneousActiveRoleScopesPreserveLateOwnershipAndTeardownIsolation(t
 				&rpcOnlyHandler{
 					name:  authInitial,
 					role:  "auth",
-					scope: handlers.TenantScopeNone,
+					scope: handlers.ScopeNone,
 				},
 			)
 			return err
@@ -315,7 +315,7 @@ func TestSimultaneousActiveRoleScopesPreserveLateOwnershipAndTeardownIsolation(t
 				&rpcOnlyHandler{
 					name:  billingInitial,
 					role:  "billing",
-					scope: handlers.TenantScopeNone,
+					scope: handlers.ScopeNone,
 				},
 			)
 			return err
@@ -349,7 +349,7 @@ func TestSimultaneousActiveRoleScopesPreserveLateOwnershipAndTeardownIsolation(t
 		&rpcOnlyHandler{
 			name:  authLate,
 			role:  "auth",
-			scope: handlers.TenantScopeNone,
+			scope: handlers.ScopeNone,
 		},
 	); err != nil {
 		t.Fatalf("late auth registration: %v", err)
@@ -359,7 +359,7 @@ func TestSimultaneousActiveRoleScopesPreserveLateOwnershipAndTeardownIsolation(t
 		&rpcOnlyHandler{
 			name:  billingLate,
 			role:  "billing",
-			scope: handlers.TenantScopeNone,
+			scope: handlers.ScopeNone,
 		},
 	); err != nil {
 		t.Fatalf("late billing registration: %v", err)
@@ -383,7 +383,7 @@ func TestSimultaneousActiveRoleScopesPreserveLateOwnershipAndTeardownIsolation(t
 		&rpcOnlyHandler{
 			name:  "orbtr.io.auth.AfterClose",
 			role:  "auth",
-			scope: handlers.TenantScopeNone,
+			scope: handlers.ScopeNone,
 		},
 	); err == nil {
 		t.Fatal("closed auth scope accepted a later registration")
@@ -393,7 +393,7 @@ func TestSimultaneousActiveRoleScopesPreserveLateOwnershipAndTeardownIsolation(t
 		&rpcOnlyHandler{
 			name:  billingLater,
 			role:  "billing",
-			scope: handlers.TenantScopeNone,
+			scope: handlers.ScopeNone,
 		},
 	); err != nil {
 		t.Fatalf("billing scope was closed by auth teardown: %v", err)
@@ -417,7 +417,7 @@ func TestRoleTeardownPreservesSameNameReplacement(t *testing.T) {
 		activate: func(env ports.ActivationEnv) error {
 			handle, err := rt.Registry().RegisterRPCScoped(
 				env.RegistrationScope(),
-				&rpcOnlyHandler{name: name, role: "auth", scope: handlers.TenantScopeNone},
+				&rpcOnlyHandler{name: name, role: "auth", scope: handlers.ScopeNone},
 			)
 			if err == nil {
 				handleCh <- handle
@@ -437,7 +437,7 @@ func TestRoleTeardownPreservesSameNameReplacement(t *testing.T) {
 	replacement := &rpcOnlyHandler{
 		name:  name,
 		role:  "auth",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 	}
 	if err := rt.Registry().RegisterRPC(replacement); err != nil {
 		t.Fatalf("RegisterRPC(replacement): %v", err)
@@ -456,7 +456,7 @@ func TestPendingRoleDoesNotLeasePreexistingSameRoleHandler(t *testing.T) {
 	preexisting := &rpcOnlyHandler{
 		name:  name,
 		role:  "auth",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 	}
 	if err := rt.Registry().RegisterRPC(preexisting); err != nil {
 		t.Fatalf("RegisterRPC(preexisting): %v", err)
@@ -513,7 +513,7 @@ func TestLateScopedRegistrationIsOwnedAndRemoved(t *testing.T) {
 				<-releaseLate
 				_, err := rt.Registry().RegisterRPCScoped(
 					env.RegistrationScope(),
-					&rpcOnlyHandler{name: name, role: "auth", scope: handlers.TenantScopeNone},
+					&rpcOnlyHandler{name: name, role: "auth", scope: handlers.ScopeNone},
 				)
 				registered <- err
 			})
@@ -556,7 +556,7 @@ func TestRegistrationAfterScopeSealFailsClosed(t *testing.T) {
 				<-releaseLate
 				_, err := rt.Registry().RegisterRPCScoped(
 					env.RegistrationScope(),
-					&rpcOnlyHandler{name: name, role: "auth", scope: handlers.TenantScopeNone},
+					&rpcOnlyHandler{name: name, role: "auth", scope: handlers.ScopeNone},
 				)
 				registered <- err
 			})

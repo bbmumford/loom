@@ -33,8 +33,8 @@ func (h *lifetimeTaskHandler) Role() string                { return h.role }
 func (h *lifetimeTaskHandler) RequiresAuth() bool          { return false }
 func (h *lifetimeTaskHandler) AllowedAuthTypes() []string  { return nil }
 func (h *lifetimeTaskHandler) Scopes() []string            { return nil }
-func (h *lifetimeTaskHandler) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *lifetimeTaskHandler) AllowedTenants() []string    { return nil }
+func (h *lifetimeTaskHandler) Scope() handlers.Scope { return handlers.ScopeNone }
+func (h *lifetimeTaskHandler) AllowedPartitions() []string    { return nil }
 
 func (h *lifetimeTaskHandler) ExecuteTask(
 	ctx context.Context,
