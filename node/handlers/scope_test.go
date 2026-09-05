@@ -23,13 +23,13 @@ type stubMeta struct {
 	allowed []string
 }
 
-func (s *stubMeta) Name() string               { return s.name }
-func (s *stubMeta) Role() string               { return s.role }
-func (s *stubMeta) RequiresAuth() bool         { return false }
-func (s *stubMeta) AllowedAuthTypes() []string { return nil }
-func (s *stubMeta) Scopes() []string           { return nil }
-func (s *stubMeta) Scope() Scope         { return s.scope }
-func (s *stubMeta) AllowedPartitions() []string   { return s.allowed }
+func (s *stubMeta) Name() string                { return s.name }
+func (s *stubMeta) Role() string                { return s.role }
+func (s *stubMeta) RequiresAuth() bool          { return false }
+func (s *stubMeta) AllowedAuthTypes() []string  { return nil }
+func (s *stubMeta) Scopes() []string            { return nil }
+func (s *stubMeta) Scope() Scope                { return s.scope }
+func (s *stubMeta) AllowedPartitions() []string { return s.allowed }
 
 // scopeRefPolicy is a CONSUMER-side reference PresencePolicy reproducing the
 // platform's historical presence semantics. loom no longer contains this
@@ -152,7 +152,7 @@ func TestValidateTenantScope_Unknown_FailsClosed(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "misconfigured.op", scope: ScopeUnknown}
 
-	// Even with a fully-populated tenant/user context, the Unknown sentinel
+	// Even with a fully-populated partition/user context, the Unknown sentinel
 	// must refuse — the caller identity is not the reason for refusal.
 	err := r.validateScope(ctxWithRPC(map[string]interface{}{
 		"tenant_id": "acme",
@@ -201,22 +201,22 @@ func TestValidateTenantScope_None_Passes(t *testing.T) {
 
 func TestValidateTenantScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing.T) {
 	h := &stubMeta{name: "platform.op", scope: ScopePlatform}
-	identity := func(tenantID string) context.Context {
+	identity := func(partitionID string) context.Context {
 		return rpcscope.WithAuthenticatedIdentity(
 			context.Background(),
-			scopeIdentity(tenantID, "", ""),
+			scopeIdentity(partitionID, "", ""),
 		)
 	}
 	tests := []struct {
-		name    string
-		set     []string
-		tenant  string
-		wantErr bool
+		name      string
+		set       []string
+		partition string
+		wantErr   bool
 	}{
-		{name: "unset", tenant: "hstles", wantErr: true},
-		{name: "empty", set: []string{}, tenant: "hstles", wantErr: true},
-		{name: "foreign", set: []string{"hstles"}, tenant: "hstles-dev", wantErr: true},
-		{name: "exact", set: []string{"hstles"}, tenant: "hstles"},
+		{name: "unset", partition: "hstles", wantErr: true},
+		{name: "empty", set: []string{}, partition: "hstles", wantErr: true},
+		{name: "foreign", set: []string{"hstles"}, partition: "hstles-dev", wantErr: true},
+		{name: "exact", set: []string{"hstles"}, partition: "hstles"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -224,7 +224,7 @@ func TestValidateTenantScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing
 			// The platform allowlist now lives in the CONSUMER policy, not in
 			// loom. An empty/nil allowlist admits nobody — fail closed.
 			r.SetPresencePolicy(scopeRefPolicy(test.set...))
-			err := r.validateScope(identity(test.tenant), h)
+			err := r.validateScope(identity(test.partition), h)
 			if test.wantErr {
 				if !errors.Is(err, rpcscope.ErrDenied) {
 					t.Fatalf("expected shared fail-closed denial, got %v", err)
@@ -302,7 +302,7 @@ func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 
 // TestValidateTenantScope_TransportReconcile is a REGRESSION LOCK on the
 // transport/authenticated-identity reconciliation. On a tenant-specific
-// transport the aether session's tenant is stamped by WithTransportPartition; a
+// transport the aether session's partition is stamped by WithTransportPartition; a
 // later authenticated identity that disagrees is rejected. Mutable request
 // maps are never one side of this comparison.
 //
@@ -310,20 +310,20 @@ func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 // (#R-697 Directive-1, "prove enforcement not config-presence") rests on, and
 // it had no direct coverage. The switch arms above return only on failure, so
 // the reconcile is reached on every scope whose context check passes; these
-// cases drive a ScopeTenant handler (tenant present) straight into it.
+// cases drive a ScopeTenant handler (partition present) straight into it.
 func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 	const reqTenant = "acme"
 	cases := []struct {
 		name      string
 		transport string // value stamped by WithTransportPartition (ignored if noStamp)
-		noStamp   bool   // if true, stamp no transport tenant at all
+		noStamp   bool   // if true, stamp no transport partition at all
 		wantErr   string // "" => expect pass
 	}{
-		// Tenant-specific transport: authenticated tenant matches the envelope.
+		// Tenant-specific transport: authenticated partition matches the envelope.
 		{name: "match_passes", transport: "acme", wantErr: ""},
-		// Tenant-specific transport: envelope lies about its tenant — REJECTED.
+		// Tenant-specific transport: envelope lies about its partition — REJECTED.
 		{name: "mismatch_rejects", transport: "evil", wantErr: "transport/authenticated partition mismatch"},
-		// Single-tenant fallback: reconcile skipped, envelope self-asserted.
+		// Single-partition fallback: reconcile skipped, envelope self-asserted.
 		{name: "default_skips_selfassert", transport: "default", wantErr: ""},
 		// Shared transport with no resolved ScopeID: skipped (empty == unset).
 		{name: "empty_skips", transport: "", wantErr: ""},

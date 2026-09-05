@@ -69,23 +69,23 @@ func (s *collisionProbeSession) AcceptStream(context.Context) (aether.Stream, er
 func (s *collisionProbeSession) AcceptStreamByID(context.Context, uint64) (aether.Stream, error) {
 	return nil, context.Canceled
 }
-func (s *collisionProbeSession) LocalNodeID() aether.NodeID   { return "" }
-func (s *collisionProbeSession) RemoteNodeID() aether.NodeID  { return "" }
-func (s *collisionProbeSession) LocalPeerID() aether.PeerID   { return aether.PeerID{} }
-func (s *collisionProbeSession) RemotePeerID() aether.PeerID  { return aether.PeerID{} }
-func (s *collisionProbeSession) Capabilities() aether.Capabilities { return 0 }
+func (s *collisionProbeSession) LocalNodeID() aether.NodeID                  { return "" }
+func (s *collisionProbeSession) RemoteNodeID() aether.NodeID                 { return "" }
+func (s *collisionProbeSession) LocalPeerID() aether.PeerID                  { return aether.PeerID{} }
+func (s *collisionProbeSession) RemotePeerID() aether.PeerID                 { return aether.PeerID{} }
+func (s *collisionProbeSession) Capabilities() aether.Capabilities           { return 0 }
 func (s *collisionProbeSession) Ping(context.Context) (time.Duration, error) { return 0, nil }
 func (s *collisionProbeSession) GoAway(context.Context, aether.GoAwayReason, string) error {
 	return nil
 }
-func (s *collisionProbeSession) Close() error                       { return nil }
-func (s *collisionProbeSession) IsClosed() bool                     { return false }
-func (s *collisionProbeSession) Health() *health.Monitor            { return nil }
-func (s *collisionProbeSession) SessionKey() []byte                 { return nil }
-func (s *collisionProbeSession) ConnectionID() aether.ConnectionID  { return aether.ConnectionID{} }
-func (s *collisionProbeSession) CongestionWindow() int64            { return 0 }
-func (s *collisionProbeSession) Protocol() aether.Protocol          { return aether.ProtoNoise }
-func (s *collisionProbeSession) Metrics() aether.SessionMetrics     { return aether.SessionMetrics{} }
+func (s *collisionProbeSession) Close() error                      { return nil }
+func (s *collisionProbeSession) IsClosed() bool                    { return false }
+func (s *collisionProbeSession) Health() *health.Monitor           { return nil }
+func (s *collisionProbeSession) SessionKey() []byte                { return nil }
+func (s *collisionProbeSession) ConnectionID() aether.ConnectionID { return aether.ConnectionID{} }
+func (s *collisionProbeSession) CongestionWindow() int64           { return 0 }
+func (s *collisionProbeSession) Protocol() aether.Protocol         { return aether.ProtoNoise }
+func (s *collisionProbeSession) Metrics() aether.SessionMetrics    { return aether.SessionMetrics{} }
 
 // swarmStreamID is the swarm transport's dedicated stream, and
 // applicationStreamFloor is the start of aether's documented application band.

@@ -72,15 +72,15 @@ func (si *SwarmIntegration) ShadowStats() (checked, rejected, dropped uint64) {
 }
 
 // ShadowParity compares the authoritative live directory against the trust
-// shadow's Swarm-backed projection over one tenant + role set, returning the
+// shadow's Swarm-backed projection over one partition + role set, returning the
 // per-capability report. It returns (nil, nil) when no shadow is running. A
 // report whose InParity() is false means the Swarm directory does not yet
 // reproduce the live directory — the LAD→Swarm cutover must not proceed on it.
-func (si *SwarmIntegration) ShadowParity(ctx context.Context, authoritative ports.LiveDirectory, tenant ports.Partition, roles []string) (*directory.ShadowReport, error) {
+func (si *SwarmIntegration) ShadowParity(ctx context.Context, authoritative ports.LiveDirectory, partition ports.Partition, roles []string) (*directory.ShadowReport, error) {
 	if si == nil || si.trustShadow == nil {
 		return nil, nil
 	}
-	return directory.CompareDirectories(ctx, authoritative, si.trustShadow.Directory(), tenant, roles)
+	return directory.CompareDirectories(ctx, authoritative, si.trustShadow.Directory(), partition, roles)
 }
 
 // newSwarmTrustGate builds the inbound trust-gate check for the given mode, or
@@ -90,7 +90,7 @@ func (si *SwarmIntegration) ShadowParity(ctx context.Context, authoritative port
 // identity is the observer, whose key signed the record. "observe" counts a
 // would-reject and ACCEPTS (the ME-P04/ME-P21 shadow-parity step); "enforce"
 // rejects. A minimal PolicyConfig covers the binding+revocation check; topic /
-// tenant / role authorization is a later leg needing a seeded PolicyConfig.
+// partition / role authorization is a later leg needing a seeded PolicyConfig.
 func newSwarmTrustGate(mode string) (func(swarm.Record) error, *trustGateCounters) {
 	if mode != "observe" && mode != "enforce" {
 		return nil, nil
@@ -186,7 +186,7 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	// live LAD directory before the LAD→Swarm cutover. nil in every mode but
 	// "observe"; the feed (cfg.OnAccepted below) is non-blocking, so it never
 	// slows swarm accept. The seed opens the self-owned topics plus the
-	// configured tenants — anything else surfaces as a would-reject to observe.
+	// configured partitions — anything else surfaces as a would-reject to observe.
 	seed := directory.BaselinePolicyConfig()
 	for _, tc := range rt.cfg.Partitions {
 		if tc.PartitionID != "" {
@@ -654,7 +654,7 @@ func (rt *Runtime) advertiseSwarmListeners(si *SwarmIntegration) {
 	if publicHost == "" {
 		// Having no public hostname is not a reason to advertise nothing.
 		//
-		// loom is the platform-service mesh, distinct from the tenant overlay,
+		// loom is the platform-service mesh, distinct from the partition overlay,
 		// and no settled rule governs the advertisement path this feeds. The
 		// behaviour here stands on its own merits: a node reachable over its
 		// private fabric that publishes ZERO candidates is unreachable to peers

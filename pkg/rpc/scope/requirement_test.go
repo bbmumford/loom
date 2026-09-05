@@ -57,7 +57,7 @@ func TestRequirement_NexusResolvedOnly(t *testing.T) {
 
 // Nexus is AUTHN, not authority: every resolved identity passes; the policy never
 // decides which one owns the target — that is the handler's nexus check, and is why
-// there is no subject/tenant level here.
+// there is no subject/partition level here.
 func TestRequirement_NexusIsAuthnNotAuthority(t *testing.T) {
 	p := NewPolicy(nil)
 	if ok, _ := p.Authorize(Nexus(), resolved("owner-scope")); !ok {

@@ -42,16 +42,16 @@ type directoryCacheAdapter struct {
 	cache *ladcache.DirectoryCache
 }
 
-func (d *directoryCacheAdapter) Members(ctx context.Context, tenant string) ([]lad.MemberRecord, error) {
-	return d.cache.Members(ctx, tenant)
+func (d *directoryCacheAdapter) Members(ctx context.Context, partition string) ([]lad.MemberRecord, error) {
+	return d.cache.Members(ctx, partition)
 }
 
-func (d *directoryCacheAdapter) Roles(ctx context.Context, tenant string, query ladcache.RoleQuery) ([]lad.RoleRecord, error) {
-	return d.cache.Roles(ctx, tenant, query)
+func (d *directoryCacheAdapter) Roles(ctx context.Context, partition string, query ladcache.RoleQuery) ([]lad.RoleRecord, error) {
+	return d.cache.Roles(ctx, partition, query)
 }
 
-func (d *directoryCacheAdapter) Reach(ctx context.Context, tenant string, query ladcache.ReachQuery) ([]lad.ReachRecord, error) {
-	return d.cache.Reach(ctx, tenant, query)
+func (d *directoryCacheAdapter) Reach(ctx context.Context, partition string, query ladcache.ReachQuery) ([]lad.ReachRecord, error) {
+	return d.cache.Reach(ctx, partition, query)
 }
 
 // NewHandlerFromRuntime creates a /mesh/status handler from runtime components.

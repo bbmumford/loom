@@ -117,7 +117,7 @@ func TestEnqueueAuthorizedBindsOnlyTheExactTaskPointer(t *testing.T) {
 		t.Fatalf("body-only binding = (%s, %v), want empty/false", owner.Fingerprint(), ok)
 	}
 
-	// Mutable body tenant data neither selects nor vetoes the opaque owner.
+	// Mutable body partition data neither selects nor vetoes the opaque owner.
 	// Product authorization—not this generic gateway—owns that policy.
 	foreign := &task.Task{ID: "foreign", TenantID: "other"}
 	err = g.EnqueueAuthorized(gatewayPrincipalContext(principal), foreign)
@@ -248,7 +248,7 @@ func TestStopReleasesAuthorizedBindings(t *testing.T) {
 func TestAuthorizedAdmissionIsBoundedIndependentlyPerOpaqueOwner(t *testing.T) {
 	g, err := NewGateway(
 		GatewayConfig{
-			ID:                     "owner-limit-test",
+			ID:                         "owner-limit-test",
 			MaxOutstandingPerPartition: 1,
 		},
 		WithExecutionPrincipalReader(gatewayPrincipalReader{}),
@@ -368,8 +368,8 @@ func TestAssignmentIdentityMutationRejectsBeforePrincipalAuthorization(t *testin
 func TestQueueRejectionRollsBackOwnerAndPointerAdmission(t *testing.T) {
 	g, err := NewGateway(
 		GatewayConfig{
-			ID:                     "queue-bound-test",
-			MaxQueueDepth:          1,
+			ID:                         "queue-bound-test",
+			MaxQueueDepth:              1,
 			MaxOutstandingPerPartition: 2,
 		},
 		WithExecutionPrincipalReader(gatewayPrincipalReader{}),

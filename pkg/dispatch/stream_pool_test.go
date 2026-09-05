@@ -29,38 +29,38 @@ func (m *mockSession) AcceptStream(ctx context.Context) (aether.Stream, error) {
 func (m *mockSession) AcceptStreamByID(ctx context.Context, streamID uint64) (aether.Stream, error) {
 	return nil, nil
 }
-func (m *mockSession) IsClosed() bool                                       { return m.closed }
-func (m *mockSession) Close() error                                         { return nil }
-func (m *mockSession) LocalNodeID() aether.NodeID                        { return "" }
-func (m *mockSession) RemoteNodeID() aether.NodeID                       { return "" }
-func (m *mockSession) LocalPeerID() aether.PeerID                             { return aether.PeerID{} }
-func (m *mockSession) RemotePeerID() aether.PeerID                            { return aether.PeerID{} }
-func (m *mockSession) Capabilities() aether.Capabilities                      { return 0 }
-func (m *mockSession) Ping(ctx context.Context) (time.Duration, error)     { return 0, nil }
+func (m *mockSession) IsClosed() bool                                  { return m.closed }
+func (m *mockSession) Close() error                                    { return nil }
+func (m *mockSession) LocalNodeID() aether.NodeID                      { return "" }
+func (m *mockSession) RemoteNodeID() aether.NodeID                     { return "" }
+func (m *mockSession) LocalPeerID() aether.PeerID                      { return aether.PeerID{} }
+func (m *mockSession) RemotePeerID() aether.PeerID                     { return aether.PeerID{} }
+func (m *mockSession) Capabilities() aether.Capabilities               { return 0 }
+func (m *mockSession) Ping(ctx context.Context) (time.Duration, error) { return 0, nil }
 func (m *mockSession) GoAway(ctx context.Context, r aether.GoAwayReason, msg string) error {
 	return nil
 }
-func (m *mockSession) Health() *health.Monitor              { return nil }
-func (m *mockSession) SessionKey() []byte                   { return nil }
-func (m *mockSession) ConnectionID() aether.ConnectionID       { return aether.ConnectionID{} }
-func (m *mockSession) CongestionWindow() int64              { return 0 }
+func (m *mockSession) Health() *health.Monitor           { return nil }
+func (m *mockSession) SessionKey() []byte                { return nil }
+func (m *mockSession) ConnectionID() aether.ConnectionID { return aether.ConnectionID{} }
+func (m *mockSession) CongestionWindow() int64           { return 0 }
 func (m *mockSession) Protocol() aether.Protocol         { return aether.ProtoWebSocket }
-func (m *mockSession) Metrics() aether.SessionMetrics          { return aether.SessionMetrics{} }
+func (m *mockSession) Metrics() aether.SessionMetrics    { return aether.SessionMetrics{} }
 
 type mockStream struct {
 	id     uint64
 	closed bool
 }
 
-func (s *mockStream) StreamID() uint64                                     { return s.id }
-func (s *mockStream) Send(ctx context.Context, data []byte) error          { return nil }
-func (s *mockStream) Receive(ctx context.Context) ([]byte, error)          { return nil, nil }
-func (s *mockStream) Close() error                                         { s.closed = true; return nil }
-func (s *mockStream) Reset(reason aether.ResetReason) error                   { return nil }
-func (s *mockStream) SetPriority(weight uint8, dependency uint64)          {}
-func (s *mockStream) Config() aether.StreamConfig                             { return aether.StreamConfig{} }
-func (s *mockStream) IsOpen() bool                                         { return !s.closed }
-func (s *mockStream) Conn() net.Conn                                       { return nil }
+func (s *mockStream) StreamID() uint64                            { return s.id }
+func (s *mockStream) Send(ctx context.Context, data []byte) error { return nil }
+func (s *mockStream) Receive(ctx context.Context) ([]byte, error) { return nil, nil }
+func (s *mockStream) Close() error                                { s.closed = true; return nil }
+func (s *mockStream) Reset(reason aether.ResetReason) error       { return nil }
+func (s *mockStream) SetPriority(weight uint8, dependency uint64) {}
+func (s *mockStream) Config() aether.StreamConfig                 { return aether.StreamConfig{} }
+func (s *mockStream) IsOpen() bool                                { return !s.closed }
+func (s *mockStream) Conn() net.Conn                              { return nil }
 
 func TestStreamPool_GetReturnsPreOpenedStream(t *testing.T) {
 	sess := &mockSession{}

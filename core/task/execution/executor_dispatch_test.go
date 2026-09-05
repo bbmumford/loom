@@ -26,7 +26,7 @@ type executorTenantKey struct{}
 type executorPrincipalKey struct{}
 
 // newExecutorRegistry builds a handler registry with a CONSUMER-side reference
-// PresencePolicy that admits a tenant-bound identity. loom no longer contains
+// PresencePolicy that admits a partition-bound identity. loom no longer contains
 // presence semantics; the executor's DispatchTaskWithAuth delegates to this
 // policy, and a nil policy would fail closed on the tenant-scoped probes.
 func newExecutorRegistry() *handlers.HandlerRegistry {

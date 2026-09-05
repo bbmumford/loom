@@ -12,7 +12,7 @@ type Requirement struct {
 	Cap  string
 }
 
-// ArmKind is how an operation is authorized. There is no tenant/user/org level:
+// ArmKind is how an operation is authorized. There is no partition/user/org level:
 // authority is a capability, or a nexus relationship the handler resolves.
 type ArmKind int
 

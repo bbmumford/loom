@@ -52,7 +52,7 @@ type Config struct {
 	MeshFallbackStats ports.MeshFallbackStatsFunc
 
 	// AuthValidator gates task-executor handler execution and stamps
-	// tenant IDs onto nested-call contexts (replaces the
+	// partition IDs onto nested-call contexts (replaces the
 	// platform/security/helpers import). nil → loom-local fail-closed
 	// validator. HSTLES builds MUST inject a validator that delegates to
 	// the real helpers package so its unexported context keys — the ones
@@ -62,7 +62,7 @@ type Config struct {
 	// SwarmTrustMode selects the inbound trust gate on the swarm
 	// live-directory convergence path. "" / "off" = no gate (current
 	// behaviour). "observe" runs the FULL pre-store authorization —
-	// TrustPolicy.AuthorizePublish: NodeID↔key bind (aether scheme), tenant
+	// TrustPolicy.AuthorizePublish: NodeID↔key bind (aether scheme), partition
 	// scope, and the topic publish rule, seeded from the self-owned baseline —
 	// and COUNTS records that WOULD be rejected without rejecting any; that is
 	// the shadow-parity step, and it must show zero would-rejects for legit
@@ -173,7 +173,7 @@ type Config struct {
 
 	// Network Keys (Shared PSKs for mesh authorization)
 	// First key is used for sending, all are accepted for receiving.
-	// Used as a single-tenant fallback when Tenants is empty.
+	// Used as a single-partition fallback when Tenants is empty.
 	NetworkKeys []string
 
 	// Partitions configures a per-partition transport for mesh segmentation.
@@ -343,7 +343,7 @@ type ConnectionBudgetConfig struct {
 }
 
 // AuthKeys returns all network keys available for node-level auth (snapshot HMAC, etc.).
-// Returns global NetworkKeys first, then unique keys from tenant configs.
+// Returns global NetworkKeys first, then unique keys from partition configs.
 func (c *Config) AuthKeys() []string {
 	seen := make(map[string]bool, len(c.NetworkKeys))
 	keys := make([]string, 0, len(c.NetworkKeys))
@@ -373,15 +373,15 @@ func (c *Config) Validate() error {
 		return fmt.Errorf("data directory is required")
 	}
 	// Network key validation: either NetworkKeys or Tenants must be provided.
-	// When Tenants is non-empty, each tenant carries its own keys.
-	// When Tenants is empty, NetworkKeys is used as single-tenant fallback.
+	// When Tenants is non-empty, each partition carries its own keys.
+	// When Tenants is empty, NetworkKeys is used as single-partition fallback.
 	if len(c.NetworkKeys) == 0 && len(c.Partitions) == 0 {
 		return fmt.Errorf("at least one network key or tenant config is required")
 	}
 
-	// Validate tenant configs
+	// Validate partition configs
 	seenTenants := make(map[string]bool, len(c.Partitions))
-	seenPorts := make(map[int]string) // port → tenantID (for collision detection)
+	seenPorts := make(map[int]string) // port → partitionID (for collision detection)
 	for i, tc := range c.Partitions {
 		if tc.PartitionID == "" {
 			return fmt.Errorf("tenant[%d]: tenant ID is required", i)

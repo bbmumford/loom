@@ -163,7 +163,7 @@ func TestSharedTransport_Dial_NoTenantInCtx(t *testing.T) {
 		t.Fatalf("new: %v", err)
 	}
 
-	// Dial without tenant in context should fail
+	// Dial without partition in context should fail
 	_, err = st.Dial(context.Background(), aether.Target{
 		NodeID:  "test-node",
 		Address: "127.0.0.1:9999",
@@ -179,7 +179,7 @@ func TestSharedTransport_Dial_UnknownTenant(t *testing.T) {
 		t.Fatalf("new: %v", err)
 	}
 
-	// Dial with unknown tenant in context
+	// Dial with unknown partition in context
 	ctx := WithPartitionID(context.Background(), "unknown-tenant")
 	_, err = st.Dial(ctx, aether.Target{
 		NodeID:  "test-node",
@@ -216,7 +216,7 @@ func TestSharedTransport_KeyIsolation(t *testing.T) {
 }
 
 func TestTransportManager_ContextInjection(t *testing.T) {
-	// Verify that TransportManager.Dial injects tenant ID into context.
+	// Verify that TransportManager.Dial injects partition ID into context.
 	// We use a custom transport that captures the context.
 	var capturedCtx context.Context
 	captureTx := &contextCapturingTransport{

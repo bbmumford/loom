@@ -26,7 +26,7 @@ type rpcContextKey struct{}
 // This map is caller/wire data, not scope authority. EnforceScope deliberately
 // ignores it and reads only the typed identity installed through
 // WithAuthenticatedScopeIdentity. Keeping the two context surfaces separate
-// prevents a request body or forwarded map from manufacturing tenant,
+// prevents a request body or forwarded map from manufacturing partition,
 // organisation, or user presence.
 //
 // Empty / nil maps return ctx unchanged. Re-calling MERGES with the prior
@@ -80,7 +80,7 @@ func RPCContextValue(ctx context.Context, key string) (string, bool) {
 //
 // On the SEND side, dispatch stamps tenantId from the process-wide platform
 // tenant (HWPCaller.SetPlatformTenant) and copies ONLY scopes and userId out
-// of the caller's context — so a tenant placed in a ctx before an outgoing
+// of the caller's context — so a partition placed in a ctx before an outgoing
 // call is SILENTLY IGNORED and the RPC goes out carrying the platform
 // identity. That is #R-782/#K-32's anti-spoof property, not an oversight: a
 // caller-supplied context must not be able to choose the authoritative
@@ -90,7 +90,7 @@ func RPCContextValue(ctx context.Context, key string) (string, bool) {
 // calling node — it is not the end user's org and must not be used as an
 // authorisation subject. The authenticated principal travels as userId +
 // scopes; per platform §4.2 (ruled #R-1598 ①) a handler that needs the
-// end-user tenant RESOLVES IT SERVER-SIDE from that principal, the same way
+// end-user partition RESOLVES IT SERVER-SIDE from that principal, the same way
 // §4.6 requires ingress routing be a server-side lookup rather than a token
 // decode.
 func TenantFromContext(ctx context.Context) string {

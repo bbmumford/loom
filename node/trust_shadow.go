@@ -138,19 +138,19 @@ func (s *TrustShadow) Stats() (checked, rejected, dropped uint64) {
 }
 
 // shadowParityScope names the tenant + role set the parity pass queries on both
-// directories. It reads the node's own configured tenant and roles: an empty
-// tenant selects records stored under the empty tenant (ports.Partition is a
+// directories. It reads the node's own configured partition and roles: an empty
+// partition selects records stored under the empty partition (ports.Partition is a
 // literal bucket key, not a wildcard), and the role list bounds the per-role
 // NodesByRole comparison to roles this node actually participates in.
 func (rt *Runtime) shadowParityScope() (ports.Partition, []string) {
-	tenant := ports.Partition("")
+	partition := ports.Partition("")
 	for _, tc := range rt.cfg.Partitions {
 		if tc.PartitionID != "" {
-			tenant = ports.Partition(tc.PartitionID)
+			partition = ports.Partition(tc.PartitionID)
 			break
 		}
 	}
-	return tenant, rt.cfg.Roles
+	return partition, rt.cfg.Roles
 }
 
 // startShadowParity launches the periodic directory-parity comparison and

@@ -199,13 +199,13 @@ type DirectorySnapshot struct {
 // empty tenant, nothing more.
 //
 // This parameter exists because the substrate requires it and the port used to
-// hide it (#R-1455 ③). Nine of loom's ten tenant-scoped cache reads pass "",
+// hide it (#R-1455 ③). Nine of loom's ten partition-scoped cache reads pass "",
 // and they still may — but they now SAY SO, which is the precondition for
 // fixing the hardcode rather than the fix itself.
 type Partition string
 
 type LiveDirectory interface {
-	// Members returns the live membership projection for one tenant
+	// Members returns the live membership projection for one partition
 	// (tombstoned/TTL-expired entries excluded unless still within retention
 	// for observers).
 	Members(ctx context.Context, partition Partition) ([]Member, error)

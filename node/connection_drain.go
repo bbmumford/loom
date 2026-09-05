@@ -277,7 +277,7 @@ func SelectForDrain(connections []ConnectionInfo, targetCount int) []ConnectionI
 }
 
 // shouldDrainFirst returns true if a should be drained before b.
-// Priority is the primary sort key so lower-priority (idle/low) tenant
+// Priority is the primary sort key so lower-priority (idle/low) partition
 // connections are drained before higher-priority ones when scale-down
 // pressure hits.
 func shouldDrainFirst(a, b ConnectionInfo) bool {

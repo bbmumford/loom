@@ -66,10 +66,10 @@ func TestScopeAlias_TypeIdentity(t *testing.T) {
 // receive the same enforcement whether it dispatches through EnforceScope
 // (rpc) or validateScope (handlers). Because the two implementations
 // now consult the same constant, this test asserts they refuse the same
-// missing-tenant input rather than one silently accepting.
+// missing-partition input rather than one silently accepting.
 func TestScopeAlias_ProfileEnforceScopeParity(t *testing.T) {
 	// rpc.EnforceScope side: a ScopeProfile handler with an empty ctx
-	// (no platform-tenant axis) must be denied with ErrScopeDenied under the
+	// (no platform-partition axis) must be denied with ErrScopeDenied under the
 	// reference policy — mirroring what validateScope does on the
 	// handlers side with the same policy.
 	h := &Handler{Namespace: "app", Domain: "billing", Operation: "GetProfile", Scope: ScopeProfile}

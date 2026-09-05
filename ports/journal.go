@@ -13,7 +13,7 @@ import (
 // DurableJournal is the narrow durability port (Phase 0.5.1): atomic ordered
 // append of ACCEPTED records, monotonic watermarks, lossless replay, restart
 // recovery, retention, and snapshots. Accepted Swarm changes are journaled
-// AFTER signature, identity, tenant/topic authorization, clock, and resource
+// AFTER signature, identity, partition/topic authorization, clock, and resource
 // validation — the journal is an audit/recovery log of canonical records,
 // never a second live merge authority. Replay feeds accepted records back
 // through the same projection path (LiveDirectory), not around it.

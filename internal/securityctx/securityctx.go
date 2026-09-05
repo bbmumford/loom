@@ -34,12 +34,12 @@ const (
 	executionPrincipalKey
 )
 
-// WithTenantID stamps the tenant onto ctx under the loom-local key.
-func WithTenantID(ctx context.Context, tenantID string) context.Context {
-	return context.WithValue(ctx, tenantIDKey, tenantID)
+// WithTenantID stamps the partition onto ctx under the loom-local key.
+func WithTenantID(ctx context.Context, partitionID string) context.Context {
+	return context.WithValue(ctx, tenantIDKey, partitionID)
 }
 
-// ExtractTenantID reads the loom-local tenant key ("" when absent).
+// ExtractTenantID reads the loom-local partition key ("" when absent).
 func ExtractTenantID(ctx context.Context) string {
 	if v, ok := ctx.Value(tenantIDKey).(string); ok {
 		return v
@@ -142,17 +142,17 @@ func (defaultValidator) ValidateExecutionAuth(ctx context.Context, h ports.Secur
 	return nil
 }
 
-func (defaultValidator) WithTenantID(ctx context.Context, tenantID string) context.Context {
-	return WithTenantID(ctx, tenantID)
+func (defaultValidator) WithTenantID(ctx context.Context, partitionID string) context.Context {
+	return WithTenantID(ctx, partitionID)
 }
 
-// ExecutionPartitionID reads the private Pure-Loom tenant principal without
+// ExecutionPartitionID reads the private Pure-Loom partition principal without
 // creating one. This is the read-only executor side of WithTenantID: callers
 // must establish the principal before task dispatch, and the mutable task body
 // is only compared against it.
 func (defaultValidator) ExecutionPartitionID(ctx context.Context) (string, bool) {
-	tenantID := ExtractTenantID(ctx)
-	return tenantID, tenantID != ""
+	partitionID := ExtractTenantID(ctx)
+	return partitionID, partitionID != ""
 }
 
 // ExecutionPrincipal reads the private Pure-Loom owner principal without

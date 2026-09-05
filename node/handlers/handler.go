@@ -820,7 +820,7 @@ func getUserIDFromContext(ctx context.Context) string {
 }
 
 // validateScope checks that the trusted typed context satisfies the
-// handler's tenant scope. RPCRequest.Context and task Metadata are deliberately
+// handler's partition scope. RPCRequest.Context and task Metadata are deliberately
 // ignored here: both are mutable request data and cannot establish platform,
 // organisation, or user identity.
 func (r *HandlerRegistry) validateScope(ctx context.Context, h HandlerMeta) error {
@@ -919,7 +919,7 @@ func (r *HandlerRegistry) Dispatch(ctx context.Context, req *RPCRequest) (*RPCRe
 // DispatchRPCWithAuth resolves and executes an RPC through the authenticated
 // pipeline:
 //
-//	auth → tenant scope → middleware Before → RPCHandler → middleware After
+//	auth → partition scope → middleware Before → RPCHandler → middleware After
 //
 // A nil validator uses the fail-closed Loom-local validator. Product runtimes
 // must pass the validator injected at composition so private product context
@@ -1337,12 +1337,12 @@ func GetPartitionIDFromContext(ctx map[string]interface{}) string {
 		return ""
 	}
 
-	tenantID, ok := ctx["tenant_id"]
+	partitionID, ok := ctx["tenant_id"]
 	if !ok {
 		return ""
 	}
 
-	tenantIDStr, ok := tenantID.(string)
+	tenantIDStr, ok := partitionID.(string)
 	if !ok {
 		return ""
 	}
@@ -1376,7 +1376,6 @@ func TransportPartitionFromContext(ctx context.Context) string {
 	}
 	return ""
 }
-
 
 // GetRequestIDFromContext extracts request_id for tracing
 func GetRequestIDFromContext(ctx map[string]interface{}) string {

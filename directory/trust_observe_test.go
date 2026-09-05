@@ -21,7 +21,7 @@ import (
 
 // canonicalPeer builds a fleet.peer record whose NodeID is the aether NodeID for
 // its key, so VerifyNodeKey passes and the tests exercise the AuthorizePublish
-// (topic) leg — the one an unseeded PolicyConfig fails closed. tenant=hstles.
+// (topic) leg — the one an unseeded PolicyConfig fails closed. partition=hstles.
 func canonicalPeer(t *testing.T, hlc uint64) (ports.Record, ports.NodeID) {
 	t.Helper()
 	pub, _, err := ed25519.GenerateKey(rand.Reader)

@@ -125,7 +125,7 @@ func TestPreambleSpoofingRejection(t *testing.T) {
 		t.Fatalf("attacker transport: %v", err)
 	}
 
-	// Spoof: claim to be "victim" in preamble but use honest-tenant's key.
+	// Spoof: claim to be "victim" in preamble but use honest-partition's key.
 	// The responder will resolve "victim" → victimKey, but the CRC32 fingerprint
 	// of honestKey won't match victimKey → handshake rejected at key resolution.
 	spoofCtx := noise.WithDialOverride(ctx, "victim", [][]byte{honestKey})
@@ -142,7 +142,7 @@ func TestPreambleSpoofingRejection(t *testing.T) {
 
 // TestInfrastructureServesAllTenants verifies that a shared transport listener
 // accepts handshakes from multiple partitions, each using their own PSK.
-// Each tenant uses a separate dialer transport with its own keypair (Noise
+// Each partition uses a separate dialer transport with its own keypair (Noise
 // handshakes require different static keys on each side).
 func TestInfrastructureServesAllTenants(t *testing.T) {
 	// Server: shared transport that accepts multiple partitions
@@ -233,7 +233,7 @@ func TestInfrastructureServesAllTenants(t *testing.T) {
 	}
 	defer sessB.Close()
 
-	// Verify client-side PartitionSession wrappers carry correct tenant IDs.
+	// Verify client-side PartitionSession wrappers carry correct partition IDs.
 	if sessA.PartitionID() != "tenant-a" {
 		t.Errorf("sessA.PartitionID() = %q, want %q", sessA.PartitionID(), "tenant-a")
 	}

@@ -12,7 +12,7 @@ package ports
 // convert at the port boundary only.
 type NodeID string
 
-// Topic is a tenant-/network-scoped replicated-state topic string
+// Topic is a partition-/network-scoped replicated-state topic string
 // (e.g. "fleet.peer", "role.secrets.auth", "agent.keys.<tenant>").
 type Topic string
 

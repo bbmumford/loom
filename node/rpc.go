@@ -119,8 +119,8 @@ func (m *rpcMetrics) Stats() map[string]map[string]int64 {
 // common case (handler already registered) and only takes the LoadOrStore
 // slow path on first sight of a handler name.
 //
-// Cardinality is bounded by the handler registry — each tenant.<domain>.<Op>
-// FQN gets exactly one entry, and there is no per-call or per-tenant key
+// Cardinality is bounded by the handler registry — each partition.<domain>.<Op>
+// FQN gets exactly one entry, and there is no per-call or per-partition key
 // component, so the map size stays at O(handlers) regardless of traffic.
 type dispatchLatencyRegistry struct {
 	hists sync.Map // map[string]*aethermetrics.DurationHist
@@ -305,7 +305,7 @@ type RPCServer struct {
 	activeHandlers int32          // atomic — concurrent handler goroutines
 	responseCache  *ResponseCache // dedup cache for parallel probes
 
-	// authValidator stamps wire-envelope tenant IDs onto the platform-
+	// authValidator stamps wire-envelope partition IDs onto the platform-
 	// canonical context key (convention (b) in handleRequest). Injected
 	// from Config.AuthValidator; defaults to the loom-local securityctx
 	// implementation, which HSTLES builds must override so domain
@@ -793,12 +793,12 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 
 	// Cross-tenant forge gate: the consuming project names which axis pins
 	// against the transport-established tenant; that axis's received value must
-	// equal transportPartition, or a peer bound to tenant T could present another
-	// tenant's identity. A consumer that injects no pin cannot carry customer
+	// equal transportPartition, or a peer bound to partition T could present another
+	// partition's identity. A consumer that injects no pin cannot carry customer
 	// authority over the mesh — fail closed rather than accept an un-pinned
 	// principal. Only the pinned (platform-tenant-analog) axis is gated here;
 	// the owner partition is derived receive-side from a within-tenant axis by
-	// the consumer's stamper below, so within-tenant multi-owner traffic still
+	// the consumer's stamper below, so within-partition multi-owner traffic still
 	// round-trips (pinning that axis too would deny it).
 	pinnedAxis := ""
 	if pinner, ok := s.authValidator.(ports.TransportAxisPin); ok {
@@ -946,17 +946,17 @@ func (s *RPCServer) writeMessage(ctx context.Context, session aether.Connection,
 }
 
 // HandleIncomingSessions processes incoming VL1 sessions with RPC protocol.
-// Backward-compat: uses "default" as the transport tenant for all sessions.
+// Backward-compat: uses "default" as the transport partition for all sessions.
 func (s *RPCServer) HandleIncomingSessions(ctx context.Context, listener aether.Listener) {
 	s.HandleIncomingSessionsForTenant(ctx, listener, "default")
 }
 
 // HandleIncomingSessionsForTenant processes incoming sessions, resolving the
-// transport-level tenant ID for each. The fallbackTenantID is used for sessions
+// transport-level partition ID for each. The fallbackPartitionID is used for sessions
 // that don't carry an embedded tenant (e.g., dedicated single-tenant transports).
 // For shared preamble transports, the tenant ID is extracted from the session.
-func (s *RPCServer) HandleIncomingSessionsForTenant(ctx context.Context, listener aether.Listener, fallbackTenantID string) {
-	s.logger.Printf("[RPC] Listening for incoming mesh connections (tenant fallback: %s)...", fallbackTenantID)
+func (s *RPCServer) HandleIncomingSessionsForTenant(ctx context.Context, listener aether.Listener, fallbackPartitionID string) {
+	s.logger.Printf("[RPC] Listening for incoming mesh connections (partition fallback: %s)...", fallbackPartitionID)
 
 	for {
 		select {
@@ -972,14 +972,14 @@ func (s *RPCServer) HandleIncomingSessionsForTenant(ctx context.Context, listene
 				return
 			}
 
-			tenantID := fallbackTenantID
+			partitionID := fallbackPartitionID
 			if tas, ok := session.(aether.TenantAwareSession); ok {
 				if tid := tas.ScopeID(); tid != "" {
-					tenantID = tid
+					partitionID = tid
 				}
 			}
 
-			sessionCtx := handlers.WithTransportPartition(ctx, tenantID)
+			sessionCtx := handlers.WithTransportPartition(ctx, partitionID)
 
 			// Spawn via safeGo so a panic anywhere inside ServeSession
 			// (e.g. a handler reached via the non-bidi path, before
@@ -990,8 +990,8 @@ func (s *RPCServer) HandleIncomingSessionsForTenant(ctx context.Context, listene
 				safeGo("rpc.ServeSession", func() {
 					defer sess.Close()
 
-					s.logger.Printf("[RPC] Accepted connection from %s (tenant: %s)",
-						sess.RemoteNodeID().Short(), tenantID)
+					s.logger.Printf("[RPC] Accepted connection from %s (partition: %s)",
+						sess.RemoteNodeID().Short(), partitionID)
 
 					if err := s.ServeSession(sCtx, sess); err != nil {
 						if err != context.Canceled && err != io.EOF {
@@ -1019,8 +1019,8 @@ func (h *PingRPCHandler) Role() string                { return "system" }
 func (h *PingRPCHandler) RequiresAuth() bool          { return false }
 func (h *PingRPCHandler) AllowedAuthTypes() []string  { return nil }
 func (h *PingRPCHandler) Scopes() []string            { return nil }
-func (h *PingRPCHandler) Scope() handlers.Scope { return handlers.ScopeNone }
-func (h *PingRPCHandler) AllowedPartitions() []string    { return nil }
+func (h *PingRPCHandler) Scope() handlers.Scope       { return handlers.ScopeNone }
+func (h *PingRPCHandler) AllowedPartitions() []string { return nil }
 
 func (h *PingRPCHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	type PingRequest struct {
@@ -1120,8 +1120,8 @@ func (h *StatusRPCHandler) Role() string                { return "system" }
 func (h *StatusRPCHandler) RequiresAuth() bool          { return false }
 func (h *StatusRPCHandler) AllowedAuthTypes() []string  { return nil }
 func (h *StatusRPCHandler) Scopes() []string            { return nil }
-func (h *StatusRPCHandler) Scope() handlers.Scope { return handlers.ScopeNone }
-func (h *StatusRPCHandler) AllowedPartitions() []string    { return nil }
+func (h *StatusRPCHandler) Scope() handlers.Scope       { return handlers.ScopeNone }
+func (h *StatusRPCHandler) AllowedPartitions() []string { return nil }
 
 func (h *StatusRPCHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	// The four original fields keep their names and meanings; everything new is

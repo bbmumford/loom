@@ -43,8 +43,8 @@ func trustPrincipal(t *testing.T, partition string) (ports.Principal, ed25519.Pr
 		t.Fatal(err)
 	}
 	return ports.Principal{
-		NodeID: ports.NodeID(string(id)),
-		PubKey: pub,
+		NodeID:      ports.NodeID(string(id)),
+		PubKey:      pub,
 		PartitionID: partition,
 	}, priv
 }
@@ -148,9 +148,9 @@ func TestAuthorizeReadsDocumentedCoarsenessIsIntentional(t *testing.T) {
 		}
 	})
 
-	t.Run("an UNSTAMPED tenant bypasses the tenant check", func(t *testing.T) {
+	t.Run("an UNSTAMPED partition bypasses the partition check", func(t *testing.T) {
 		// checkTenant returns nil for Tenant == "" — "tenantless fleet
-		// principals; tenant scoping applies when stamped". So the gate is
+		// principals; partition scoping applies when stamped". So the gate is
 		// only as strong as whatever stamps the tenant upstream.
 		tenantless, _ := trustPrincipal(t, "")
 		if err := p.AuthorizeRead(ctx, tenantless, ports.Topic("fleet.peer")); err != nil {
@@ -205,7 +205,7 @@ func TestCheckTenantBranches(t *testing.T) {
 
 	for _, tc := range []struct {
 		name, partition string
-		wantErr      bool
+		wantErr         bool
 	}{
 		{"registered tenant", "hstles", false},
 		{"second registered tenant", "acme", false},
@@ -224,7 +224,7 @@ func TestCheckTenantBranches(t *testing.T) {
 		})
 	}
 
-	// A policy with NO tenants configured must still reject a stamped one —
+	// A policy with NO partitions configured must still reject a stamped one —
 	// zero-value config means "nothing allowed", not "everything allowed".
 	empty := NewPolicy(PolicyConfig{})
 	pr, _ := trustPrincipal(t, "hstles")

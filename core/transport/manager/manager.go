@@ -120,8 +120,8 @@ func (m *TransportManager) Dial(ctx context.Context, partitionID aether.ScopeID,
 	}
 
 	return &PartitionSession{
-		Connection: session,
-		partitionID:   partitionID,
+		Connection:  session,
+		partitionID: partitionID,
 	}, nil
 }
 
@@ -165,13 +165,13 @@ func (m *TransportManager) Count() int {
 type ManagerStats struct {
 	Closed         bool
 	PartitionCount int
-	Partitions     []PartitionStats  // per-partition breakdown, sorted by partition ID
-	ByTransport    map[string]int // transport-type-name → partition count
+	Partitions     []PartitionStats // per-partition breakdown, sorted by partition ID
+	ByTransport    map[string]int   // transport-type-name → partition count
 }
 
 // PartitionStats is per-partition observable state.
 type PartitionStats struct {
-	PartitionID      aether.ScopeID
+	PartitionID   aether.ScopeID
 	TransportType string // Go type name of the registered transport
 	Protocol      string // aether.Protocol name if available
 }
@@ -195,7 +195,7 @@ func (m *TransportManager) Stats() ManagerStats {
 			proto = prov.Protocol().String()
 		}
 		out.Partitions = append(out.Partitions, PartitionStats{
-			PartitionID:      tid,
+			PartitionID:   tid,
 			TransportType: typeName,
 			Protocol:      proto,
 		})

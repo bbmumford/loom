@@ -29,37 +29,37 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 		}
 	}
 	return func(declared scope.ScopeTag, id scope.AuthenticatedIdentity) (bool, string) {
-		tenant := id.Scope(scope.AxisTransportPinned)
+		partition := id.Scope(scope.AxisTransportPinned)
 		switch declared {
 		case scope.ScopeNone:
 			return true, ""
 		case scope.ScopePlatform:
-			if tenant == "" {
+			if partition == "" {
 				return false, "platform tenant required"
 			}
-			if _, ok := allow[tenant]; !ok {
+			if _, ok := allow[partition]; !ok {
 				return false, "tenant not in platform allowlist"
 			}
 		case scope.ScopeTenant:
-			if tenant == "" {
+			if partition == "" {
 				return false, "tenant required"
 			}
 		case scope.ScopeOrg:
-			if tenant == "" {
+			if partition == "" {
 				return false, "tenant required"
 			}
 			if id.Scope(scope.AxisWithinTransport) == "" {
 				return false, "organisation required"
 			}
 		case scope.ScopeUser:
-			if tenant == "" {
+			if partition == "" {
 				return false, "tenant required"
 			}
 			if id.Subject == "" {
 				return false, "user required"
 			}
 		case scope.ScopeProfile:
-			if tenant == "" {
+			if partition == "" {
 				return false, "tenant required"
 			}
 		default:
@@ -71,10 +71,10 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 
 // idAxes builds an opaque identity from the three deployed axes, omitting any
 // axis whose value is empty (an absent axis must stay absent).
-func idAxes(tenant, org, user string) AuthenticatedScopeIdentity {
+func idAxes(partition, org, user string) AuthenticatedScopeIdentity {
 	id := AuthenticatedScopeIdentity{Subject: user}
-	if tenant != "" {
-		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisTransportPinned, Value: tenant})
+	if partition != "" {
+		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisTransportPinned, Value: partition})
 	}
 	if org != "" {
 		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisWithinTransport, Value: org})
@@ -137,7 +137,9 @@ func TestEnforceScope_UnsetDenies(t *testing.T) {
 // twoArmCapHolder admits exactly the capabilities it holds.
 type twoArmCapHolder map[string]bool
 
-func (c twoArmCapHolder) HasCapability(_ scope.AuthenticatedPrincipal, cap string) bool { return c[cap] }
+func (c twoArmCapHolder) HasCapability(_ scope.AuthenticatedPrincipal, cap string) bool {
+	return c[cap]
+}
 
 // TestEnforceScope_Requirement_TwoArm proves a handler that declares a Requirement
 // is judged by the two-arm authorizer, superseding its ScopeTag tag: the nexus arm

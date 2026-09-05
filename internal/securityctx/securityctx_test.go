@@ -18,12 +18,12 @@ type meshHandler struct {
 	scopes []string
 }
 
-func (h meshHandler) Name() string               { return h.name }
-func (h meshHandler) RequiresAuth() bool         { return true }
-func (h meshHandler) AllowedAuthTypes() []string { return nil }
-func (h meshHandler) Scopes() []string           { return h.scopes }
-func (h meshHandler) Scope() ports.TenantScope   { return "" }
-func (h meshHandler) AllowedTenants() []string   { return nil }
+func (h meshHandler) Name() string                { return h.name }
+func (h meshHandler) RequiresAuth() bool          { return true }
+func (h meshHandler) AllowedAuthTypes() []string  { return nil }
+func (h meshHandler) Scopes() []string            { return h.scopes }
+func (h meshHandler) Scope() ports.Scope          { return "" }
+func (h meshHandler) AllowedPartitions() []string { return nil }
 
 // TestWithWireIdentity_EnablesScopeEnforcement verifies #K-32: the default
 // validator implements ports.ScopeStamper, and a mesh-propagated principal
@@ -73,15 +73,15 @@ func TestDefaultExecutionTenantIDReadsWithoutMinting(t *testing.T) {
 		t.Fatal("default validator must implement ports.PartitionPrincipalReader")
 	}
 
-	if tenantID, ok := reader.ExecutionPartitionID(context.Background()); ok || tenantID != "" {
-		t.Fatalf("empty context principal = (%q, %v), want (\"\", false)", tenantID, ok)
+	if partitionID, ok := reader.ExecutionPartitionID(context.Background()); ok || partitionID != "" {
+		t.Fatalf("empty context principal = (%q, %v), want (\"\", false)", partitionID, ok)
 	}
 
 	ctx := WithTenantID(context.Background(), "org-authoritative")
-	if tenantID, ok := reader.ExecutionPartitionID(ctx); !ok || tenantID != "org-authoritative" {
+	if partitionID, ok := reader.ExecutionPartitionID(ctx); !ok || partitionID != "org-authoritative" {
 		t.Fatalf(
 			"established context principal = (%q, %v), want (org-authoritative, true)",
-			tenantID,
+			partitionID,
 			ok,
 		)
 	}

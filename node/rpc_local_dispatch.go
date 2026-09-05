@@ -52,7 +52,7 @@ func (a *localDispatcherAdapter) HasHandler(name string) bool {
 
 // DispatchBytes wraps the payload in a handlers.RPCRequest and invokes
 // the registry's Dispatch — which runs middleware (Before/After) and the
-// tenant-scope check. Local calls thus have the same security semantics
+// partition-scope check. Local calls thus have the same security semantics
 // as remote ones.
 func (a *localDispatcherAdapter) DispatchBytes(ctx context.Context, name string, payload []byte) ([]byte, error) {
 	if a == nil || a.registry == nil {

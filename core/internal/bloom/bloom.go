@@ -174,7 +174,7 @@ func (bf *BloomFilter) EstimatedFillRatio() float64 {
 	return float64(setBits) / float64(bf.numBits)
 }
 
-// BloomFilterManager manages Bloom filters for different scopes (topics/tenants)
+// BloomFilterManager manages Bloom filters for different scopes (topics/partitions)
 type BloomFilterManager struct {
 	mu      sync.RWMutex
 	filters map[string]*BloomFilter
@@ -191,7 +191,7 @@ type BloomConfig struct {
 // DefaultBloomConfig returns sensible defaults
 func DefaultBloomConfig() BloomConfig {
 	return BloomConfig{
-		ExpectedElements:  10000,              // 10k elements per topic/tenant
+		ExpectedElements:  10000,              // 10k elements per topic/partition
 		FalsePositiveRate: 0.01,               // 1% false positive rate
 		RebuildInterval:   7 * 24 * time.Hour, // Rebuild weekly
 	}

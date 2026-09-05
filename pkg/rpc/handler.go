@@ -39,7 +39,6 @@ type Middleware = func(http.Handler) http.Handler
 // each tag requires. See rpc/scope/scopetag.go.
 type ScopeTag = scope.ScopeTag
 
-
 // Scope* forwards to the canonical opaque tags in rpc/scope. Callers should
 // import "github.com/bbmumford/loom/pkg/rpc" and use rpc.Scope* directly — the
 // scope subpackage is an implementation detail. New tags MUST be added

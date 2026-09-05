@@ -24,18 +24,18 @@ import (
 // delta directly: for the reads now routed through the LiveDirectory seam, the
 // port must return what the direct cache call returned.
 //
-// ⚠ The delta is zero CONDITIONAL on callers passing the tenant the records
+// ⚠ The delta is zero CONDITIONAL on callers passing the partition the records
 // were stored under. Nine of loom's ten sites pass "" and loom's own appends
 // leave TenantID at the zero value, so "" is the right bucket today — but
-// whether any ENDPOINT publishes a non-empty tenant is unmeasured and owned by
-// @C/@P. This test pins the equivalence for the tenant it is given
+// whether any ENDPOINT publishes a non-empty partition is unmeasured and owned by
+// @C/@P. This test pins the equivalence for the partition it is given
 // and deliberately also exercises a non-empty one, so the conditional is
 // visible rather than assumed.
 func TestSeamMatchesDirectCacheReads(t *testing.T) {
 	ctx := context.Background()
 
-	for _, tenant := range []string{"", "hstles"} {
-		t.Run("tenant="+tenant, func(t *testing.T) {
+	for _, partition := range []string{"", "hstles"} {
+		t.Run("partition="+partition, func(t *testing.T) {
 			c := ladcache.NewDirectoryCache()
 			ld, err := directory.NewLADDirectory(c)
 			if err != nil {
@@ -49,21 +49,21 @@ func TestSeamMatchesDirectCacheReads(t *testing.T) {
 					roles = []string{"billing"}
 				}
 				mb, _ := json.Marshal(lad.MemberRecord{
-					TenantID: tenant, NodeID: nodeID, CreatedAt: time.Now(),
+					TenantID: partition, NodeID: nodeID, CreatedAt: time.Now(),
 					// Producer key, per node/lad_reach_bridge.go:156 — not the reader's.
 					Attrs: map[string]string{"serviceName": "svc"},
 				})
 				if err := c.Apply(lad.Record{
-					Topic: lad.TopicMember, TenantID: tenant, NodeID: nodeID,
+					Topic: lad.TopicMember, TenantID: partition, NodeID: nodeID,
 					Body: mb, Timestamp: time.Now(),
 				}); err != nil {
 					t.Fatal(err)
 				}
 				rb, _ := json.Marshal(lad.RoleRecord{
-					TenantID: tenant, NodeID: nodeID, Roles: roles, Updated: time.Now(),
+					TenantID: partition, NodeID: nodeID, Roles: roles, Updated: time.Now(),
 				})
 				if err := c.Apply(lad.Record{
-					Topic: lad.TopicRole, TenantID: tenant, NodeID: nodeID,
+					Topic: lad.TopicRole, TenantID: partition, NodeID: nodeID,
 					Body: rb, Timestamp: time.Now(),
 				}); err != nil {
 					t.Fatal(err)
@@ -71,7 +71,7 @@ func TestSeamMatchesDirectCacheReads(t *testing.T) {
 			}
 
 			// --- the routed read: NodesByRole vs cache.Roles(RoleQuery{Role}) ---
-			direct, err := c.Roles(ctx, tenant, ladcache.RoleQuery{Role: "auth"})
+			direct, err := c.Roles(ctx, partition, ladcache.RoleQuery{Role: "auth"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -84,7 +84,7 @@ func TestSeamMatchesDirectCacheReads(t *testing.T) {
 				t.Fatal("the direct call returned nothing — the comparison would be vacuous")
 			}
 
-			viaPort, err := ld.NodesByRole(ctx, ports.Partition(tenant), "auth")
+			viaPort, err := ld.NodesByRole(ctx, ports.Partition(partition), "auth")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -108,7 +108,7 @@ func TestSeamMatchesDirectCacheReads(t *testing.T) {
 
 			// Control: the port discriminates by role rather than returning
 			// everything, or the equality above would be trivially satisfiable.
-			billing, err := ld.NodesByRole(ctx, ports.Partition(tenant), "billing")
+			billing, err := ld.NodesByRole(ctx, ports.Partition(partition), "billing")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -117,11 +117,11 @@ func TestSeamMatchesDirectCacheReads(t *testing.T) {
 			}
 
 			// --- the routed read: Members count ---
-			directM, err := c.Members(ctx, tenant)
+			directM, err := c.Members(ctx, partition)
 			if err != nil {
 				t.Fatal(err)
 			}
-			portM, err := ld.Members(ctx, ports.Partition(tenant))
+			portM, err := ld.Members(ctx, ports.Partition(partition))
 			if err != nil {
 				t.Fatal(err)
 			}

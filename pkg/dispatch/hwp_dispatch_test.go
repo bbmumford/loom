@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/health"
+	"github.com/ORBTR/aether/rpc/pb"
 )
 
 // ─── buildRPCRequest tests ──────────────────────────────────────────────────
@@ -148,8 +148,11 @@ type rpcMockStream struct {
 	recvErr  error
 }
 
-func (s *rpcMockStream) StreamID() uint64                            { return s.id }
-func (s *rpcMockStream) Send(ctx context.Context, data []byte) error { s.sendData = data; return s.sendErr }
+func (s *rpcMockStream) StreamID() uint64 { return s.id }
+func (s *rpcMockStream) Send(ctx context.Context, data []byte) error {
+	s.sendData = data
+	return s.sendErr
+}
 func (s *rpcMockStream) Receive(ctx context.Context) ([]byte, error) {
 	if s.recvErr != nil {
 		return nil, s.recvErr
@@ -157,9 +160,9 @@ func (s *rpcMockStream) Receive(ctx context.Context) ([]byte, error) {
 	return s.respData, nil
 }
 func (s *rpcMockStream) Close() error                                { return nil }
-func (s *rpcMockStream) Reset(reason aether.ResetReason) error          { return nil }
+func (s *rpcMockStream) Reset(reason aether.ResetReason) error       { return nil }
 func (s *rpcMockStream) SetPriority(weight uint8, dependency uint64) {}
-func (s *rpcMockStream) Config() aether.StreamConfig                    { return aether.StreamConfig{} }
+func (s *rpcMockStream) Config() aether.StreamConfig                 { return aether.StreamConfig{} }
 func (s *rpcMockStream) IsOpen() bool                                { return true }
 func (s *rpcMockStream) Conn() net.Conn                              { return nil }
 
@@ -183,23 +186,23 @@ func (m *rpcMockSession) AcceptStream(ctx context.Context) (aether.Stream, error
 func (m *rpcMockSession) AcceptStreamByID(ctx context.Context, streamID uint64) (aether.Stream, error) {
 	return nil, nil
 }
-func (m *rpcMockSession) IsClosed() bool                                       { return m.closed }
-func (m *rpcMockSession) Close() error                                         { return nil }
-func (m *rpcMockSession) LocalNodeID() aether.NodeID                        { return "local-test" }
-func (m *rpcMockSession) RemoteNodeID() aether.NodeID                       { return "remote-test" }
-func (m *rpcMockSession) LocalPeerID() aether.PeerID                             { return aether.PeerID{} }
-func (m *rpcMockSession) RemotePeerID() aether.PeerID                            { return aether.PeerID{} }
-func (m *rpcMockSession) Capabilities() aether.Capabilities                      { return 0 }
-func (m *rpcMockSession) Ping(ctx context.Context) (time.Duration, error)     { return 0, nil }
+func (m *rpcMockSession) IsClosed() bool                                  { return m.closed }
+func (m *rpcMockSession) Close() error                                    { return nil }
+func (m *rpcMockSession) LocalNodeID() aether.NodeID                      { return "local-test" }
+func (m *rpcMockSession) RemoteNodeID() aether.NodeID                     { return "remote-test" }
+func (m *rpcMockSession) LocalPeerID() aether.PeerID                      { return aether.PeerID{} }
+func (m *rpcMockSession) RemotePeerID() aether.PeerID                     { return aether.PeerID{} }
+func (m *rpcMockSession) Capabilities() aether.Capabilities               { return 0 }
+func (m *rpcMockSession) Ping(ctx context.Context) (time.Duration, error) { return 0, nil }
 func (m *rpcMockSession) GoAway(ctx context.Context, r aether.GoAwayReason, msg string) error {
 	return nil
 }
-func (m *rpcMockSession) Health() *health.Monitor              { return nil }
-func (m *rpcMockSession) SessionKey() []byte                   { return nil }
-func (m *rpcMockSession) ConnectionID() aether.ConnectionID       { return aether.ConnectionID{} }
-func (m *rpcMockSession) CongestionWindow() int64              { return 0 }
+func (m *rpcMockSession) Health() *health.Monitor           { return nil }
+func (m *rpcMockSession) SessionKey() []byte                { return nil }
+func (m *rpcMockSession) ConnectionID() aether.ConnectionID { return aether.ConnectionID{} }
+func (m *rpcMockSession) CongestionWindow() int64           { return 0 }
 func (m *rpcMockSession) Protocol() aether.Protocol         { return aether.ProtoWebSocket }
-func (m *rpcMockSession) Metrics() aether.SessionMetrics          { return aether.SessionMetrics{} }
+func (m *rpcMockSession) Metrics() aether.SessionMetrics    { return aether.SessionMetrics{} }
 
 // mockFinder implements SessionFinder for tests.
 type mockFinder struct {

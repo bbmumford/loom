@@ -18,13 +18,13 @@ type registrationScopeHandler struct {
 	scope Scope
 }
 
-func (h *registrationScopeHandler) Name() string               { return h.name }
-func (h *registrationScopeHandler) Role() string               { return "test.scope" }
-func (h *registrationScopeHandler) RequiresAuth() bool         { return false }
-func (h *registrationScopeHandler) AllowedAuthTypes() []string { return nil }
-func (h *registrationScopeHandler) Scopes() []string           { return nil }
-func (h *registrationScopeHandler) Scope() Scope         { return h.scope }
-func (h *registrationScopeHandler) AllowedPartitions() []string   { return nil }
+func (h *registrationScopeHandler) Name() string                { return h.name }
+func (h *registrationScopeHandler) Role() string                { return "test.scope" }
+func (h *registrationScopeHandler) RequiresAuth() bool          { return false }
+func (h *registrationScopeHandler) AllowedAuthTypes() []string  { return nil }
+func (h *registrationScopeHandler) Scopes() []string            { return nil }
+func (h *registrationScopeHandler) Scope() Scope                { return h.scope }
+func (h *registrationScopeHandler) AllowedPartitions() []string { return nil }
 func (h *registrationScopeHandler) ExecuteRPC(context.Context, *RPCRequest) (*RPCResponse, error) {
 	return &RPCResponse{Success: true}, nil
 }

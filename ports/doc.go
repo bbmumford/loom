@@ -13,7 +13,7 @@
 //   - DurableJournal — durable history and recovery behind a narrow append
 //     port (Phase 0.5.1). Initially a hardened Ledger/MeshLedger adapter.
 //     It is never a second live merge authority.
-//   - TrustPolicy    — fail-closed NodeID↔key / tenant / topic / role /
+//   - TrustPolicy    — fail-closed NodeID↔key / partition / topic / role /
 //     observer / secret-recipient authorization (Phase 0.5.1). Mandatory
 //     pre-store gate; self-advertised RoleTable state is NOT a trust root.
 //   - RoleActivator  — the Phase-1 runtime role-init path (the single

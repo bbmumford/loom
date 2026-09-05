@@ -17,11 +17,11 @@
 //   - node/           — the runtime: Runtime, Config, RPC server, sessions,
 //     directory, health, role activation, and the composition bridge.
 //   - core/           — directory/gossip codecs, well-known streams, the
-//     distributed task framework, and the per-tenant transport manager.
+//     distributed task framework, and the per-partition transport manager.
 //   - grade/          — connection quality grades and operation classes.
 //   - contracts/pb/   — mesh transport protobufs.
 //   - pkg/rpc         — the reflection RPC registry (Call, Registry, HTTP
-//     bridge, tenant scopes).
+//     bridge, partition scopes).
 //   - pkg/dispatch    — the local-dispatch short-circuit and mesh-caller
 //     wiring.
 //   - pkg/trace       — e2e trace-ID context propagation.
