@@ -62,14 +62,14 @@ func NewSharedTransport(cfg noise.NoiseTransportConfig) (*SharedTransport, error
 // RegisterPartition adds a tenant with its network keys. The first key is used
 // for outbound connections (active key); additional keys are accepted for
 // inbound connections (key rotation overlap).
-func (s *SharedTransport) RegisterPartition(tenantID aether.ScopeID, keys [][]byte) error {
+func (s *SharedTransport) RegisterPartition(partitionID aether.ScopeID, keys [][]byte) error {
 	if len(keys) == 0 {
 		return ErrSharedNoKeysForPartition
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.tenantKeys[tenantID]; exists {
+	if _, exists := s.tenantKeys[partitionID]; exists {
 		return ErrSharedPartitionExists
 	}
 	// Deep copy keys to prevent external mutation.
@@ -77,38 +77,38 @@ func (s *SharedTransport) RegisterPartition(tenantID aether.ScopeID, keys [][]by
 	for i, k := range keys {
 		copied[i] = append([]byte(nil), k...)
 	}
-	s.tenantKeys[tenantID] = copied
+	s.tenantKeys[partitionID] = copied
 	return nil
 }
 
 // UpdatePartitionKeys replaces the keys for an existing tenant (used for key rotation).
-func (s *SharedTransport) UpdatePartitionKeys(tenantID aether.ScopeID, keys [][]byte) error {
+func (s *SharedTransport) UpdatePartitionKeys(partitionID aether.ScopeID, keys [][]byte) error {
 	if len(keys) == 0 {
 		return ErrSharedNoKeysForPartition
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.tenantKeys[tenantID]; !exists {
+	if _, exists := s.tenantKeys[partitionID]; !exists {
 		return ErrSharedPartitionNotFound
 	}
 	copied := make([][]byte, len(keys))
 	for i, k := range keys {
 		copied[i] = append([]byte(nil), k...)
 	}
-	s.tenantKeys[tenantID] = copied
+	s.tenantKeys[partitionID] = copied
 	return nil
 }
 
 // RemovePartition deregisters a tenant from the shared aether.
-func (s *SharedTransport) RemovePartition(tenantID aether.ScopeID) error {
+func (s *SharedTransport) RemovePartition(partitionID aether.ScopeID) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, exists := s.tenantKeys[tenantID]; !exists {
+	if _, exists := s.tenantKeys[partitionID]; !exists {
 		return ErrSharedPartitionNotFound
 	}
-	delete(s.tenantKeys, tenantID)
+	delete(s.tenantKeys, partitionID)
 	return nil
 }
 
@@ -120,13 +120,13 @@ func (s *SharedTransport) PartitionCount() int {
 }
 
 // ResolveKeys implements noise.TenantKeyResolver for the listener's preamble handling.
-func (s *SharedTransport) ResolveKeys(tenantID string) ([][]byte, error) {
+func (s *SharedTransport) ResolveKeys(partitionID string) ([][]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	keys, ok := s.tenantKeys[aether.ScopeID(tenantID)]
+	keys, ok := s.tenantKeys[aether.ScopeID(partitionID)]
 	if !ok || len(keys) == 0 {
-		return nil, fmt.Errorf("%w: %s", ErrSharedPartitionNotFound, tenantID)
+		return nil, fmt.Errorf("%w: %s", ErrSharedPartitionNotFound, partitionID)
 	}
 	return keys, nil
 }
@@ -136,23 +136,23 @@ func (s *SharedTransport) ResolveKeys(tenantID string) ([][]byte, error) {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 // Dial establishes a session with preamble for the tenant identified in context.
-// The context must contain a tenant ID (set by TransportManager.Dial via WithTenantID).
+// The context must contain a tenant ID (set by TransportManager.Dial via WithPartitionID).
 func (s *SharedTransport) Dial(ctx context.Context, target aether.Target) (aether.Connection, error) {
-	tenantID, ok := PartitionIDFromContext(ctx)
-	if !ok || tenantID == "" {
+	partitionID, ok := PartitionIDFromContext(ctx)
+	if !ok || partitionID == "" {
 		return nil, ErrSharedNoPartitionInCtx
 	}
 
 	s.mu.RLock()
-	keys, exists := s.tenantKeys[tenantID]
+	keys, exists := s.tenantKeys[partitionID]
 	s.mu.RUnlock()
 	if !exists || len(keys) == 0 {
-		return nil, fmt.Errorf("%w: %s", ErrSharedPartitionNotFound, tenantID)
+		return nil, fmt.Errorf("%w: %s", ErrSharedPartitionNotFound, partitionID)
 	}
 
 	// Inject the tenant's keys and ID into context so the underlying
 	// NoiseTransport handshake prepends the preamble.
-	ctx = noise.WithDialOverride(ctx, string(tenantID), keys)
+	ctx = noise.WithDialOverride(ctx, string(partitionID), keys)
 	return s.inner.Dial(ctx, target)
 }
 

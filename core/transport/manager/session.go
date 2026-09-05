@@ -9,16 +9,16 @@ import (
 )
 
 // PartitionSession wraps a aether.Connection and associates it with a tenant.
-// Callers use TenantID() to determine which tenant the session belongs to,
+// Callers use PartitionID() to determine which tenant the session belongs to,
 // enabling transport-level tenant verification in the RPC executor.
 type PartitionSession struct {
 	aether.Connection
-	tenantID aether.ScopeID
+	partitionID aether.ScopeID
 }
 
-// TenantID returns the tenant this session belongs to.
-func (s *PartitionSession) TenantID() aether.ScopeID {
-	return s.tenantID
+// PartitionID returns the tenant this session belongs to.
+func (s *PartitionSession) PartitionID() aether.ScopeID {
+	return s.partitionID
 }
 
 // Unwrap returns the underlying aether.Connection.
@@ -27,9 +27,9 @@ func (s *PartitionSession) Unwrap() aether.Connection {
 }
 
 // WrapSession creates a PartitionSession from an existing connection.
-func WrapSession(conn aether.Connection, tenantID aether.ScopeID) *PartitionSession {
+func WrapSession(conn aether.Connection, partitionID aether.ScopeID) *PartitionSession {
 	return &PartitionSession{
 		Connection: conn,
-		tenantID:   tenantID,
+		partitionID:   partitionID,
 	}
 }
