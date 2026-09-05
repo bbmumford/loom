@@ -121,7 +121,7 @@ func TestTaskScopeIgnoresMetadataIdentityHints(t *testing.T) {
 		},
 	}
 
-	platformOnly := WithTransportTenant(context.Background(), "orbtr")
+	platformOnly := WithTransportPartition(context.Background(), "orbtr")
 	result, err := registry.DispatchTask(platformOnly, task)
 	if err != nil {
 		t.Fatalf("map-only DispatchTask error: %v", err)

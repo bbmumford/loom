@@ -302,7 +302,7 @@ func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 
 // TestValidateTenantScope_TransportReconcile is a REGRESSION LOCK on the
 // transport/authenticated-identity reconciliation. On a tenant-specific
-// transport the aether session's tenant is stamped by WithTransportTenant; a
+// transport the aether session's tenant is stamped by WithTransportPartition; a
 // later authenticated identity that disagrees is rejected. Mutable request
 // maps are never one side of this comparison.
 //
@@ -315,14 +315,14 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 	const reqTenant = "acme"
 	cases := []struct {
 		name      string
-		transport string // value stamped by WithTransportTenant (ignored if noStamp)
+		transport string // value stamped by WithTransportPartition (ignored if noStamp)
 		noStamp   bool   // if true, stamp no transport tenant at all
 		wantErr   string // "" => expect pass
 	}{
 		// Tenant-specific transport: authenticated tenant matches the envelope.
 		{name: "match_passes", transport: "acme", wantErr: ""},
 		// Tenant-specific transport: envelope lies about its tenant — REJECTED.
-		{name: "mismatch_rejects", transport: "evil", wantErr: "transport/authenticated tenant mismatch"},
+		{name: "mismatch_rejects", transport: "evil", wantErr: "transport/authenticated partition mismatch"},
 		// Single-tenant fallback: reconcile skipped, envelope self-asserted.
 		{name: "default_skips_selfassert", transport: "default", wantErr: ""},
 		// Shared transport with no resolved ScopeID: skipped (empty == unset).
@@ -335,7 +335,7 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 			h := &stubMeta{name: "tenant.op", scope: TenantScopeTenant}
 			ctx := context.Background()
 			if !c.noStamp {
-				ctx = WithTransportTenant(ctx, c.transport)
+				ctx = WithTransportPartition(ctx, c.transport)
 			}
 			ctx = tenantScope.WithAuthenticatedIdentity(ctx, scopeIdentity(reqTenant, "", ""))
 			err := r.validateScope(ctx, h)
@@ -367,14 +367,14 @@ func TestValidateTenantScope_OrganizationIgnoresMutableHints(t *testing.T) {
 		{"tenantId": "orbtr", "orgId": "forged"},
 		{"tenant_id": "orbtr", "organization": "forged"},
 	} {
-		ctx := WithTransportTenant(ctxWithRPC(body), "orbtr")
+		ctx := WithTransportPartition(ctxWithRPC(body), "orbtr")
 		err := r.validateScope(ctx, h)
 		if err == nil || !strings.Contains(err.Error(), "organisation") {
 			t.Fatalf("mutable org hint %#v must not satisfy ScopeOrg; got %v", body, err)
 		}
 	}
 
-	ctx := WithTransportTenant(ctxWithRPC(map[string]interface{}{
+	ctx := WithTransportPartition(ctxWithRPC(map[string]interface{}{
 		"tenant_id": "evil",
 		"orgId":     "evil",
 	}), "orbtr")

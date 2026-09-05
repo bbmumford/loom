@@ -640,7 +640,7 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 	// the optional typed caller principal. RPCRequest.Context is mutable
 	// metadata: its tenant/user/org/scope spellings are compare-only candidates
 	// and never establish authority.
-	transportPartition := handlers.TransportTenantFromContext(ctx)
+	transportPartition := handlers.TransportPartitionFromContext(ctx)
 	if transportPartition != "" && transportPartition != "default" {
 		ctx = s.authValidator.WithTenantID(ctx, transportPartition)
 	}
@@ -979,7 +979,7 @@ func (s *RPCServer) HandleIncomingSessionsForTenant(ctx context.Context, listene
 				}
 			}
 
-			sessionCtx := handlers.WithTransportTenant(ctx, tenantID)
+			sessionCtx := handlers.WithTransportPartition(ctx, tenantID)
 
 			// Spawn via safeGo so a panic anywhere inside ServeSession
 			// (e.g. a handler reached via the non-bidi path, before

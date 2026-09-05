@@ -19,7 +19,7 @@ const (
 	// AxisTransportPinned is the axis a consumer's ports.TransportAxisPin may
 	// name as the one reconciled against the transport-established tenant on
 	// receive (the cross-tenant forge gate). node/handlers validateScope
-	// reconciles it against the transport binding; WithTransportTenant stamps it
+	// reconciles it against the transport binding; WithTransportPartition stamps it
 	// from the server-resolved value.
 	AxisTransportPinned = "platform_tenant"
 

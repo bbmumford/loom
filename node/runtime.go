@@ -3038,7 +3038,7 @@ func (rt *Runtime) acceptIncomingSessionsWithMux(ctx context.Context, listener a
 				}
 			}
 
-			sessionCtx := handlers.WithTransportTenant(ctx, tenantID)
+			sessionCtx := handlers.WithTransportPartition(ctx, tenantID)
 
 			go func(conn aether.Connection, sCtx context.Context) {
 				defer func() {
