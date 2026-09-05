@@ -88,12 +88,12 @@ type composeAuthContextKey struct{}
 type composePrincipalContextKey struct{}
 
 type composeTestPrincipal struct {
-	owner      ports.ExecutionOwnerKey
+	owner      ports.ExecutionPartitionKey
 	revoked    *atomic.Bool
 	authorizes atomic.Int32
 }
 
-func (p *composeTestPrincipal) OwnerKey() ports.ExecutionOwnerKey {
+func (p *composeTestPrincipal) PartitionKey() ports.ExecutionPartitionKey {
 	return p.owner
 }
 
@@ -112,7 +112,7 @@ func (p *composeTestPrincipal) AuthorizeExecution(
 }
 
 func newComposeTestPrincipal(identity string) *composeTestPrincipal {
-	owner, err := ports.NewExecutionOwnerKey(identity)
+	owner, err := ports.NewExecutionPartitionKey(identity)
 	if err != nil {
 		panic(err)
 	}
@@ -166,13 +166,13 @@ func (v *composeAuthValidator) ExecutionPrincipal(
 	ctx context.Context,
 ) (ports.ExecutionPrincipal, bool) {
 	if principal, ok := ctx.Value(composePrincipalContextKey{}).(ports.ExecutionPrincipal); ok {
-		return principal, principal != nil && principal.OwnerKey().Valid()
+		return principal, principal != nil && principal.PartitionKey().Valid()
 	}
 	principal := v.principal
 	if principal == nil {
 		principal = defaultComposeTestPrincipal
 	}
-	return principal, principal.OwnerKey().Valid()
+	return principal, principal.PartitionKey().Valid()
 }
 
 var _ ports.AuthValidator = (*composeAuthValidator)(nil)
@@ -657,8 +657,8 @@ func TestComposeInvokeRecordsHandlerPanicBeforeObserverFailure(t *testing.T) {
 func TestComposeTaskCompletionHistoryIsBoundedAndDefensive(t *testing.T) {
 	rt := &Runtime{rpcServer: NewRPCServer(handlers.NewHandlerRegistry())}
 	rt.rpcServer.SetAuthValidator(&composeAuthValidator{})
-	rt.cfg.ComposeTaskCompletionRetentionPerOwner = composeTaskCompletionRetention + 1
-	owner := defaultComposeTestPrincipal.OwnerKey()
+	rt.cfg.ComposeTaskCompletionRetentionPerPartition = composeTaskCompletionRetention + 1
+	owner := defaultComposeTestPrincipal.PartitionKey()
 	var observed atomic.Int32
 	rt.cfg.ComposeTaskCompletionObserver = func(
 		_ context.Context,
@@ -718,7 +718,7 @@ func TestComposeTaskCompletionHistoryIsBoundedAndDefensive(t *testing.T) {
 
 func TestComposeTaskCompletionPublishesOnlyFirstTerminalRecord(t *testing.T) {
 	rt := &Runtime{}
-	owner := defaultComposeTestPrincipal.OwnerKey()
+	owner := defaultComposeTestPrincipal.PartitionKey()
 	requestDigest := sha256.Sum256([]byte("completion-once"))
 	observed := make(chan ComposeTaskCompletion, 2)
 	observer := func(_ context.Context, completion ComposeTaskCompletion) {
@@ -1159,7 +1159,7 @@ func (h *composeMultiBlockingProbe) ExecuteTask(
 	principal, _ := ctx.Value(composePrincipalContextKey{}).(ports.ExecutionPrincipal)
 	owner := ""
 	if principal != nil {
-		owner = principal.OwnerKey().Fingerprint()
+		owner = principal.PartitionKey().Fingerprint()
 	}
 	h.started <- owner
 	<-ctx.Done()
@@ -1197,7 +1197,7 @@ func TestComposeInvokeReservesGlobalAndPerOwnerCapacityAtomically(t *testing.T) 
 	h := &composeMultiBlockingProbe{started: make(chan string, 2)}
 	rt := composeRuntimeFixture(t, h)
 	rt.cfg.ComposeTaskMaxInFlight = 2
-	rt.cfg.ComposeTaskMaxInFlightPerOwner = 1
+	rt.cfg.ComposeTaskMaxInFlightPerPartition = 1
 	p1 := newComposeTestPrincipal("owner-one")
 	p2 := newComposeTestPrincipal("owner-two")
 	p3 := newComposeTestPrincipal("owner-three")
@@ -1208,21 +1208,21 @@ func TestComposeInvokeReservesGlobalAndPerOwnerCapacityAtomically(t *testing.T) 
 	if first.Kind != compose.ResultDeferred {
 		t.Fatalf("first owner admission = %+v, want Deferred", first)
 	}
-	if got := <-h.started; got != p1.OwnerKey().Fingerprint() {
-		t.Fatalf("first running owner = %q, want %q", got, p1.OwnerKey().Fingerprint())
+	if got := <-h.started; got != p1.PartitionKey().Fingerprint() {
+		t.Fatalf("first running owner = %q, want %q", got, p1.PartitionKey().Fingerprint())
 	}
-	sameOwner := rt.ComposeInvoke(ctx1, compose.FunctionID(h.Name()), nil)
-	if sameOwner.Kind != compose.ResultFailure ||
-		sameOwner.Err != composeTaskOwnerAdmissionFullError {
-		t.Fatalf("same-owner admission = %+v, want owner ceiling", sameOwner)
+	samePartition := rt.ComposeInvoke(ctx1, compose.FunctionID(h.Name()), nil)
+	if samePartition.Kind != compose.ResultFailure ||
+		samePartition.Err != composeTaskOwnerAdmissionFullError {
+		t.Fatalf("same-owner admission = %+v, want owner ceiling", samePartition)
 	}
 
 	second := rt.ComposeInvoke(ctx2, compose.FunctionID(h.Name()), nil)
 	if second.Kind != compose.ResultDeferred {
 		t.Fatalf("second owner admission = %+v, want Deferred", second)
 	}
-	if got := <-h.started; got != p2.OwnerKey().Fingerprint() {
-		t.Fatalf("second running owner = %q, want %q", got, p2.OwnerKey().Fingerprint())
+	if got := <-h.started; got != p2.PartitionKey().Fingerprint() {
+		t.Fatalf("second running owner = %q, want %q", got, p2.PartitionKey().Fingerprint())
 	}
 	global := rt.ComposeInvoke(
 		composePrincipalContext(p3),
@@ -1245,8 +1245,8 @@ func TestComposeInvokeReservesGlobalAndPerOwnerCapacityAtomically(t *testing.T) 
 	if got := rt.composeTaskInFlight.Load(); got != 0 {
 		t.Fatalf("global in-flight after settle = %d, want 0", got)
 	}
-	if len(rt.composeTaskByOwner) != 0 {
-		t.Fatalf("owner reservations after settle = %v, want empty", rt.composeTaskByOwner)
+	if len(rt.composeTaskByPartition) != 0 {
+		t.Fatalf("owner reservations after settle = %v, want empty", rt.composeTaskByPartition)
 	}
 }
 
@@ -1312,7 +1312,7 @@ func TestComposeCompletionLookupReauthorizesExactOwnerAndHidesExistence(t *testi
 	}
 	record, ok := rt.lookupComposeTaskCompletion(firstHandle)
 	if !ok ||
-		record.owner != p1.OwnerKey() ||
+		record.owner != p1.PartitionKey() ||
 		record.requestDigest != sha256.Sum256(event) {
 		t.Fatalf("private completion binding = %+v, want exact owner and request digest", record)
 	}
@@ -1328,10 +1328,10 @@ func TestComposeCompletionLookupReauthorizesExactOwnerAndHidesExistence(t *testi
 
 func TestComposeCompletionRetentionIsBoundedPerOwner(t *testing.T) {
 	rt := &Runtime{}
-	rt.cfg.ComposeTaskCompletionRetentionPerOwner = 1
-	ownerA := newComposeTestPrincipal("retention-owner-a").OwnerKey()
-	ownerB := newComposeTestPrincipal("retention-owner-b").OwnerKey()
-	store := func(handle string, owner ports.ExecutionOwnerKey) {
+	rt.cfg.ComposeTaskCompletionRetentionPerPartition = 1
+	ownerA := newComposeTestPrincipal("retention-owner-a").PartitionKey()
+	ownerB := newComposeTestPrincipal("retention-owner-b").PartitionKey()
+	store := func(handle string, owner ports.ExecutionPartitionKey) {
 		rt.recordComposeTaskCompletion(
 			context.Background(),
 			handle,
@@ -1401,21 +1401,21 @@ func (p *composeTriggerPrincipalProbe) AuthorizeTriggerFire(
 // before the provider returns the authorized context to the runtime.
 type composePolicyLeasePrincipal struct {
 	mu         sync.RWMutex
-	owner      ports.ExecutionOwnerKey
+	owner      ports.ExecutionPartitionKey
 	revoked    atomic.Bool
 	authorizes atomic.Int32
 	releases   atomic.Int32
 }
 
 func newComposePolicyLeasePrincipal(identity string) *composePolicyLeasePrincipal {
-	owner, err := ports.NewExecutionOwnerKey(identity)
+	owner, err := ports.NewExecutionPartitionKey(identity)
 	if err != nil {
 		panic(err)
 	}
 	return &composePolicyLeasePrincipal{owner: owner}
 }
 
-func (p *composePolicyLeasePrincipal) OwnerKey() ports.ExecutionOwnerKey {
+func (p *composePolicyLeasePrincipal) PartitionKey() ports.ExecutionPartitionKey {
 	return p.owner
 }
 

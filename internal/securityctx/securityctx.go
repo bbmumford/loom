@@ -146,11 +146,11 @@ func (defaultValidator) WithTenantID(ctx context.Context, tenantID string) conte
 	return WithTenantID(ctx, tenantID)
 }
 
-// ExecutionTenantID reads the private Pure-Loom tenant principal without
+// ExecutionPartitionID reads the private Pure-Loom tenant principal without
 // creating one. This is the read-only executor side of WithTenantID: callers
 // must establish the principal before task dispatch, and the mutable task body
 // is only compared against it.
-func (defaultValidator) ExecutionTenantID(ctx context.Context) (string, bool) {
+func (defaultValidator) ExecutionPartitionID(ctx context.Context) (string, bool) {
 	tenantID := ExtractTenantID(ctx)
 	return tenantID, tenantID != ""
 }
@@ -159,7 +159,7 @@ func (defaultValidator) ExecutionTenantID(ctx context.Context) (string, bool) {
 // constructing one from request or task data.
 func (defaultValidator) ExecutionPrincipal(ctx context.Context) (ports.ExecutionPrincipal, bool) {
 	principal, ok := ctx.Value(executionPrincipalKey).(ports.ExecutionPrincipal)
-	return principal, ok && principal != nil && principal.OwnerKey().Valid()
+	return principal, ok && principal != nil && principal.PartitionKey().Valid()
 }
 
 // WithWireIdentity implements ports.ScopeStamper for the loom-local default

@@ -127,16 +127,16 @@ type Config struct {
 	// AuthValidator's ports.ExecutionPrincipalReader extension.
 	ComposeTaskMaxInFlight int
 
-	// ComposeTaskMaxInFlightPerOwner bounds live task invocations for one
+	// ComposeTaskMaxInFlightPerPartition bounds live task invocations for one
 	// opaque execution owner. Values <= 0 use the safe default. The global and
 	// owner reservations are acquired atomically, so neither ceiling can be
 	// oversubscribed by concurrent admissions.
-	ComposeTaskMaxInFlightPerOwner int
+	ComposeTaskMaxInFlightPerPartition int
 
-	// ComposeTaskCompletionRetentionPerOwner bounds terminal records retained
+	// ComposeTaskCompletionRetentionPerPartition bounds terminal records retained
 	// for one opaque owner inside the global 1024-record history. Values <= 0
 	// use the safe default.
-	ComposeTaskCompletionRetentionPerOwner int
+	ComposeTaskCompletionRetentionPerPartition int
 
 	// RegisterDomains registers external RPC domains (e.g. the HSTLES
 	// anchor domain) on anchor-capable nodes. Each entry runs against a

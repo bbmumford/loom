@@ -68,17 +68,17 @@ func TestWithWireIdentity_EnablesScopeEnforcement(t *testing.T) {
 }
 
 func TestDefaultExecutionTenantIDReadsWithoutMinting(t *testing.T) {
-	reader, ok := Default().(ports.TenantPrincipalReader)
+	reader, ok := Default().(ports.PartitionPrincipalReader)
 	if !ok {
-		t.Fatal("default validator must implement ports.TenantPrincipalReader")
+		t.Fatal("default validator must implement ports.PartitionPrincipalReader")
 	}
 
-	if tenantID, ok := reader.ExecutionTenantID(context.Background()); ok || tenantID != "" {
+	if tenantID, ok := reader.ExecutionPartitionID(context.Background()); ok || tenantID != "" {
 		t.Fatalf("empty context principal = (%q, %v), want (\"\", false)", tenantID, ok)
 	}
 
 	ctx := WithTenantID(context.Background(), "org-authoritative")
-	if tenantID, ok := reader.ExecutionTenantID(ctx); !ok || tenantID != "org-authoritative" {
+	if tenantID, ok := reader.ExecutionPartitionID(ctx); !ok || tenantID != "org-authoritative" {
 		t.Fatalf(
 			"established context principal = (%q, %v), want (org-authoritative, true)",
 			tenantID,

@@ -469,7 +469,7 @@ type Runtime struct {
 	// MeshMetrics so admission pressure is observable.
 	composeTaskAdmissionMu sync.Mutex
 	composeTaskInFlight    atomic.Int64
-	composeTaskByOwner     map[ports.ExecutionOwnerKey]int64
+	composeTaskByPartition     map[ports.ExecutionPartitionKey]int64
 	composeTaskRejected    atomic.Uint64
 
 	// composeTaskCompletions makes every accepted Deferred task handle
@@ -479,7 +479,7 @@ type Runtime struct {
 	composeTaskCompletionMu    sync.RWMutex
 	composeTaskCompletions     map[string]composeTaskCompletionRecord
 	composeTaskCompletionOrder []string
-	composeTaskCompletionOwner map[ports.ExecutionOwnerKey][]string
+	composeTaskCompletionPartition map[ports.ExecutionPartitionKey][]string
 
 	// bootstrap connections accepted when running as a bootstrap host
 	bootstrapConns   map[string]net.Conn
@@ -2313,7 +2313,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		// from dispatch and didn't, thanks to the identity check.
 		// unregister_deleted is the count of cleanups that did mutate
 		// dispatch. The ratio quantifies how often the guard mattered.
-		m["mesh_unregister_skipped_not_owner"] = rt.connMgr.unregisterSkippedNotOwner.Load()
+		m["mesh_unregister_skipped_not_owner"] = rt.connMgr.unregisterSkippedNotHolder.Load()
 		m["mesh_unregister_deleted"] = rt.connMgr.unregisterDeleted.Load()
 
 		// bidirpc_inflight_gauge — sum of in-flight Call() counts

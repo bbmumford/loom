@@ -76,7 +76,7 @@ func TestSweepZombieSessionsReapsOrphansAndPreservesLiveState(t *testing.T) {
 		"old-proving": {startedAt: time.Now().Add(-2 * time.Minute)},
 		"fresh":       {startedAt: time.Now(), timer: freshTimer},
 	}
-	m.gossipActive = map[string]*gossipOwner{
+	m.gossipActive = map[string]*gossipHolder{
 		deadID:   nil,
 		liveID:   nil,
 		orphanID: nil,
@@ -143,7 +143,7 @@ func TestNilZombieSnapshotIsStillIdentityGuarded(t *testing.T) {
 		// This is the exact sweep race: after Phase 1 releases dispatchMu,
 		// registration replaces the captured nil slot before unregister runs.
 		m.meshSessions["peer"] = live
-		beforeSkipped := m.unregisterSkippedNotOwner.Load()
+		beforeSkipped := m.unregisterSkippedNotHolder.Load()
 		beforeDeleted := m.unregisterDeleted.Load()
 
 		m.unregisterMeshSession("peer", captured)
@@ -151,7 +151,7 @@ func TestNilZombieSnapshotIsStillIdentityGuarded(t *testing.T) {
 		if got := m.meshSessions["peer"]; got != aether.Session(live) {
 			t.Fatal("the stale nil snapshot deleted the live replacement")
 		}
-		if got := m.unregisterSkippedNotOwner.Load(); got != beforeSkipped+1 {
+		if got := m.unregisterSkippedNotHolder.Load(); got != beforeSkipped+1 {
 			t.Fatalf("skipped-not-owner = %d, want %d", got, beforeSkipped+1)
 		}
 		if got := m.unregisterDeleted.Load(); got != beforeDeleted {
@@ -187,7 +187,7 @@ func TestZombieSweepDoesNotDowngradeLiveReplacement(t *testing.T) {
 				connCount: 2,
 			}
 			liveMgr := withMultipath(t, m, nodeID, live)
-			m.gossipActive = map[string]*gossipOwner{nodeID: nil}
+			m.gossipActive = map[string]*gossipHolder{nodeID: nil}
 			seenAgo(cache, nodeID, 5*time.Minute)
 			cache.SetGossipLivenessOverride(nodeID, true)
 
@@ -235,7 +235,7 @@ func TestZombieSweepCompletesCleanupBeforeFreshAdmission(t *testing.T) {
 		connCount: 1,
 	}
 	withMultipath(t, m, nodeID, dead)
-	m.gossipActive = map[string]*gossipOwner{nodeID: nil}
+	m.gossipActive = map[string]*gossipHolder{nodeID: nil}
 	seenAgo(cache, nodeID, 5*time.Second)
 	cache.SetGossipLivenessOverride(nodeID, true)
 

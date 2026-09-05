@@ -254,14 +254,14 @@ func TestProvingRevertIsSkippedWhenAThirdSessionOwnsDispatch(t *testing.T) {
 	_, newS := provingFixture(t, m, testNodeIDA)
 
 	third := &probeSession{proto: aether.ProtoQUIC}
-	beforeSkip := m.unregisterSkippedNotOwner.Load()
+	beforeSkip := m.unregisterSkippedNotHolder.Load()
 	beforeFailed := m.walkerProbesProvingFailed.Load()
 
 	// A stale cleanup arrives owning a session that is neither old nor new.
 	m.unregisterMeshSession(testNodeIDA, third)
 
-	if got := m.unregisterSkippedNotOwner.Load(); got != beforeSkip+1 {
-		t.Fatalf("unregisterSkippedNotOwner = %d, want %d — the ownership guard "+
+	if got := m.unregisterSkippedNotHolder.Load(); got != beforeSkip+1 {
+		t.Fatalf("unregisterSkippedNotHolder = %d, want %d — the ownership guard "+
 			"did not fire", got, beforeSkip+1)
 	}
 	m.dispatchMu.Lock()
