@@ -12,9 +12,9 @@ import (
 
 // Principal is the authenticated identity a trust decision is made about.
 type Principal struct {
-	NodeID NodeID
-	PubKey ed25519.PublicKey
-	Tenant string
+	NodeID      NodeID
+	PubKey      ed25519.PublicKey
+	PartitionID string
 }
 
 // KeyStatus is the lifecycle state of an identity key.

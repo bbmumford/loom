@@ -53,8 +53,8 @@ func ladShadowPair(auth, shadow []ports.Member) (*fakeParityDir, *fakeParityDir)
 func TestShadowParityPassRecordsDivergence(t *testing.T) {
 	rt := &Runtime{}
 	auth, shadow := ladShadowPair(
-		[]ports.Member{{NodeID: "aaa", ServiceName: "svc", Tenant: "t"}},
-		[]ports.Member{{NodeID: "bbb", ServiceName: "svc", Tenant: "t"}},
+		[]ports.Member{{NodeID: "aaa", ServiceName: "svc", PartitionID: "t"}},
+		[]ports.Member{{NodeID: "bbb", ServiceName: "svc", PartitionID: "t"}},
 	)
 
 	rt.shadowParityPass(context.Background(), auth, shadow, ports.Partition("t"), nil)
@@ -76,7 +76,7 @@ func TestShadowParityPassRecordsDivergence(t *testing.T) {
 // non-zero diverged counter can only mean the sides actually disagreed.
 func TestShadowParityPassInParityRecordsNoDivergence(t *testing.T) {
 	rt := &Runtime{}
-	same := []ports.Member{{NodeID: "aaa", ServiceName: "svc", Tenant: "t"}}
+	same := []ports.Member{{NodeID: "aaa", ServiceName: "svc", PartitionID: "t"}}
 	auth, shadow := ladShadowPair(same, same)
 
 	rt.shadowParityPass(context.Background(), auth, shadow, ports.Partition("t"), nil)

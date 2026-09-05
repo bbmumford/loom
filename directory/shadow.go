@@ -82,8 +82,8 @@ func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDir
 		if am.ServiceName != sm.ServiceName {
 			rep.add("member %s service %q vs %q", short(id), am.ServiceName, sm.ServiceName)
 		}
-		if am.Tenant != sm.Tenant {
-			rep.add("member %s tenant %q vs %q", short(id), am.Tenant, sm.Tenant)
+		if am.PartitionID != sm.PartitionID {
+			rep.add("member %s tenant %q vs %q", short(id), am.PartitionID, sm.PartitionID)
 		}
 		if !stringSetEqual(am.Roles, sm.Roles) {
 			rep.add("member %s roles %v vs %v", short(id), am.Roles, sm.Roles)

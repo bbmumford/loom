@@ -45,7 +45,7 @@ func trustPrincipal(t *testing.T, partition string) (ports.Principal, ed25519.Pr
 	return ports.Principal{
 		NodeID: ports.NodeID(string(id)),
 		PubKey: pub,
-		Tenant: partition,
+		PartitionID: partition,
 	}, priv
 }
 
@@ -54,7 +54,7 @@ func trustPrincipal(t *testing.T, partition string) (ports.Principal, ed25519.Pr
 // identifier — a different scheme — no longer binds, so a claimed-victim record
 // carrying the legacy id (or any non-canonical value) is refused.
 func TestVerifyNodeKeyBindsCanonicalRejectsLegacyHex(t *testing.T) {
-	p := NewPolicy(PolicyConfig{Tenants: []string{"hstles"}})
+	p := NewPolicy(PolicyConfig{Partitions: []string{"hstles"}})
 	pub, _, err := ed25519.GenerateKey(nil)
 	if err != nil {
 		t.Fatal(err)
@@ -78,7 +78,7 @@ func TestVerifyNodeKeyBindsCanonicalRejectsLegacyHex(t *testing.T) {
 
 func TestAuthorizeReadFailsClosedOnEveryRejectionAxis(t *testing.T) {
 	ctx := context.Background()
-	p := NewPolicy(PolicyConfig{Tenants: []string{"hstles"}})
+	p := NewPolicy(PolicyConfig{Partitions: []string{"hstles"}})
 	good, _ := trustPrincipal(t, "hstles")
 
 	// Premise: the happy path is genuinely allowed, or every denial below is
@@ -118,7 +118,7 @@ func TestAuthorizeReadFailsClosedOnEveryRejectionAxis(t *testing.T) {
 	})
 
 	t.Run("malformed key is denied", func(t *testing.T) {
-		short := ports.Principal{NodeID: good.NodeID, PubKey: []byte{1, 2, 3}, Tenant: "hstles"}
+		short := ports.Principal{NodeID: good.NodeID, PubKey: []byte{1, 2, 3}, PartitionID: "hstles"}
 		if err := p.AuthorizeRead(ctx, short, ports.Topic("fleet.peer")); err == nil {
 			t.Fatal("a key of the wrong size authorized a read")
 		}
@@ -132,7 +132,7 @@ func TestAuthorizeReadFailsClosedOnEveryRejectionAxis(t *testing.T) {
 // giving up, and cannot let one widen by accident.
 func TestAuthorizeReadsDocumentedCoarsenessIsIntentional(t *testing.T) {
 	ctx := context.Background()
-	p := NewPolicy(PolicyConfig{Tenants: []string{"hstles"}})
+	p := NewPolicy(PolicyConfig{Partitions: []string{"hstles"}})
 
 	t.Run("read is TOPIC-BLIND by design", func(t *testing.T) {
 		pr, _ := trustPrincipal(t, "hstles")
@@ -165,7 +165,7 @@ func TestAuthorizeReadsDocumentedCoarsenessIsIntentional(t *testing.T) {
 // the branch most likely to be wrong.
 func TestEntitleRoleGrantsAndStaysScoped(t *testing.T) {
 	ctx := context.Background()
-	p := NewPolicy(PolicyConfig{Tenants: []string{"hstles"}})
+	p := NewPolicy(PolicyConfig{Partitions: []string{"hstles"}})
 	alice, _ := trustPrincipal(t, "hstles")
 	bob, _ := trustPrincipal(t, "hstles")
 
@@ -201,7 +201,7 @@ func TestEntitleRoleGrantsAndStaysScoped(t *testing.T) {
 // caller rather than at an unexported helper.
 func TestCheckTenantBranches(t *testing.T) {
 	ctx := context.Background()
-	p := NewPolicy(PolicyConfig{Tenants: []string{"hstles", "acme"}})
+	p := NewPolicy(PolicyConfig{Partitions: []string{"hstles", "acme"}})
 
 	for _, tc := range []struct {
 		name, partition string

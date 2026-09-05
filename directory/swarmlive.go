@@ -311,7 +311,7 @@ func (d *SwarmDirectory) projectPeerLocked(r ports.Record) {
 				case "region":
 					m.Region = v
 				case "tenant":
-					m.Tenant = v
+					m.PartitionID = v
 				}
 			}
 		}
@@ -405,15 +405,16 @@ func transportPriority(t swarmpb.Address_Transport) int {
 
 // ---------- ports.LiveDirectory ----------
 
-// Members filters by tenant. Before #R-1455 this returned EVERY tenant's
-// members regardless of the caller, which the tenant-implicit port could not
-// express — a cross-tenant leak the signature made invisible.
+// Members returns only the members whose PartitionID equals partition. The
+// filter is load-bearing, not a convenience: d.members holds every partition's
+// members in one map, so returning the map unfiltered would hand one caller
+// another partition's fleet.
 func (d *SwarmDirectory) Members(_ context.Context, partition ports.Partition) ([]ports.Member, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	out := make([]ports.Member, 0, len(d.members))
 	for _, m := range d.members {
-		if ports.Partition(m.Tenant) != partition {
+		if ports.Partition(m.PartitionID) != partition {
 			continue
 		}
 		out = append(out, cloneMember(m))
@@ -426,7 +427,7 @@ func (d *SwarmDirectory) Member(_ context.Context, partition ports.Partition, id
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	m, ok := d.members[id]
-	if !ok || ports.Partition(m.Tenant) != partition {
+	if !ok || ports.Partition(m.PartitionID) != partition {
 		return ports.Member{}, false, nil
 	}
 	return cloneMember(m), true, nil
@@ -445,7 +446,7 @@ func (d *SwarmDirectory) RoleAdverts(_ context.Context, partition ports.Partitio
 	defer d.mu.RUnlock()
 	out := make([]ports.RoleAdvert, 0, len(d.members))
 	for id, m := range d.members {
-		if ports.Partition(m.Tenant) != partition {
+		if ports.Partition(m.PartitionID) != partition {
 			continue
 		}
 		if len(m.Roles) == 0 {
@@ -465,7 +466,7 @@ func (d *SwarmDirectory) NodesByRole(_ context.Context, partition ports.Partitio
 	defer d.mu.RUnlock()
 	var out []ports.NodeID
 	for id, m := range d.members {
-		if ports.Partition(m.Tenant) != partition {
+		if ports.Partition(m.PartitionID) != partition {
 			continue
 		}
 		for _, r := range m.Roles {
@@ -482,7 +483,7 @@ func (d *SwarmDirectory) NodesByRole(_ context.Context, partition ports.Partitio
 func (d *SwarmDirectory) Reach(_ context.Context, partition ports.Partition, id ports.NodeID) ([]ports.ReachAddress, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	if m, ok := d.members[id]; ok && ports.Partition(m.Tenant) != partition {
+	if m, ok := d.members[id]; ok && ports.Partition(m.PartitionID) != partition {
 		return nil, nil
 	}
 	return append([]ports.ReachAddress(nil), d.reach[id]...), nil
@@ -500,7 +501,7 @@ func (d *SwarmDirectory) HandlersByName(_ context.Context, partition ports.Parti
 	defer d.mu.RUnlock()
 	var out []ports.HandlerAdvert
 	for _, a := range d.handlers[name] {
-		if m, ok := d.members[a.NodeID]; ok && ports.Partition(m.Tenant) != partition {
+		if m, ok := d.members[a.NodeID]; ok && ports.Partition(m.PartitionID) != partition {
 			continue
 		}
 		out = append(out, a)
