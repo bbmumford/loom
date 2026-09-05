@@ -144,9 +144,9 @@ func (s *TrustShadow) Stats() (checked, rejected, dropped uint64) {
 // NodesByRole comparison to roles this node actually participates in.
 func (rt *Runtime) shadowParityScope() (ports.Partition, []string) {
 	tenant := ports.Partition("")
-	for _, tc := range rt.cfg.Tenants {
-		if tc.TenantID != "" {
-			tenant = ports.Partition(tc.TenantID)
+	for _, tc := range rt.cfg.Partitions {
+		if tc.PartitionID != "" {
+			tenant = ports.Partition(tc.PartitionID)
 			break
 		}
 	}
