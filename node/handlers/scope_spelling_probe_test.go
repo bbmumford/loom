@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // These probes began as a characterisation of the camelCase/snake_case split
@@ -74,7 +74,7 @@ func TestSpellingProbe_TypedIdentityIsTheOnlyAdmissionPath(t *testing.T) {
 		t.Fatalf("both mutable spellings must deny (camel=%v snake=%v)", camelErr, snakeErr)
 	}
 
-	ctx := tenantScope.WithAuthenticatedIdentity(ctxWithRPC(map[string]interface{}{
+	ctx := rpcscope.WithAuthenticatedIdentity(ctxWithRPC(map[string]interface{}{
 		"tenantId":  probeTenant,
 		"tenant_id": probeTenant,
 	}), scopeIdentity(probeTenant, "", ""))

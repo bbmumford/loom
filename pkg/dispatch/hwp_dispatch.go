@@ -18,7 +18,7 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
-	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/pkg/trace"
 	"golang.org/x/sync/singleflight"
 	"google.golang.org/protobuf/proto"
@@ -965,7 +965,7 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 		rpcCtx["userId"] = uid
 	}
 	var wirePrincipal *pb.AuthenticatedPrincipal
-	if principal, ok := tenantScope.AuthenticatedPrincipalFromContext(ctx); ok {
+	if principal, ok := rpcscope.AuthenticatedPrincipalFromContext(ctx); ok {
 		// Project loom's opaque identity onto the wire generically: every
 		// established axis travels as a ScopeAxis (aether names none), the
 		// subject as Subject, the grants as Scopes. The receiver's injected

@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // stubMeta is a minimal HandlerMeta used solely to exercise validateScope
@@ -36,15 +36,15 @@ func (s *stubMeta) AllowedPartitions() []string   { return s.allowed }
 // logic — validateScope delegates every declared (non-None) tag to
 // whatever policy the registry carries; a nil policy fails closed. The reason
 // strings mirror the diagnostics these tests characterise.
-func scopeRefPolicy(platforms ...string) tenantScope.PresencePolicyFunc {
+func scopeRefPolicy(platforms ...string) rpcscope.PresencePolicyFunc {
 	allow := make(map[string]struct{}, len(platforms))
 	for _, p := range platforms {
 		if p != "" {
 			allow[p] = struct{}{}
 		}
 	}
-	return func(declared Scope, id tenantScope.AuthenticatedIdentity) (bool, string) {
-		tenant := id.Scope(tenantScope.AxisTransportPinned)
+	return func(declared Scope, id rpcscope.AuthenticatedIdentity) (bool, string) {
+		tenant := id.Scope(rpcscope.AxisTransportPinned)
 		switch declared {
 		case ScopeNone:
 			return true, ""
@@ -63,7 +63,7 @@ func scopeRefPolicy(platforms ...string) tenantScope.PresencePolicyFunc {
 			if tenant == "" {
 				return false, "authenticated platform tenant context required"
 			}
-			if id.Scope(tenantScope.AxisWithinTransport) == "" {
+			if id.Scope(rpcscope.AxisWithinTransport) == "" {
 				return false, "authenticated organisation context required"
 			}
 		case ScopeUser:
@@ -94,13 +94,13 @@ func newScopedRegistry(platforms ...string) *HandlerRegistry {
 
 // scopeIdentity builds an opaque identity from the deployed axes, omitting any
 // empty axis (an absent axis must stay absent).
-func scopeIdentity(tenant, org, user string) tenantScope.AuthenticatedIdentity {
-	id := tenantScope.AuthenticatedIdentity{Subject: user}
+func scopeIdentity(tenant, org, user string) rpcscope.AuthenticatedIdentity {
+	id := rpcscope.AuthenticatedIdentity{Subject: user}
 	if tenant != "" {
-		id.Scopes = append(id.Scopes, tenantScope.ScopeValue{Name: tenantScope.AxisTransportPinned, Value: tenant})
+		id.Scopes = append(id.Scopes, rpcscope.ScopeValue{Name: rpcscope.AxisTransportPinned, Value: tenant})
 	}
 	if org != "" {
-		id.Scopes = append(id.Scopes, tenantScope.ScopeValue{Name: tenantScope.AxisWithinTransport, Value: org})
+		id.Scopes = append(id.Scopes, rpcscope.ScopeValue{Name: rpcscope.AxisWithinTransport, Value: org})
 	}
 	return id
 }
@@ -137,7 +137,7 @@ func TestValidateTenantScope_Profile_WithTenantPasses(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "billing.getProfile", scope: ScopeProfile}
 
-	ctx := tenantScope.WithAuthenticatedIdentity(context.Background(), scopeIdentity("acme", "", ""))
+	ctx := rpcscope.WithAuthenticatedIdentity(context.Background(), scopeIdentity("acme", "", ""))
 	err := r.validateScope(ctx, h)
 	if err != nil {
 		t.Fatalf("expected ScopeProfile with tenant to pass; got %v", err)
@@ -202,7 +202,7 @@ func TestValidateTenantScope_None_Passes(t *testing.T) {
 func TestValidateTenantScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing.T) {
 	h := &stubMeta{name: "platform.op", scope: ScopePlatform}
 	identity := func(tenantID string) context.Context {
-		return tenantScope.WithAuthenticatedIdentity(
+		return rpcscope.WithAuthenticatedIdentity(
 			context.Background(),
 			scopeIdentity(tenantID, "", ""),
 		)
@@ -226,7 +226,7 @@ func TestValidateTenantScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing
 			r.SetPresencePolicy(scopeRefPolicy(test.set...))
 			err := r.validateScope(identity(test.tenant), h)
 			if test.wantErr {
-				if !errors.Is(err, tenantScope.ErrDenied) {
+				if !errors.Is(err, rpcscope.ErrDenied) {
 					t.Fatalf("expected shared fail-closed denial, got %v", err)
 				}
 				return
@@ -261,7 +261,7 @@ func TestValidateTenantScope_LegacyScopes_StillEnforce(t *testing.T) {
 			if !strings.Contains(err.Error(), c.want) {
 				t.Fatalf("expected error to contain %q; got %v", c.want, err)
 			}
-			if !errors.Is(err, tenantScope.ErrDenied) {
+			if !errors.Is(err, rpcscope.ErrDenied) {
 				t.Fatalf("expected shared scope denial sentinel; got %v", err)
 			}
 		})
@@ -337,7 +337,7 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 			if !c.noStamp {
 				ctx = WithTransportPartition(ctx, c.transport)
 			}
-			ctx = tenantScope.WithAuthenticatedIdentity(ctx, scopeIdentity(reqTenant, "", ""))
+			ctx = rpcscope.WithAuthenticatedIdentity(ctx, scopeIdentity(reqTenant, "", ""))
 			err := r.validateScope(ctx, h)
 			if c.wantErr == "" {
 				if err != nil {
@@ -351,7 +351,7 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 			if !strings.Contains(err.Error(), c.wantErr) {
 				t.Fatalf("%s: expected error containing %q; got %v", c.name, c.wantErr, err)
 			}
-			if !errors.Is(err, tenantScope.ErrDenied) {
+			if !errors.Is(err, rpcscope.ErrDenied) {
 				t.Fatalf("%s: denial must wrap shared scope sentinel; got %v", c.name, err)
 			}
 		})
@@ -378,7 +378,7 @@ func TestValidateTenantScope_OrganizationIgnoresMutableHints(t *testing.T) {
 		"tenant_id": "evil",
 		"orgId":     "evil",
 	}), "orbtr")
-	ctx = tenantScope.WithAuthenticatedIdentity(ctx, scopeIdentity("orbtr", "acme", ""))
+	ctx = rpcscope.WithAuthenticatedIdentity(ctx, scopeIdentity("orbtr", "acme", ""))
 	if err := r.validateScope(ctx, h); err != nil {
 		t.Fatalf("exact authenticated organisation must satisfy ScopeOrg despite body hints: %v", err)
 	}

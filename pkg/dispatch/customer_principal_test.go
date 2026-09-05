@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/ORBTR/aether/rpc/pb"
-	tenantScope "github.com/bbmumford/loom/pkg/rpc/scope"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // principalAxis returns the value the wire principal carries under the named
@@ -26,21 +26,21 @@ func principalAxis(p *pb.AuthenticatedPrincipal, name string) string {
 }
 
 func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing.T) {
-	identity := tenantScope.AuthenticatedIdentity{
-		Scopes: []tenantScope.ScopeValue{
-			{Name: tenantScope.AxisTransportPinned, Value: "orbtr"},
-			{Name: tenantScope.AxisWithinTransport, Value: "org-A"},
+	identity := rpcscope.AuthenticatedIdentity{
+		Scopes: []rpcscope.ScopeValue{
+			{Name: rpcscope.AxisTransportPinned, Value: "orbtr"},
+			{Name: rpcscope.AxisWithinTransport, Value: "org-A"},
 		},
 		Subject: "user-A",
 	}
-	principal, err := tenantScope.NewAuthenticatedPrincipal(
+	principal, err := rpcscope.NewAuthenticatedPrincipal(
 		identity,
 		[]string{"orbtr.io.plugins.read", "orbtr.io.plugins.publish"},
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := tenantScope.WithAuthenticatedPrincipal(context.Background(), principal)
+	ctx := rpcscope.WithAuthenticatedPrincipal(context.Background(), principal)
 
 	req := buildRPCRequestCtx(
 		ctx,
@@ -54,10 +54,10 @@ func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing
 	if req.Principal == nil {
 		t.Fatal("typed principal omitted from RPC envelope")
 	}
-	if got := principalAxis(req.Principal, tenantScope.AxisTransportPinned); got != "orbtr" {
+	if got := principalAxis(req.Principal, rpcscope.AxisTransportPinned); got != "orbtr" {
 		t.Fatalf("platform tenant axis = %q", got)
 	}
-	if got := principalAxis(req.Principal, tenantScope.AxisWithinTransport); got != "org-A" {
+	if got := principalAxis(req.Principal, rpcscope.AxisWithinTransport); got != "org-A" {
 		t.Fatalf("customer org axis = %q", got)
 	}
 	if got := req.Principal.Subject; got != "user-A" {
@@ -77,24 +77,24 @@ func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing
 }
 
 func TestBuildRPCRequestCtxDoesNotRewritePrincipalToCallerPlatform(t *testing.T) {
-	identity := tenantScope.AuthenticatedIdentity{
-		Scopes: []tenantScope.ScopeValue{
-			{Name: tenantScope.AxisTransportPinned, Value: "foreign-platform"},
-			{Name: tenantScope.AxisWithinTransport, Value: "org-A"},
+	identity := rpcscope.AuthenticatedIdentity{
+		Scopes: []rpcscope.ScopeValue{
+			{Name: rpcscope.AxisTransportPinned, Value: "foreign-platform"},
+			{Name: rpcscope.AxisWithinTransport, Value: "org-A"},
 		},
 		Subject: "user-A",
 	}
-	principal, err := tenantScope.NewAuthenticatedPrincipal(identity, nil)
+	principal, err := rpcscope.NewAuthenticatedPrincipal(identity, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	ctx := tenantScope.WithAuthenticatedPrincipal(context.Background(), principal)
+	ctx := rpcscope.WithAuthenticatedPrincipal(context.Background(), principal)
 
 	req := buildRPCRequestCtx(ctx, "role", "handler", nil, time.Second, "orbtr")
 	if req.Principal == nil {
 		t.Fatal("mismatched principal was silently dropped")
 	}
-	if got := principalAxis(req.Principal, tenantScope.AxisTransportPinned); got != "foreign-platform" {
+	if got := principalAxis(req.Principal, rpcscope.AxisTransportPinned); got != "foreign-platform" {
 		t.Fatalf("principal rewritten to dispatch platform: %q", got)
 	}
 	if got := req.Context["tenantId"]; got != "orbtr" {
