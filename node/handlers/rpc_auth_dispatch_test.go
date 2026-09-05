@@ -119,7 +119,7 @@ func TestAuthenticatedRPCScopeIgnoresRequestIdentityHints(t *testing.T) {
 		},
 	}
 
-	platformOnly := WithTransportTenant(context.Background(), "orbtr")
+	platformOnly := WithTransportPartition(context.Background(), "orbtr")
 	resp, err := registry.DispatchRPCWithAuth(platformOnly, req, auth)
 	if err != nil {
 		t.Fatalf("map-only DispatchRPCWithAuth error: %v", err)

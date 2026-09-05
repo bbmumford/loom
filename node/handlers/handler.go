@@ -856,19 +856,20 @@ func (r *HandlerRegistry) validateScope(ctx context.Context, h HandlerMeta) erro
 		return fmt.Errorf("%w: handler %s denied by presence policy: %s", scope.ErrDenied, h.Name(), reason)
 	}
 
-	// Transport-level verification: if the session arrived on a tenant-specific
-	// transport (dedicated or shared preamble), the request's platform-tenant
-	// axis must match. "default" transport (single-tenant fallback) allows any
-	// request tenant. This reconciliation does not interpret the scope tag; it
-	// checks the transport binding against the identity's platform-tenant axis,
-	// which WithTransportTenant established from the same server-resolved value.
-	tenantID := identity.Scope(scope.AxisTransportPinned)
-	transportTenant := TransportTenantFromContext(ctx)
-	if transportTenant != "" && transportTenant != "default" && tenantID != "" {
-		if transportTenant != tenantID {
-			return fmt.Errorf("%w: transport/authenticated tenant mismatch: transport=%q identity=%q for handler %s",
+	// Transport-level verification: a session that arrived on a partition-bound
+	// transport (dedicated, or shared via the preamble) must carry an identity
+	// pinned to that same partition. The "default" transport is the unbound
+	// fallback and admits any partition. This reconciliation does not interpret
+	// the scope tag; it compares the transport binding that
+	// WithTransportPartition established against the identity's pinned axis,
+	// both resolved server-side from the same value.
+	partitionID := identity.Scope(scope.AxisTransportPinned)
+	transportPartition := TransportPartitionFromContext(ctx)
+	if transportPartition != "" && transportPartition != "default" && partitionID != "" {
+		if transportPartition != partitionID {
+			return fmt.Errorf("%w: transport/authenticated partition mismatch: transport=%q identity=%q for handler %s",
 				scope.ErrDenied,
-				transportTenant, tenantID, h.Name())
+				transportPartition, partitionID, h.Name())
 		}
 	}
 
@@ -1384,16 +1385,6 @@ func TransportPartitionFromContext(ctx context.Context) string {
 	return ""
 }
 
-// WithTransportTenant forwards to WithTransportPartition; a caller that spells the
-// pinned axis "tenant" reaches the same binding and context key.
-func WithTransportTenant(ctx context.Context, tenantID string) context.Context {
-	return WithTransportPartition(ctx, tenantID)
-}
-
-// TransportTenantFromContext forwards to TransportPartitionFromContext.
-func TransportTenantFromContext(ctx context.Context) string {
-	return TransportPartitionFromContext(ctx)
-}
 
 // GetRequestIDFromContext extracts request_id for tracing
 func GetRequestIDFromContext(ctx map[string]interface{}) string {

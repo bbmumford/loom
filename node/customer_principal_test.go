@@ -116,7 +116,7 @@ func TestRPCServerBindsTypedPrincipalFromTenantTransport(t *testing.T) {
 	server := NewRPCServer(registry)
 	server.SetAuthValidator(customerPrincipalValidator{})
 
-	ctx := handlers.WithTransportTenant(context.Background(), "orbtr")
+	ctx := handlers.WithTransportPartition(context.Background(), "orbtr")
 	resp := server.handleRequest(ctx, customerPrincipalRequest())
 
 	if !resp.Success {
@@ -184,7 +184,7 @@ func TestRPCServerRejectsPrincipalTamperingBeforeHandler(t *testing.T) {
 			req := customerPrincipalRequest()
 			tc.mutate(req)
 
-			ctx := handlers.WithTransportTenant(context.Background(), tc.transport)
+			ctx := handlers.WithTransportPartition(context.Background(), tc.transport)
 			resp := server.handleRequest(ctx, req)
 
 			if resp.Success || !strings.Contains(resp.Error, tc.want) {
@@ -216,7 +216,7 @@ func TestRPCServerAdmitsWithinTenantCustomerOrg(t *testing.T) {
 	req := customerPrincipalRequest()
 	req.Principal.Axes[1].Value = "org-Z" // a different customer org, same platform tenant
 
-	ctx := handlers.WithTransportTenant(context.Background(), "orbtr")
+	ctx := handlers.WithTransportPartition(context.Background(), "orbtr")
 	resp := server.handleRequest(ctx, req)
 
 	if !resp.Success {
@@ -239,7 +239,7 @@ func TestRPCServerMutableContextCannotCreateCustomerPrincipal(t *testing.T) {
 	req := customerPrincipalRequest()
 	req.Principal = nil
 
-	ctx := handlers.WithTransportTenant(context.Background(), "orbtr")
+	ctx := handlers.WithTransportPartition(context.Background(), "orbtr")
 	resp := server.handleRequest(ctx, req)
 
 	if resp.Success || !strings.Contains(resp.Error, "authenticated organisation") {
@@ -268,7 +268,7 @@ func TestRPCServerForwardingPreservesTypedPrincipal(t *testing.T) {
 	forwarder := &principalForwarder{}
 	server.SetForwarder(forwarder)
 
-	ctx := handlers.WithTransportTenant(context.Background(), "orbtr")
+	ctx := handlers.WithTransportPartition(context.Background(), "orbtr")
 	resp := server.handleRequest(ctx, customerPrincipalRequest())
 
 	if !resp.Success {
@@ -340,7 +340,7 @@ func TestRPCServerRejectsWireTenantWithoutAuthenticatedTransport(t *testing.T) {
 	server := NewRPCServer(registry)
 	server.SetAuthValidator(stampingTenantValidator{})
 
-	// Deliberately NO handlers.WithTransportTenant: the only tenant signal is the
+	// Deliberately NO handlers.WithTransportPartition: the only tenant signal is the
 	// mutable req.Context map, which must never establish authority.
 	req := &pb.RPCRequest{
 		Id:      "wire-tenant-no-transport",
