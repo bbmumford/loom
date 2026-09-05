@@ -18,10 +18,10 @@ import (
 type gatewayPrincipalKey struct{}
 
 type gatewayPrincipal struct {
-	owner ports.ExecutionOwnerKey
+	owner ports.ExecutionPartitionKey
 }
 
-func (p gatewayPrincipal) OwnerKey() ports.ExecutionOwnerKey { return p.owner }
+func (p gatewayPrincipal) PartitionKey() ports.ExecutionPartitionKey { return p.owner }
 
 func (p gatewayPrincipal) AuthorizeExecution(
 	ctx context.Context,
@@ -40,14 +40,14 @@ type gatewayPrincipalReader struct{}
 
 func (gatewayPrincipalReader) ExecutionPrincipal(ctx context.Context) (ports.ExecutionPrincipal, bool) {
 	principal, ok := ctx.Value(gatewayPrincipalKey{}).(ports.ExecutionPrincipal)
-	return principal, ok && principal != nil && principal.OwnerKey().Valid()
+	return principal, ok && principal != nil && principal.PartitionKey().Valid()
 }
 
 func gatewayPrincipalFor(t *testing.T, canonical string) gatewayPrincipal {
 	t.Helper()
-	owner, err := ports.NewExecutionOwnerKey(canonical)
+	owner, err := ports.NewExecutionPartitionKey(canonical)
 	if err != nil {
-		t.Fatalf("NewExecutionOwnerKey: %v", err)
+		t.Fatalf("NewExecutionPartitionKey: %v", err)
 	}
 	return gatewayPrincipal{owner: owner}
 }
@@ -61,12 +61,12 @@ func gatewayPrincipalContext(principal gatewayPrincipal) context.Context {
 }
 
 type blockingGatewayPrincipal struct {
-	owner   ports.ExecutionOwnerKey
+	owner   ports.ExecutionPartitionKey
 	entered chan struct{}
 	release <-chan struct{}
 }
 
-func (p *blockingGatewayPrincipal) OwnerKey() ports.ExecutionOwnerKey { return p.owner }
+func (p *blockingGatewayPrincipal) PartitionKey() ports.ExecutionPartitionKey { return p.owner }
 
 func (p *blockingGatewayPrincipal) AuthorizeExecution(
 	ctx context.Context,
@@ -249,7 +249,7 @@ func TestAuthorizedAdmissionIsBoundedIndependentlyPerOpaqueOwner(t *testing.T) {
 	g, err := NewGateway(
 		GatewayConfig{
 			ID:                     "owner-limit-test",
-			MaxOutstandingPerOwner: 1,
+			MaxOutstandingPerPartition: 1,
 		},
 		WithExecutionPrincipalReader(gatewayPrincipalReader{}),
 	)
@@ -258,20 +258,20 @@ func TestAuthorizedAdmissionIsBoundedIndependentlyPerOpaqueOwner(t *testing.T) {
 	}
 	defer g.Stop()
 
-	firstOwner := gatewayPrincipalFor(t, "realm=test|tenant=app|org=one|kind=service|id=w|space=ops")
+	firstPartition := gatewayPrincipalFor(t, "realm=test|tenant=app|org=one|kind=service|id=w|space=ops")
 	secondOwner := gatewayPrincipalFor(t, "realm=test|tenant=app|org=two|kind=service|id=w|space=ops")
 	first := &task.Task{ID: "first"}
-	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstOwner), first); err != nil {
+	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstPartition), first); err != nil {
 		t.Fatalf("first owner admission: %v", err)
 	}
-	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstOwner), &task.Task{ID: "over-limit"}); err == nil ||
+	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstPartition), &task.Task{ID: "over-limit"}); err == nil ||
 		!strings.Contains(err.Error(), "outstanding limit") {
 		t.Fatalf("same-owner second admission = %v, want outstanding limit", err)
 	}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(secondOwner), &task.Task{ID: "other-owner"}); err != nil {
 		t.Fatalf("independent owner was coupled to first owner's limit: %v", err)
 	}
-	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstOwner), first); err == nil ||
+	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstPartition), first); err == nil ||
 		!strings.Contains(err.Error(), "already admitted") {
 		t.Fatalf("duplicate exact pointer admission = %v, want rejection", err)
 	}
@@ -279,7 +279,7 @@ func TestAuthorizedAdmissionIsBoundedIndependentlyPerOpaqueOwner(t *testing.T) {
 	g.mu.Lock()
 	g.releaseAdmissionLocked(g.admissionsBySubmitted[first].current)
 	g.mu.Unlock()
-	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstOwner), &task.Task{ID: "after-release"}); err != nil {
+	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstPartition), &task.Task{ID: "after-release"}); err != nil {
 		t.Fatalf("owner slot did not settle after terminal release: %v", err)
 	}
 }
@@ -370,7 +370,7 @@ func TestQueueRejectionRollsBackOwnerAndPointerAdmission(t *testing.T) {
 		GatewayConfig{
 			ID:                     "queue-bound-test",
 			MaxQueueDepth:          1,
-			MaxOutstandingPerOwner: 2,
+			MaxOutstandingPerPartition: 2,
 		},
 		WithExecutionPrincipalReader(gatewayPrincipalReader{}),
 	)
@@ -392,7 +392,7 @@ func TestQueueRejectionRollsBackOwnerAndPointerAdmission(t *testing.T) {
 	if _, ok := g.EstablishedExecutionPartition(second); ok {
 		t.Fatal("queue rejection stranded a private owner binding")
 	}
-	if got := g.ownerOutstanding[principal.owner]; got != 1 {
+	if got := g.partitionOutstanding[principal.owner]; got != 1 {
 		t.Fatalf("owner outstanding = %d, want 1 after rollback", got)
 	}
 
@@ -456,11 +456,11 @@ func TestStopDuringBlockingAuthorizationInvalidatesTheResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
-	owner, err := ports.NewExecutionOwnerKey(
+	owner, err := ports.NewExecutionPartitionKey(
 		"realm=test|tenant=app|org=one|kind=service|id=blocked|space=ops",
 	)
 	if err != nil {
-		t.Fatalf("NewExecutionOwnerKey: %v", err)
+		t.Fatalf("NewExecutionPartitionKey: %v", err)
 	}
 	release := make(chan struct{})
 	principal := &blockingGatewayPrincipal{

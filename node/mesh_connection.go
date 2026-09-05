@@ -860,7 +860,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			for connCtx.Err() == nil {
 				m.gossipMu.Lock()
 				if m.gossipActive == nil {
-					m.gossipActive = make(map[string]*gossipOwner)
+					m.gossipActive = make(map[string]*gossipHolder)
 				}
 				existing := m.gossipActive[nodeID]
 				preempt := false
@@ -878,7 +878,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 							truncID(nodeID), existing.grade, ourGrade)
 					}
 					gossipCtx, gossipCancel := context.WithCancel(connCtx)
-					owner := &gossipOwner{grade: ourGrade, cancel: gossipCancel}
+					owner := &gossipHolder{grade: ourGrade, cancel: gossipCancel}
 					m.gossipActive[nodeID] = owner
 					m.gossipMu.Unlock()
 
@@ -1709,7 +1709,7 @@ func (m *ConnectionManager) unregisterMeshSessionWithoutHook(nodeID string, expe
 	if expected == nil {
 		current, present := m.meshSessions[nodeID]
 		if !present || current != nil {
-			m.unregisterSkippedNotOwner.Add(1)
+			m.unregisterSkippedNotHolder.Add(1)
 			currentProto := ""
 			if current != nil {
 				currentProto = current.Protocol().String()
@@ -1732,7 +1732,7 @@ func (m *ConnectionManager) unregisterMeshSessionWithoutHook(nodeID string, expe
 				// Neither party of the proving window owns this expected
 				// pointer — a third (newer) session has taken over. Skip
 				// the revert; the new owner's lifecycle drives dispatch.
-				m.unregisterSkippedNotOwner.Add(1)
+				m.unregisterSkippedNotHolder.Add(1)
 				log.Printf("[DISPATCH-TRACE] unregister exit: peer=%s decision=skipped-proving-mismatch expectedProto=%s",
 					truncID(nodeID), expected.Protocol())
 				return false
@@ -1791,7 +1791,7 @@ func (m *ConnectionManager) unregisterMeshSessionWithoutHook(nodeID string, expe
 		// A present-but-nil slot is still deletable: that is the zombie slot the
 		// sweeper is meant to clear, and only a genuinely missing key is refused.
 		if !present || (current != nil && current != expected) {
-			m.unregisterSkippedNotOwner.Add(1)
+			m.unregisterSkippedNotHolder.Add(1)
 			// current is nil on the absent-entry refusal, so its protocol is
 			// read conditionally — the same shape the nil-expected guard above
 			// uses for the same reason.

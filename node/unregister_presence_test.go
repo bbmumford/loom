@@ -36,7 +36,7 @@ func TestUnregisteringAnAbsentSessionIsRefused(t *testing.T) {
 	m := unregFixture("peer-a", nil) // no entry at all
 	owned := &probeSession{local: "self", remote: "peer-a"}
 
-	beforeSkipped := m.unregisterSkippedNotOwner.Load()
+	beforeSkipped := m.unregisterSkippedNotHolder.Load()
 	beforeDeleted := m.unregisterDeleted.Load()
 
 	if removed := m.unregisterMeshSessionWithoutHook("peer-a", owned); removed {
@@ -47,8 +47,8 @@ func TestUnregisteringAnAbsentSessionIsRefused(t *testing.T) {
 		t.Errorf("unregisterDeleted advanced from %d to %d without deleting anything",
 			beforeDeleted, got)
 	}
-	if got := m.unregisterSkippedNotOwner.Load(); got != beforeSkipped+1 {
-		t.Errorf("unregisterSkippedNotOwner = %d, want %d — the refusal was not counted "+
+	if got := m.unregisterSkippedNotHolder.Load(); got != beforeSkipped+1 {
+		t.Errorf("unregisterSkippedNotHolder = %d, want %d — the refusal was not counted "+
 			"as a not-owner skip", got, beforeSkipped+1)
 	}
 }

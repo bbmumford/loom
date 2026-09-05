@@ -283,7 +283,7 @@ type peerConn struct {
 	drainedAt map[Protocol]time.Time
 }
 
-// gossipOwner records who currently holds the per-peer gossip-initiator
+// gossipHolder records who currently holds the per-peer gossip-initiator
 // dedup slot. grade is the grade of the underlying transport the
 // owner is running gossip on; cancel terminates the owner's gossip
 // context (a context.WithCancel-derived child of connCtx), causing
@@ -292,7 +292,7 @@ type peerConn struct {
 // to preempt the current owner; the preempted owner's outer
 // initiator loop then sees the slot has been reassigned (or is empty)
 // and waits/retries normally.
-type gossipOwner struct {
+type gossipHolder struct {
 	grade  Grade
 	cancel context.CancelFunc
 }
@@ -793,7 +793,7 @@ type ConnectionManager struct {
 	// the noise-udp session — bouncing the peer back to WS
 	// permanently.
 	//
-	// v0.0.220: stores a *gossipOwner per peer with the owner's
+	// v0.0.220: stores a *gossipHolder per peer with the owner's
 	// grade and a preemption channel. A new initiator with a
 	// strictly higher grade can preempt the existing owner by
 	// cancelling its derived gossip context, forcing
@@ -803,7 +803,7 @@ type ConnectionManager struct {
 	// session itself, which continues to carry RPC, keepalive,
 	// and control traffic.
 	gossipMu     sync.Mutex
-	gossipActive map[string]*gossipOwner
+	gossipActive map[string]*gossipHolder
 
 	// multipath_failover_total counts every time the ConnectionManager
 	// promotes a standby path after a primary session failure. Incremented at
@@ -975,14 +975,14 @@ type ConnectionManager struct {
 	walkerWakeDelivered atomic.Uint64
 	walkerWakeCoalesced atomic.Uint64
 
-	// unregisterSkippedNotOwner counts how often unregisterMeshSession's
+	// unregisterSkippedNotHolder counts how often unregisterMeshSession's
 	// identity guard short-circuits because the dispatch entry already
 	// points at a newer session than the caller owned. Each increment
 	// represents one case where, pre-guard, a higher-grade upgrade
 	// would have been silently removed by an obsolete cleanup goroutine.
 	// unregisterDeleted counts cleanups that did mutate dispatch so the
 	// two together quantify how often the guard mattered.
-	unregisterSkippedNotOwner atomic.Uint64
+	unregisterSkippedNotHolder atomic.Uint64
 	unregisterDeleted         atomic.Uint64
 }
 

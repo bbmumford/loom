@@ -46,12 +46,12 @@ func newExecutorRegistry() *handlers.HandlerRegistry {
 }
 
 type executorPrincipal struct {
-	owner      ports.ExecutionOwnerKey
+	owner      ports.ExecutionPartitionKey
 	tenant     string
 	authorized int
 }
 
-func (p *executorPrincipal) OwnerKey() ports.ExecutionOwnerKey { return p.owner }
+func (p *executorPrincipal) PartitionKey() ports.ExecutionPartitionKey { return p.owner }
 
 func (p *executorPrincipal) AuthorizeExecution(
 	ctx context.Context,
@@ -71,14 +71,14 @@ func (p *executorPrincipal) AuthorizeExecution(
 }
 
 type leasedExecutorPrincipal struct {
-	owner       ports.ExecutionOwnerKey
+	owner       ports.ExecutionPartitionKey
 	tenant      string
 	calls       atomic.Int32
 	released    chan struct{}
 	releaseOnce sync.Once
 }
 
-func (p *leasedExecutorPrincipal) OwnerKey() ports.ExecutionOwnerKey {
+func (p *leasedExecutorPrincipal) PartitionKey() ports.ExecutionPartitionKey {
 	return p.owner
 }
 
@@ -107,9 +107,9 @@ func (p *leasedExecutorPrincipal) AuthorizeExecution(
 
 func newExecutorPrincipal(t *testing.T, canonical, tenant string) *executorPrincipal {
 	t.Helper()
-	owner, err := ports.NewExecutionOwnerKey(canonical)
+	owner, err := ports.NewExecutionPartitionKey(canonical)
 	if err != nil {
-		t.Fatalf("NewExecutionOwnerKey: %v", err)
+		t.Fatalf("NewExecutionPartitionKey: %v", err)
 	}
 	return &executorPrincipal{owner: owner, tenant: tenant}
 }
@@ -133,14 +133,14 @@ func (a *executorAuthProbe) WithTenantID(ctx context.Context, tenantID string) c
 	return context.WithValue(ctx, executorTenantKey{}, tenantID)
 }
 
-func (a *executorAuthProbe) ExecutionTenantID(ctx context.Context) (string, bool) {
+func (a *executorAuthProbe) ExecutionPartitionID(ctx context.Context) (string, bool) {
 	tenantID, ok := ctx.Value(executorTenantKey{}).(string)
 	return tenantID, ok && tenantID != ""
 }
 
 func (a *executorAuthProbe) ExecutionPrincipal(ctx context.Context) (ports.ExecutionPrincipal, bool) {
 	principal, ok := ctx.Value(executorPrincipalKey{}).(ports.ExecutionPrincipal)
-	return principal, ok && principal != nil && principal.OwnerKey().Valid()
+	return principal, ok && principal != nil && principal.PartitionKey().Valid()
 }
 
 type executorTaskProbe struct {
@@ -571,7 +571,7 @@ func TestExecutorRetainsAuthorizationLeaseThroughHandlerDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	owner, err := ports.NewExecutionOwnerKey(
+	owner, err := ports.NewExecutionPartitionKey(
 		"realm=hstles|tenant=hstles|org=-|kind=service|id=lease|space=platform",
 	)
 	if err != nil {

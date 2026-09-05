@@ -257,7 +257,7 @@ func TestPeerStatesReturnsASnapshotNotALiveView(t *testing.T) {
 // lock guarding different state.
 func TestGossipActiveSetReportsOnlyPeersWithALiveGossipLoop(t *testing.T) {
 	m := accessorFixture()
-	m.gossipActive = map[string]*gossipOwner{"gossiping": {grade: GradeA}}
+	m.gossipActive = map[string]*gossipHolder{"gossiping": {grade: GradeA}}
 
 	got := m.GossipActiveSet()
 	if len(got) != 1 || !got[truncID("gossiping")] {
@@ -266,7 +266,7 @@ func TestGossipActiveSetReportsOnlyPeersWithALiveGossipLoop(t *testing.T) {
 
 	// Snapshot, not a live view — monitoring reads it outside the lock.
 	m.gossipMu.Lock()
-	m.gossipActive["late"] = &gossipOwner{grade: GradeB}
+	m.gossipActive["late"] = &gossipHolder{grade: GradeB}
 	m.gossipMu.Unlock()
 	if len(got) != 1 {
 		t.Errorf("a previously returned GossipActiveSet grew to %v — it aliases the "+

@@ -8,17 +8,17 @@ package ports
 import "testing"
 
 func TestExecutionOwnerKeyIsOpaqueStableAndNonzero(t *testing.T) {
-	first, err := NewExecutionOwnerKey("realm=hstles|tenant=orbtr|org=acme|kind=service|id=worker-7|space=ops")
+	first, err := NewExecutionPartitionKey("realm=hstles|tenant=orbtr|org=acme|kind=service|id=worker-7|space=ops")
 	if err != nil {
-		t.Fatalf("NewExecutionOwnerKey(first): %v", err)
+		t.Fatalf("NewExecutionPartitionKey(first): %v", err)
 	}
-	same, err := NewExecutionOwnerKey("realm=hstles|tenant=orbtr|org=acme|kind=service|id=worker-7|space=ops")
+	same, err := NewExecutionPartitionKey("realm=hstles|tenant=orbtr|org=acme|kind=service|id=worker-7|space=ops")
 	if err != nil {
-		t.Fatalf("NewExecutionOwnerKey(same): %v", err)
+		t.Fatalf("NewExecutionPartitionKey(same): %v", err)
 	}
-	other, err := NewExecutionOwnerKey("realm=hstles|tenant=orbtr|org=other|kind=service|id=worker-7|space=ops")
+	other, err := NewExecutionPartitionKey("realm=hstles|tenant=orbtr|org=other|kind=service|id=worker-7|space=ops")
 	if err != nil {
-		t.Fatalf("NewExecutionOwnerKey(other): %v", err)
+		t.Fatalf("NewExecutionPartitionKey(other): %v", err)
 	}
 
 	if !first.Valid() || first.Fingerprint() == "" {
@@ -30,10 +30,10 @@ func TestExecutionOwnerKeyIsOpaqueStableAndNonzero(t *testing.T) {
 	if first == other {
 		t.Fatal("different organisation collapsed to the same owner key")
 	}
-	if _, err := NewExecutionOwnerKey(" \t "); err == nil {
+	if _, err := NewExecutionPartitionKey(" \t "); err == nil {
 		t.Fatal("blank canonical owner was accepted")
 	}
-	if (ExecutionOwnerKey{}).Valid() || (ExecutionOwnerKey{}).Fingerprint() != "" {
+	if (ExecutionPartitionKey{}).Valid() || (ExecutionPartitionKey{}).Fingerprint() != "" {
 		t.Fatal("zero owner key is valid")
 	}
 }

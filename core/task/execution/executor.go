@@ -302,7 +302,7 @@ func (e *Executor) executeAssignment(ctx context.Context, assignment meshtask.As
 	// task pointer. This is deliberately not derivable from Task.ID,
 	// Task.TenantID, tags or payload. The product principal repopulates its
 	// private identity context and may reject current revocation/policy.
-	execBase, expectedOwner, releaseAuthority, authorityErr := e.gateway.AuthorizeAssignment(ctx, assignment.Task)
+	execBase, expectedPartition, releaseAuthority, authorityErr := e.gateway.AuthorizeAssignment(ctx, assignment.Task)
 	if releaseAuthority != nil {
 		defer releaseAuthority()
 	}
@@ -312,9 +312,9 @@ func (e *Executor) executeAssignment(ctx context.Context, assignment meshtask.As
 			authorityErr = fmt.Errorf("auth validator cannot read an execution principal")
 		} else {
 			principal, established := reader.ExecutionPrincipal(execBase)
-			if !established || principal == nil || !principal.OwnerKey().Valid() {
+			if !established || principal == nil || !principal.PartitionKey().Valid() {
 				authorityErr = fmt.Errorf("authorized context has no execution principal")
-			} else if principal.OwnerKey() != expectedOwner {
+			} else if principal.PartitionKey() != expectedPartition {
 				authorityErr = fmt.Errorf("authorized context owner does not match gateway admission")
 			}
 		}
@@ -385,21 +385,21 @@ func (e *Executor) executeTask(ctx context.Context, task *meshtask.Task, fence s
 	// Require the opaque product principal established by the gateway's
 	// execution-time authorization. Task fields are mutable body claims and
 	// never mint or select this owner.
-	ownerReader, ok := e.auth.(ports.ExecutionPrincipalReader)
+	partitionReader, ok := e.auth.(ports.ExecutionPrincipalReader)
 	if !ok {
 		return e.rejectedTaskResult(task.ID, fence,
 			"task owner rejected: auth validator cannot read an execution principal")
 	}
-	principal, ok := ownerReader.ExecutionPrincipal(ctx)
-	if !ok || principal == nil || !principal.OwnerKey().Valid() {
+	principal, ok := partitionReader.ExecutionPrincipal(ctx)
+	if !ok || principal == nil || !principal.PartitionKey().Valid() {
 		return e.rejectedTaskResult(task.ID, fence,
 			"task owner rejected: established execution principal is missing")
 	}
 
 	metadata := map[string]interface{}{}
 	sessionID := ""
-	if tenantReader, ok := e.auth.(ports.TenantPrincipalReader); ok {
-		if platformTenant, established := tenantReader.ExecutionTenantID(ctx); established &&
+	if tenantReader, ok := e.auth.(ports.PartitionPrincipalReader); ok {
+		if platformTenant, established := tenantReader.ExecutionPartitionID(ctx); established &&
 			platformTenant != "" {
 			metadata["tenant_id"] = platformTenant
 			sessionID = platformTenant

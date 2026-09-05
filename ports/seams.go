@@ -70,47 +70,47 @@ type AuthValidator interface {
 	WithTenantID(ctx context.Context, tenantID string) context.Context
 }
 
-// TenantPrincipalReader is an OPTIONAL, read-only extension implemented by an
-// AuthValidator that can read the private tenant principal already established
-// by its authenticated transport, session, or authoritative store.
+// PartitionPrincipalReader is an OPTIONAL, read-only extension implemented by an
+// AuthValidator that can read the private partition principal already
+// established by its authenticated transport, session, or authoritative store.
 //
-// It deliberately cannot stamp a tenant. The asynchronous task body carries a
-// mutable TenantID claim, so the executor may project only this private
-// principal into handler metadata and must never turn the body field into
-// authority by calling AuthValidator.WithTenantID.
-type TenantPrincipalReader interface {
-	ExecutionTenantID(ctx context.Context) (tenantID string, ok bool)
+// It deliberately cannot stamp a partition. The asynchronous task body carries
+// a caller-supplied partition claim, so the executor may project only this
+// private principal into handler metadata and must never turn the body field
+// into authority by calling AuthValidator.WithPartitionID.
+type PartitionPrincipalReader interface {
+	ExecutionPartitionID(ctx context.Context) (partitionID string, ok bool)
 }
 
-// ExecutionOwnerKey is an opaque, immutable and comparable identity used for
-// async admission, quota and completion ownership. Product adapters
-// canonicalize their realm/issuer, platform tenant, customer organisation,
-// principal kind, stable subject and visibility boundary into one string;
-// Loom retains only its SHA-256 digest and cannot reinterpret product
-// identity fields.
-type ExecutionOwnerKey struct {
+// ExecutionPartitionKey is an opaque, immutable and comparable identity used
+// for async admission, quota and completion accounting. A product adapter
+// canonicalizes whatever identity fields its own authority model defines into
+// one string; loom retains only its SHA-256 digest, so loom cannot read or
+// reinterpret any field the adapter encoded.
+type ExecutionPartitionKey struct {
 	digest [sha256.Size]byte
 }
 
-// NewExecutionOwnerKey seals a product-canonical owner identity. The input is
-// authority material: callers must build it from server-established identity,
-// never a task body, trigger spec, correlation handle or other mutable claim.
-func NewExecutionOwnerKey(canonical string) (ExecutionOwnerKey, error) {
+// NewExecutionPartitionKey seals a product-canonical partition identity. The
+// input is authority material: callers must build it from server-established
+// identity, never a task body, trigger spec, correlation handle or other
+// caller-supplied claim.
+func NewExecutionPartitionKey(canonical string) (ExecutionPartitionKey, error) {
 	if strings.TrimSpace(canonical) == "" {
-		return ExecutionOwnerKey{}, fmt.Errorf("execution owner canonical identity is empty")
+		return ExecutionPartitionKey{}, fmt.Errorf("execution partition canonical identity is empty")
 	}
-	return ExecutionOwnerKey{digest: sha256.Sum256([]byte(canonical))}, nil
+	return ExecutionPartitionKey{digest: sha256.Sum256([]byte(canonical))}, nil
 }
 
 // Valid reports whether the key was constructed from a nonempty canonical
 // identity.
-func (k ExecutionOwnerKey) Valid() bool {
-	return k != ExecutionOwnerKey{}
+func (k ExecutionPartitionKey) Valid() bool {
+	return k != ExecutionPartitionKey{}
 }
 
 // Fingerprint returns the non-reversible digest used for diagnostics and
 // durable map keys. It does not reveal the product's canonical identity.
-func (k ExecutionOwnerKey) Fingerprint() string {
+func (k ExecutionPartitionKey) Fingerprint() string {
 	if !k.Valid() {
 		return ""
 	}
@@ -118,7 +118,7 @@ func (k ExecutionOwnerKey) Fingerprint() string {
 }
 
 // ExecutionPrincipal is the product-owned authority retained by an
-// asynchronous admission. OwnerKey is immutable identity; AuthorizeExecution
+// asynchronous admission. PartitionKey is immutable identity; AuthorizeExecution
 // must re-establish product-private context and re-check any current,
 // revocable policy before execution. The returned release function holds that
 // exact authorization generation through the caller's complete dispatch
@@ -126,7 +126,7 @@ func (k ExecutionOwnerKey) Fingerprint() string {
 // authorization. Loom never derives identity or authority from task payload
 // fields.
 type ExecutionPrincipal interface {
-	OwnerKey() ExecutionOwnerKey
+	PartitionKey() ExecutionPartitionKey
 	AuthorizeExecution(
 		ctx context.Context,
 	) (authorized context.Context, release func(), err error)
