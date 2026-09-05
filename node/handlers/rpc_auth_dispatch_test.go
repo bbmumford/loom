@@ -16,7 +16,7 @@ import (
 
 type resolvedRPCProbe struct {
 	name  string
-	scope TenantScope
+	scope Scope
 	ran   atomic.Int32
 }
 
@@ -25,13 +25,13 @@ func (*resolvedRPCProbe) Role() string               { return "resolved-rpc-test
 func (*resolvedRPCProbe) RequiresAuth() bool         { return true }
 func (*resolvedRPCProbe) AllowedAuthTypes() []string { return []string{"service"} }
 func (*resolvedRPCProbe) Scopes() []string           { return []string{"rpc.execute"} }
-func (h *resolvedRPCProbe) Scope() TenantScope {
+func (h *resolvedRPCProbe) Scope() Scope {
 	if h.scope == "" {
-		return TenantScopeNone
+		return ScopeNone
 	}
 	return h.scope
 }
-func (*resolvedRPCProbe) AllowedTenants() []string { return nil }
+func (*resolvedRPCProbe) AllowedPartitions() []string { return nil }
 func (h *resolvedRPCProbe) ExecuteRPC(context.Context, *RPCRequest) (*RPCResponse, error) {
 	h.ran.Add(1)
 	return &RPCResponse{Success: true}, nil
@@ -102,7 +102,7 @@ func TestResolvedRPCWithAuthPinsExactRegistrationAcrossReplacement(t *testing.T)
 
 func TestAuthenticatedRPCScopeIgnoresRequestIdentityHints(t *testing.T) {
 	registry := newScopedRegistry()
-	handler := &resolvedRPCProbe{name: "rpc.org", scope: TenantScopeOrg}
+	handler := &resolvedRPCProbe{name: "rpc.org", scope: ScopeOrg}
 	var events []string
 	registry.Use(&taskDispatchMiddleware{name: "scope-mw", events: &events})
 	if err := registry.RegisterRPC(handler); err != nil {

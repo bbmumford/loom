@@ -21,12 +21,12 @@ import (
 // customer-org principal. loom no longer contains presence semantics — the
 // receive path reconstructs the opaque identity and this policy judges it.
 func customerScopePolicy() tenantScope.PresencePolicyFunc {
-	return func(declared handlers.TenantScope, id tenantScope.AuthenticatedIdentity) (bool, string) {
+	return func(declared handlers.Scope, id tenantScope.AuthenticatedIdentity) (bool, string) {
 		tenant := id.Scope(tenantScope.AxisTransportPinned)
 		switch declared {
-		case handlers.TenantScopeNone:
+		case handlers.ScopeNone:
 			return true, ""
-		case handlers.TenantScopeOrg:
+		case handlers.ScopeOrg:
 			if tenant == "" {
 				return false, "authenticated platform tenant context required"
 			}
@@ -53,10 +53,10 @@ func (h *customerPrincipalProbe) Role() string               { return "orbtr.tes
 func (h *customerPrincipalProbe) RequiresAuth() bool         { return false }
 func (h *customerPrincipalProbe) AllowedAuthTypes() []string { return nil }
 func (h *customerPrincipalProbe) Scopes() []string           { return nil }
-func (h *customerPrincipalProbe) Scope() handlers.TenantScope {
-	return handlers.TenantScopeOrg
+func (h *customerPrincipalProbe) Scope() handlers.Scope {
+	return handlers.ScopeOrg
 }
-func (h *customerPrincipalProbe) AllowedTenants() []string { return nil }
+func (h *customerPrincipalProbe) AllowedPartitions() []string { return nil }
 func (h *customerPrincipalProbe) ExecuteRPC(
 	ctx context.Context,
 	_ *handlers.RPCRequest,
@@ -282,7 +282,7 @@ func TestRPCServerForwardingPreservesTypedPrincipal(t *testing.T) {
 	}
 }
 
-// platformOnlyProbe is a platform-tier-scoped handler (TenantScopeTenant): the
+// platformOnlyProbe is a platform-tier-scoped handler (ScopeTenant): the
 // presence policy admits it only when the platform axis is present. It counts
 // invocations so a test can assert it was NOT reached.
 type platformOnlyProbe struct{ calls int32 }
@@ -292,8 +292,8 @@ func (h *platformOnlyProbe) Role() string                { return "orbtr.test" }
 func (h *platformOnlyProbe) RequiresAuth() bool          { return false }
 func (h *platformOnlyProbe) AllowedAuthTypes() []string  { return nil }
 func (h *platformOnlyProbe) Scopes() []string            { return nil }
-func (h *platformOnlyProbe) Scope() handlers.TenantScope { return handlers.TenantScopeTenant }
-func (h *platformOnlyProbe) AllowedTenants() []string    { return nil }
+func (h *platformOnlyProbe) Scope() handlers.Scope { return handlers.ScopeTenant }
+func (h *platformOnlyProbe) AllowedPartitions() []string    { return nil }
 func (h *platformOnlyProbe) ExecuteRPC(
 	ctx context.Context,
 	_ *handlers.RPCRequest,

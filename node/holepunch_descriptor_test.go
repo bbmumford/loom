@@ -21,7 +21,7 @@ import (
 // Covers the hole-punch RPC handler's AUTHORIZATION DESCRIPTOR and the
 // dial-path entry point:
 //
-//	Role · RequiresAuth · AllowedAuthTypes · Scopes · TenantScope · AllowedTenants  (:211-:216)
+//	Role · RequiresAuth · AllowedAuthTypes · Scopes · Scope · AllowedPartitions  (:211-:216)
 //	attemptHolePunch (:268)
 //
 // Censused per symbol, one level out, including interface satisfaction. These
@@ -144,11 +144,11 @@ func TestAnUnauthenticatedHandlerDeclaresNoUnenforceableRestrictions(t *testing.
 			"this into RequiredScopes and gossips it, so every peer reads a scope "+
 			"requirement this node never checks", got)
 	}
-	if got := h.AllowedTenants(); len(got) != 0 {
-		t.Errorf("AllowedTenants() = %v on a no-auth handler — an unenforceable "+
+	if got := h.AllowedPartitions(); len(got) != 0 {
+		t.Errorf("AllowedPartitions() = %v on a no-auth handler — an unenforceable "+
 			"tenant allowlist", got)
 	}
-	if got := h.Scope(); got != handlers.TenantScopeNone {
+	if got := h.Scope(); got != handlers.ScopeNone {
 		t.Errorf("Scope() = %q on a no-auth handler — tenant scoping cannot "+
 			"be applied without an authenticated principal to scope", got)
 	}

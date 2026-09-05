@@ -22,7 +22,7 @@ const probeTenant = "orbtr"
 func TestSpellingProbe_MeshShapedArrivalIsDenied(t *testing.T) {
 	r := newScopedRegistry()
 
-	for _, scope := range []TenantScope{TenantScopeTenant, TenantScopeOrg, TenantScopeProfile} {
+	for _, scope := range []Scope{ScopeTenant, ScopeOrg, ScopeProfile} {
 		h := &stubMeta{name: "probe.meshArrival", scope: scope}
 		err := r.validateScope(ctxWithRPC(map[string]interface{}{
 			"tenantId": probeTenant, // CAMEL — what the wire actually stamps
@@ -49,7 +49,7 @@ func TestSpellingProbe_MeshShapedArrivalIsDenied(t *testing.T) {
 func TestSpellingProbe_ReaderShapedArrivalIsDenied(t *testing.T) {
 	r := newScopedRegistry()
 
-	for _, scope := range []TenantScope{TenantScopeTenant, TenantScopeOrg, TenantScopeProfile} {
+	for _, scope := range []Scope{ScopeTenant, ScopeOrg, ScopeProfile} {
 		h := &stubMeta{name: "probe.readerShape", scope: scope}
 		err := r.validateScope(ctxWithRPC(map[string]interface{}{
 			"tenant_id": probeTenant, // SNAKE — what the reader looks up
@@ -65,7 +65,7 @@ func TestSpellingProbe_ReaderShapedArrivalIsDenied(t *testing.T) {
 // admits the exact same platform tenant.
 func TestSpellingProbe_TypedIdentityIsTheOnlyAdmissionPath(t *testing.T) {
 	r := newScopedRegistry()
-	h := &stubMeta{name: "probe.control", scope: TenantScopeTenant}
+	h := &stubMeta{name: "probe.control", scope: ScopeTenant}
 
 	camelErr := r.validateScope(ctxWithRPC(map[string]interface{}{"tenantId": probeTenant}), h)
 	snakeErr := r.validateScope(ctxWithRPC(map[string]interface{}{"tenant_id": probeTenant}), h)

@@ -1019,8 +1019,8 @@ func (h *PingRPCHandler) Role() string                { return "system" }
 func (h *PingRPCHandler) RequiresAuth() bool          { return false }
 func (h *PingRPCHandler) AllowedAuthTypes() []string  { return nil }
 func (h *PingRPCHandler) Scopes() []string            { return nil }
-func (h *PingRPCHandler) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *PingRPCHandler) AllowedTenants() []string    { return nil }
+func (h *PingRPCHandler) Scope() handlers.Scope { return handlers.ScopeNone }
+func (h *PingRPCHandler) AllowedPartitions() []string    { return nil }
 
 func (h *PingRPCHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	type PingRequest struct {
@@ -1120,8 +1120,8 @@ func (h *StatusRPCHandler) Role() string                { return "system" }
 func (h *StatusRPCHandler) RequiresAuth() bool          { return false }
 func (h *StatusRPCHandler) AllowedAuthTypes() []string  { return nil }
 func (h *StatusRPCHandler) Scopes() []string            { return nil }
-func (h *StatusRPCHandler) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *StatusRPCHandler) AllowedTenants() []string    { return nil }
+func (h *StatusRPCHandler) Scope() handlers.Scope { return handlers.ScopeNone }
+func (h *StatusRPCHandler) AllowedPartitions() []string    { return nil }
 
 func (h *StatusRPCHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	// The four original fields keep their names and meanings; everything new is

@@ -14,15 +14,15 @@ import (
 )
 
 func TestTenantScopeHasInvalidZeroAndExplicitNone(t *testing.T) {
-	var unset TenantScope
+	var unset ScopeTag
 	if unset == ScopeNone {
-		t.Fatalf("zero TenantScope and ScopeNone are the same value %q; omission must differ from deliberate public opt-out", unset)
+		t.Fatalf("zero ScopeTag and ScopeNone are the same value %q; omission must differ from deliberate public opt-out", unset)
 	}
 	if ScopeNone == "" {
 		t.Fatal("ScopeNone is the empty string; the zero value is still permissive")
 	}
-	// The caller-facing alias is TenantScope; its canonical underlying defined
-	// type is scope.ScopeTag. What matters is that it is a DEFINED type (not a
+	// The caller-facing type is ScopeTag; its canonical underlying defined
+	// type is scope.Scope. What matters is that it is a DEFINED type (not a
 	// bare string), so an arbitrary string is not assignable as a scope.
 	typ := reflect.TypeOf(ScopeNone)
 	if typ.Name() != "ScopeTag" {
@@ -42,7 +42,7 @@ func TestTenantScopeHasInvalidZeroAndExplicitNone(t *testing.T) {
 func TestRegistryRejectsSentinelScopeBeforeMutation(t *testing.T) {
 	cases := []struct {
 		name  string
-		scope TenantScope
+		scope ScopeTag
 	}{
 		{name: "zero"},
 		{name: "unknown", scope: ScopeUnknown},
@@ -84,7 +84,7 @@ func TestRegistryAcceptsOpaqueConsumerAxis(t *testing.T) {
 		Namespace: "test",
 		Domain:    "scope",
 		Operation: "OpaqueAxis",
-		Scope:     TenantScope("partition"),
+		Scope:     ScopeTag("partition"),
 	}
 	if err := reg.Register(h); err != nil {
 		t.Fatalf("Register opaque consumer axis: %v", err)
@@ -93,7 +93,7 @@ func TestRegistryAcceptsOpaqueConsumerAxis(t *testing.T) {
 		t.Fatalf("Count = %d, want 1", got)
 	}
 	stored, ok := reg.Get(h.FQN())
-	if !ok || stored.Scope != TenantScope("partition") {
+	if !ok || stored.Scope != ScopeTag("partition") {
 		t.Fatalf("stored opaque axis = (%+v, %v)", stored, ok)
 	}
 }
@@ -138,7 +138,7 @@ func TestRegistryExportPreservesExplicitTenantScopeNone(t *testing.T) {
 	if !ok {
 		t.Fatalf("exported handler %q missing from target registry", h.FQN())
 	}
-	if stored.Scope() != handlers.TenantScopeNone {
-		t.Fatalf("exported scope = %q, want explicit TenantScopeNone", stored.Scope())
+	if stored.Scope() != handlers.ScopeNone {
+		t.Fatalf("exported scope = %q, want explicit ScopeNone", stored.Scope())
 	}
 }

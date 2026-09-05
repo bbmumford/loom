@@ -184,7 +184,7 @@ const defaultProbeTimeout = 10 * time.Second
 const bidiProbeTimeout = 3 * time.Second
 
 // SetPlatformTenant sets the platform tenant ID that is propagated in every
-// outgoing RPC context map. This ensures HSTLES handlers with TenantScope
+// outgoing RPC context map. This ensures HSTLES handlers with Scope
 // enforcement accept the call and scope it to the correct platform tenant.
 //
 // The platform tenant is the HSTLES-level app identity (e.g., "orbtr"),
@@ -862,7 +862,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 
 // buildRPCRequest creates an RPCRequest with deadline propagation and unique ID.
 // platformTenant is injected as "tenantId" in the RPC context map so receiving
-// handlers can enforce TenantScope (e.g., HSTLES identity handlers require tenant context).
+// handlers can enforce Scope (e.g., HSTLES identity handlers require tenant context).
 // gradeTimeout overrides the default if positive (from session grade).
 func buildRPCRequest(role, method string, payload []byte, remaining time.Duration, platformTenant string, gradeTimeout ...time.Duration) *pb.RPCRequest {
 	return buildRPCRequestCtx(nil, role, method, payload, remaining, platformTenant, gradeTimeout...)

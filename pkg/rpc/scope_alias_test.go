@@ -13,7 +13,7 @@ import (
 )
 
 // TestScopeAlias_HandlersEqualsRPC asserts that every rpc.Scope* constant
-// is byte-equal to its handlers.TenantScope* counterpart. Finding rev-069
+// is byte-equal to its handlers.Scope* counterpart. Finding rev-069
 // collapsed the two enums to a single canonical declaration in rpc/scope —
 // this test is a regression barrier that fails loudly if anyone
 // re-introduces a divergent literal in either package.
@@ -24,28 +24,28 @@ import (
 func TestScopeAlias_HandlersEqualsRPC(t *testing.T) {
 	cases := []struct {
 		name string
-		rpc  TenantScope
-		hnd  handlers.TenantScope
+		rpc  ScopeTag
+		hnd  handlers.Scope
 	}{
-		{"None", ScopeNone, handlers.TenantScopeNone},
-		{"Platform", ScopePlatform, handlers.TenantScopePlatform},
-		{"Tenant", ScopeTenant, handlers.TenantScopeTenant},
-		{"Org", ScopeOrg, handlers.TenantScopeOrg},
-		{"User", ScopeUser, handlers.TenantScopeUser},
-		{"Profile", ScopeProfile, handlers.TenantScopeProfile},
-		{"Unknown", ScopeUnknown, handlers.TenantScopeUnknown},
+		{"None", ScopeNone, handlers.ScopeNone},
+		{"Platform", ScopePlatform, handlers.ScopePlatform},
+		{"Tenant", ScopeTenant, handlers.ScopeTenant},
+		{"Org", ScopeOrg, handlers.ScopeOrg},
+		{"User", ScopeUser, handlers.ScopeUser},
+		{"Profile", ScopeProfile, handlers.ScopeProfile},
+		{"Unknown", ScopeUnknown, handlers.ScopeUnknown},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			if string(c.rpc) != string(c.hnd) {
-				t.Fatalf("Scope%s drift: rpc=%q handlers.TenantScope%s=%q — both must forward the same scope subpackage constant",
+				t.Fatalf("Scope%s drift: rpc=%q handlers.Scope%s=%q — both must forward the same scope subpackage constant",
 					c.name, c.rpc, c.name, c.hnd)
 			}
 		})
 	}
 }
 
-// TestScopeAlias_TypeIdentity asserts that rpc.TenantScope, handlers.TenantScope,
+// TestScopeAlias_TypeIdentity asserts that rpc.ScopeTag, handlers.Scope,
 // and scope.ScopeTag are the SAME type identity — not merely compatible
 // via structural string aliasing. If someone reverts one of them to a
 // standalone type, the assignment round-trip below breaks at compile time.
@@ -53,8 +53,8 @@ func TestScopeAlias_HandlersEqualsRPC(t *testing.T) {
 func TestScopeAlias_TypeIdentity(t *testing.T) {
 	// Round-trip each canonical value through both aliases; if the
 	// aliases diverge, the assignments fail to compile.
-	var s TenantScope = handlers.TenantScopeProfile
-	var h handlers.TenantScope = ScopeProfile
+	var s ScopeTag = handlers.ScopeProfile
+	var h handlers.Scope = ScopeProfile
 	var c scope.ScopeTag = ScopeProfile
 	if s != h || h != c || c != ScopeProfile {
 		t.Fatalf("Profile scope failed identity round-trip: rpc=%q handlers=%q scope=%q", s, h, c)

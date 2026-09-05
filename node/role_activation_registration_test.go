@@ -42,7 +42,7 @@ func (a *registrationScopeActivator) Activate(
 			&rpcOnlyHandler{
 				name:  a.owned,
 				role:  a.role,
-				scope: handlers.TenantScopeNone,
+				scope: handlers.ScopeNone,
 			},
 		); err != nil {
 			return err
@@ -100,7 +100,7 @@ func TestRoleActivationDoesNotCaptureUnrelatedTemporalRegistration(t *testing.T)
 	unrelated := &rpcOnlyHandler{
 		name:  unrelatedName,
 		role:  "auth",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 	}
 	if err := rt.Registry().RegisterRPC(unrelated); err != nil {
 		t.Fatalf("unrelated global RegisterRPC: %v", err)
@@ -149,7 +149,7 @@ func TestActiveRoleScopeOwnsLateRegistrationAndRejectsItAfterSeal(t *testing.T) 
 		&rpcOnlyHandler{
 			name:  lateName,
 			role:  "auth",
-			scope: handlers.TenantScopeNone,
+			scope: handlers.ScopeNone,
 		},
 	); err != nil {
 		t.Fatalf("late scoped registration: %v", err)
@@ -166,7 +166,7 @@ func TestActiveRoleScopeOwnsLateRegistrationAndRejectsItAfterSeal(t *testing.T) 
 		&rpcOnlyHandler{
 			name:  "orbtr.io.auth.AfterSeal",
 			role:  "auth",
-			scope: handlers.TenantScopeNone,
+			scope: handlers.ScopeNone,
 		},
 	); err == nil {
 		t.Fatal("sealed activation scope accepted a late registration")
@@ -203,7 +203,7 @@ func TestRoleTeardownCannotRemoveSameNameReplacement(t *testing.T) {
 	replacement := &rpcOnlyHandler{
 		name:  name,
 		role:  "auth",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 	}
 	if err := rt.Registry().RegisterRPC(replacement); err != nil {
 		t.Fatalf("register same-name replacement: %v", err)
@@ -232,7 +232,7 @@ func TestRegistrationScopeRejectsWrongRoleWithoutMutation(t *testing.T) {
 		&rpcOnlyHandler{
 			name:  "orbtr.io.billing.WrongRole",
 			role:  "billing",
-			scope: handlers.TenantScopeNone,
+			scope: handlers.ScopeNone,
 		},
 	); err == nil {
 		t.Fatal("auth registration scope admitted a billing handler")

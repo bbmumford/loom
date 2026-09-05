@@ -25,7 +25,7 @@ import (
 
 type composeTaskProbe struct {
 	name         string
-	scope        handlers.TenantScope
+	scope        handlers.Scope
 	requiresAuth bool
 	ran          chan context.Context
 	run          func(context.Context, *handlers.Task) (*handlers.TaskResult, error)
@@ -36,8 +36,8 @@ func (h *composeTaskProbe) Role() string                { return "compose-test" 
 func (h *composeTaskProbe) RequiresAuth() bool          { return h.requiresAuth }
 func (h *composeTaskProbe) AllowedAuthTypes() []string  { return nil }
 func (h *composeTaskProbe) Scopes() []string            { return nil }
-func (h *composeTaskProbe) Scope() handlers.TenantScope { return h.scope }
-func (h *composeTaskProbe) AllowedTenants() []string    { return nil }
+func (h *composeTaskProbe) Scope() handlers.Scope { return h.scope }
+func (h *composeTaskProbe) AllowedPartitions() []string    { return nil }
 
 func (h *composeTaskProbe) ExecuteTask(ctx context.Context, task *handlers.Task) (*handlers.TaskResult, error) {
 	h.ran <- ctx
@@ -65,10 +65,10 @@ func (h *composeRPCProbe) Role() string               { return "compose-rpc-test
 func (h *composeRPCProbe) RequiresAuth() bool         { return h.requiresAuth }
 func (h *composeRPCProbe) AllowedAuthTypes() []string { return h.allowedAuthTypes }
 func (h *composeRPCProbe) Scopes() []string           { return h.scopes }
-func (h *composeRPCProbe) Scope() handlers.TenantScope {
-	return handlers.TenantScopeNone
+func (h *composeRPCProbe) Scope() handlers.Scope {
+	return handlers.ScopeNone
 }
-func (h *composeRPCProbe) AllowedTenants() []string { return nil }
+func (h *composeRPCProbe) AllowedPartitions() []string { return nil }
 func (h *composeRPCProbe) ExecuteRPC(
 	context.Context,
 	*handlers.RPCRequest,
@@ -309,7 +309,7 @@ func requireSingleObservedComposeCompletion(
 func TestComposeInvokeTaskUsesInjectedAuthValidator(t *testing.T) {
 	h := &composeTaskProbe{
 		name:         "compose.secure-task",
-		scope:        handlers.TenantScopeNone,
+		scope:        handlers.ScopeNone,
 		requiresAuth: true,
 		ran:          make(chan context.Context, 1),
 	}
@@ -446,12 +446,12 @@ func TestComposeInvokeSnapshotsAuthAndResolvedHandlerAtAdmission(t *testing.T) {
 	const handlerName = "compose.stable-task"
 	first := &composeTaskProbe{
 		name:  handlerName,
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 		ran:   make(chan context.Context, 1),
 	}
 	replacement := &composeTaskProbe{
 		name:  handlerName,
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 		ran:   make(chan context.Context, 1),
 	}
 	rt := composeRuntimeFixture(t, first)
@@ -523,7 +523,7 @@ func TestComposeInvokeSnapshotsAuthAndResolvedHandlerAtAdmission(t *testing.T) {
 func TestComposeInvokePublishesAndStoresFailedTaskCompletion(t *testing.T) {
 	h := &composeTaskProbe{
 		name:  "compose.failed-task",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 		ran:   make(chan context.Context, 1),
 		run: func(_ context.Context, _ *handlers.Task) (*handlers.TaskResult, error) {
 			return &handlers.TaskResult{
@@ -623,7 +623,7 @@ func TestComposeInvokeSnapshotsCompletionObserverAtAdmission(t *testing.T) {
 func TestComposeInvokeRecordsHandlerPanicBeforeObserverFailure(t *testing.T) {
 	h := &composeTaskProbe{
 		name:  "compose.panicking-task",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 		ran:   make(chan context.Context, 1),
 		run: func(context.Context, *handlers.Task) (*handlers.TaskResult, error) {
 			panic("handler exploded")
@@ -783,7 +783,7 @@ func TestComposeInvokeSnapshotsPayloadBeforeDeferredReturn(t *testing.T) {
 	received := make(chan []byte, 1)
 	h := &composeTaskProbe{
 		name:  "compose.stable-payload",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 		ran:   make(chan context.Context, 1),
 		run: func(_ context.Context, task *handlers.Task) (*handlers.TaskResult, error) {
 			<-release
@@ -865,12 +865,12 @@ func TestComposeInvokeTaskUsesHandlerResolvedBeforeAdmission(t *testing.T) {
 	const handlerName = "compose.stable-task"
 	first := &composeTaskProbe{
 		name:  handlerName,
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 		ran:   make(chan context.Context, 1),
 	}
 	replacement := &composeTaskProbe{
 		name:  handlerName,
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 		ran:   make(chan context.Context, 1),
 	}
 	rt := composeRuntimeFixture(t, first)
@@ -936,7 +936,7 @@ func TestComposeInvokeTaskUsesHandlerResolvedBeforeAdmission(t *testing.T) {
 func TestComposeInvokeTaskUsesRegistryTenantScopeGate(t *testing.T) {
 	h := &composeTaskProbe{
 		name:  "compose.tenant-task",
-		scope: handlers.TenantScopeTenant,
+		scope: handlers.ScopeTenant,
 		ran:   make(chan context.Context, 1),
 	}
 	rt := composeRuntimeFixture(t, h)
@@ -957,7 +957,7 @@ func TestComposeInvokeTaskUsesRegistryTenantScopeGate(t *testing.T) {
 func TestComposeInvokeTaskUsesIncomingContextAndRegistryMiddleware(t *testing.T) {
 	h := &composeTaskProbe{
 		name:  "compose.public-task",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 		ran:   make(chan context.Context, 1),
 	}
 	rt := composeRuntimeFixture(t, h)
@@ -1006,10 +1006,10 @@ func (*composeBlockingTaskProbe) Role() string               { return "compose-t
 func (*composeBlockingTaskProbe) RequiresAuth() bool         { return false }
 func (*composeBlockingTaskProbe) AllowedAuthTypes() []string { return nil }
 func (*composeBlockingTaskProbe) Scopes() []string           { return nil }
-func (*composeBlockingTaskProbe) Scope() handlers.TenantScope {
-	return handlers.TenantScopeNone
+func (*composeBlockingTaskProbe) Scope() handlers.Scope {
+	return handlers.ScopeNone
 }
-func (*composeBlockingTaskProbe) AllowedTenants() []string { return nil }
+func (*composeBlockingTaskProbe) AllowedPartitions() []string { return nil }
 func (h *composeBlockingTaskProbe) ExecuteTask(
 	ctx context.Context,
 	task *handlers.Task,
@@ -1115,7 +1115,7 @@ func TestComposeInvokeTaskPreservesCallerCancellation(t *testing.T) {
 func TestComposeInvokeTaskRejectsAfterRuntimeShutdown(t *testing.T) {
 	h := &composeTaskProbe{
 		name:  "compose.after-shutdown",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 		ran:   make(chan context.Context, 1),
 	}
 	rt := composeRuntimeFixture(t, h)
@@ -1148,10 +1148,10 @@ func (*composeMultiBlockingProbe) RequiresAuth() bool {
 }
 func (*composeMultiBlockingProbe) AllowedAuthTypes() []string { return nil }
 func (*composeMultiBlockingProbe) Scopes() []string           { return nil }
-func (*composeMultiBlockingProbe) Scope() handlers.TenantScope {
-	return handlers.TenantScopeNone
+func (*composeMultiBlockingProbe) Scope() handlers.Scope {
+	return handlers.ScopeNone
 }
-func (*composeMultiBlockingProbe) AllowedTenants() []string { return nil }
+func (*composeMultiBlockingProbe) AllowedPartitions() []string { return nil }
 func (h *composeMultiBlockingProbe) ExecuteTask(
 	ctx context.Context,
 	task *handlers.Task,
@@ -1173,7 +1173,7 @@ func (h *composeMultiBlockingProbe) ExecuteTask(
 func TestComposeInvokeRequiresOpaqueExecutionPrincipal(t *testing.T) {
 	h := &composeTaskProbe{
 		name:  "compose.owner-required",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 		ran:   make(chan context.Context, 1),
 	}
 	rt := composeRuntimeFixture(t, h)
@@ -1253,7 +1253,7 @@ func TestComposeInvokeReservesGlobalAndPerOwnerCapacityAtomically(t *testing.T) 
 func TestComposeCompletionLookupReauthorizesExactOwnerAndHidesExistence(t *testing.T) {
 	h := &composeTaskProbe{
 		name:  "compose.owner-completion",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 		ran:   make(chan context.Context, 2),
 	}
 	rt := composeRuntimeFixture(t, h)
@@ -1451,7 +1451,7 @@ func TestComposeTriggerFireRequiresProductResolutionAndCurrentPrincipal(t *testi
 	handlerRelease := make(chan struct{})
 	h := &composeTaskProbe{
 		name:  "compose.trigger-owned",
-		scope: handlers.TenantScopeNone,
+		scope: handlers.ScopeNone,
 		ran:   make(chan context.Context, 1),
 		run: func(_ context.Context, task *handlers.Task) (*handlers.TaskResult, error) {
 			<-handlerRelease
@@ -1551,7 +1551,7 @@ func TestComposeTriggerFireQueuesServicePolicyWriterUntilDeferredCompletion(
 			handlerRelease := make(chan struct{})
 			h := &composeTaskProbe{
 				name:  "compose.trigger-policy-writer." + writerKind,
-				scope: handlers.TenantScopeNone,
+				scope: handlers.ScopeNone,
 				ran:   make(chan context.Context, 1),
 				run: func(
 					_ context.Context,

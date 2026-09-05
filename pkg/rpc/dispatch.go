@@ -18,7 +18,7 @@ var ErrHandlerNotFound = errors.New("rpc: handler not found")
 var ErrProxyDispatchLocal = errors.New("rpc: proxy handler cannot dispatch locally")
 
 // Dispatch executes a handler from the registry against raw protobuf bytes.
-// Enforces TenantScope before invoking the handler; returns ErrScopeDenied
+// Enforces Scope before invoking the handler; returns ErrScopeDenied
 // (wrapped) when the call fails the handler's declared scope tier.
 //
 // This is the server-side dispatch path — used by the RPCServer adapter and

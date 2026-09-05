@@ -107,8 +107,8 @@ func (h *echoRPCHandler) Role() string                { return "test" }
 func (h *echoRPCHandler) RequiresAuth() bool          { return false }
 func (h *echoRPCHandler) AllowedAuthTypes() []string  { return nil }
 func (h *echoRPCHandler) Scopes() []string            { return nil }
-func (h *echoRPCHandler) Scope() handlers.TenantScope { return handlers.TenantScopeNone }
-func (h *echoRPCHandler) AllowedTenants() []string    { return nil }
+func (h *echoRPCHandler) Scope() handlers.Scope { return handlers.ScopeNone }
+func (h *echoRPCHandler) AllowedPartitions() []string    { return nil }
 
 func (h *echoRPCHandler) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	return &handlers.RPCResponse{
