@@ -102,7 +102,7 @@ func TestSwarmDirectoryProjectionAndViews(t *testing.T) {
 	}
 
 	members, _ := d.Members(ctx, testTenantID)
-	if len(members) != 1 || members[0].ServiceName != "auth-svc" || members[0].Tenant != "hstles" {
+	if len(members) != 1 || members[0].ServiceName != "auth-svc" || members[0].PartitionID != "hstles" {
 		t.Fatalf("members = %+v", members)
 	}
 	nodes, _ := d.NodesByRole(ctx, testTenantID, "auth")
@@ -211,7 +211,7 @@ func TestTrustPolicyChecks(t *testing.T) {
 	idEvil, pubEvil, _ := testIdentity(t)
 
 	p := NewPolicy(PolicyConfig{
-		Tenants:          []string{"hstles"},
+		Partitions:       []string{"hstles"},
 		Observers:        []ports.NodeID{idObs},
 		RoleEntitlements: map[string][]ports.NodeID{"auth": {idA}},
 	})

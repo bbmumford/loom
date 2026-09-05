@@ -29,8 +29,8 @@ import (
 type Policy struct {
 	mu sync.RWMutex
 
-	// tenants is the closed set of tenant IDs this mesh serves.
-	tenants map[string]bool
+	// partitions is the closed set of partition IDs this mesh serves.
+	partitions map[string]bool
 
 	// roleEntitlements[role] = set of NodeIDs entitled to hold/assume the
 	// role (and to receive its sealed secrets).
@@ -57,7 +57,7 @@ type Policy struct {
 // that dimension — construction is where openness is granted, never at
 // check time.
 type PolicyConfig struct {
-	Tenants          []string
+	Partitions       []string
 	Observers        []ports.NodeID
 	RoleEntitlements map[string][]ports.NodeID
 	// OpenPublishPrefixes lists topic prefixes ANY key-bound node may
@@ -70,15 +70,15 @@ type PolicyConfig struct {
 // NewPolicy builds the policy from configured trust material.
 func NewPolicy(cfg PolicyConfig) *Policy {
 	p := &Policy{
-		tenants:          map[string]bool{},
+		partitions:       map[string]bool{},
 		roleEntitlements: map[string]map[ports.NodeID]bool{},
 		observers:        map[ports.NodeID]bool{},
 		publishPrefixes:  map[string]map[ports.NodeID]bool{},
 		openPublish:      map[string]bool{},
 		revoked:          map[string]bool{},
 	}
-	for _, t := range cfg.Tenants {
-		p.tenants[t] = true
+	for _, t := range cfg.Partitions {
+		p.partitions[t] = true
 	}
 	for _, o := range cfg.Observers {
 		p.observers[o] = true
@@ -149,7 +149,7 @@ func (p *Policy) AuthorizePublish(_ context.Context, pr ports.Principal, topic p
 	if err := p.VerifyNodeKey(pr.NodeID, pr.PubKey); err != nil {
 		return err
 	}
-	if err := p.checkTenant(pr); err != nil {
+	if err := p.checkPartition(pr); err != nil {
 		return err
 	}
 	p.mu.RLock()
@@ -176,7 +176,7 @@ func (p *Policy) AuthorizeRead(_ context.Context, pr ports.Principal, topic port
 	if err := p.VerifyNodeKey(pr.NodeID, pr.PubKey); err != nil {
 		return err
 	}
-	if err := p.checkTenant(pr); err != nil {
+	if err := p.checkPartition(pr); err != nil {
 		return err
 	}
 	_ = topic
@@ -246,14 +246,14 @@ func canonicalNodeID(pub ed25519.PublicKey) (string, bool) {
 	return string(id), true
 }
 
-func (p *Policy) checkTenant(pr ports.Principal) error {
-	if pr.Tenant == "" {
-		return nil // tenantless fleet principals; tenant scoping applies when stamped
+func (p *Policy) checkPartition(pr ports.Principal) error {
+	if pr.PartitionID == "" {
+		return nil // an unstamped fleet principal; partition scoping applies once stamped
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	if !p.tenants[pr.Tenant] {
-		return fmt.Errorf("trust: unknown tenant %q", pr.Tenant)
+	if !p.partitions[pr.PartitionID] {
+		return fmt.Errorf("trust: unknown partition %q", pr.PartitionID)
 	}
 	return nil
 }

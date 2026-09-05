@@ -22,7 +22,7 @@ type Member struct {
 	// disagreed — LADDirectory sorted, SwarmDirectory returned producer
 	// order (#M-620 ④).
 	Roles          []string
-	Tenant         string
+	PartitionID    string
 	Region         string
 	LastSeenUnixMs int64
 	Tombstoned     bool

@@ -190,7 +190,7 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	seed := directory.BaselinePolicyConfig()
 	for _, tc := range rt.cfg.Partitions {
 		if tc.PartitionID != "" {
-			seed.Tenants = append(seed.Tenants, tc.PartitionID)
+			seed.Partitions = append(seed.Partitions, tc.PartitionID)
 		}
 	}
 	trustShadow, err := newTrustShadow(rt.Context(), rt.cfg.SwarmTrustMode,
