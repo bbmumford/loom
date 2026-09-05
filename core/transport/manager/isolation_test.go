@@ -81,7 +81,7 @@ func TestCrossTenantDialRejection(t *testing.T) {
 // resolves Tenant B's keys from the preamble, which won't match the attacker's
 // CRC32 fingerprint (derived from Tenant A's key).
 func TestPreambleSpoofingRejection(t *testing.T) {
-	// Create shared transport with two tenants.
+	// Create shared transport with two partitions.
 	_, sharedPriv, _ := ed25519.GenerateKey(rand.Reader)
 
 	st, err := NewSharedTransport(noise.NoiseTransportConfig{
@@ -141,11 +141,11 @@ func TestPreambleSpoofingRejection(t *testing.T) {
 }
 
 // TestInfrastructureServesAllTenants verifies that a shared transport listener
-// accepts handshakes from multiple tenants, each using their own PSK.
+// accepts handshakes from multiple partitions, each using their own PSK.
 // Each tenant uses a separate dialer transport with its own keypair (Noise
 // handshakes require different static keys on each side).
 func TestInfrastructureServesAllTenants(t *testing.T) {
-	// Server: shared transport that accepts multiple tenants
+	// Server: shared transport that accepts multiple partitions
 	_, serverPriv, _ := ed25519.GenerateKey(rand.Reader)
 	serverPub := serverPriv.Public().(ed25519.PublicKey)
 	serverNodeID, _ := aether.NewNodeID(serverPub)
@@ -247,7 +247,7 @@ func TestInfrastructureServesAllTenants(t *testing.T) {
 	case <-time.After(15 * time.Second):
 		t.Fatal("timeout waiting for server accepts")
 	}
-	t.Log("Infrastructure served both tenants successfully")
+	t.Log("Infrastructure served both partitions successfully")
 }
 
 // TestDedicatedTransportIsolation verifies that ORBTR's dedicated transport

@@ -205,7 +205,7 @@ func TestSharedTransport_KeyIsolation(t *testing.T) {
 	resolvedB, _ := st.ResolveKeys("beta")
 
 	if string(resolvedA[0]) == string(resolvedB[0]) {
-		t.Error("different tenants returned same key")
+		t.Error("different partitions returned same key")
 	}
 	if string(resolvedA[0]) != "psk-alpha" {
 		t.Errorf("alpha key = %q, want %q", resolvedA[0], "psk-alpha")
