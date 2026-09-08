@@ -302,8 +302,23 @@ type RPCServer struct {
 	localID        string
 	region         string
 	serviceName    string
-	activeHandlers int32          // atomic — concurrent handler goroutines
-	responseCache  *ResponseCache // dedup cache for parallel probes
+	activeHandlers int32 // atomic — concurrent handler goroutines
+
+	// sealedPrincipalBinds / wireIdentityBinds count which of the two identity
+	// paths in handleRequest each request took: the sealed path, where
+	// bindAuthenticatedPrincipal reconciles the pinned axis against the
+	// transport-established partition, or the wire path, which lifts userId and
+	// scopes out of req.Context and reconciles nothing.
+	//
+	// A request takes the wire path whenever it arrives without req.Principal,
+	// which includes a sender whose own principal mint failed — indistinguishable
+	// here from a sender that never had one. The counts are the only signal that
+	// distinguishes "nothing reaches the un-reconciled path" from "we never
+	// looked": a non-zero wire count on a deployment that believes all its
+	// callers are sealed is that belief being wrong. Read via PrincipalPathStats.
+	sealedPrincipalBinds int64          // atomic
+	wireIdentityBinds    int64          // atomic
+	responseCache        *ResponseCache // dedup cache for parallel probes
 
 	// authValidator stamps wire-envelope partition IDs onto the platform-
 	// canonical context key (convention (b) in handleRequest). Injected
@@ -405,6 +420,15 @@ func (s *RPCServer) DedupStats() (hits, misses int64) {
 		return s.responseCache.Stats()
 	}
 	return 0, 0
+}
+
+// PrincipalPathStats returns how many requests bound identity by the sealed
+// path versus the wire path. A rising wire count is the tell that callers are
+// reaching this node without a principal — either because they never mint one
+// or because their mint silently failed — and it is what makes that visible
+// before a scope gate starts trusting the result.
+func (s *RPCServer) PrincipalPathStats() (sealed, wire int64) {
+	return atomic.LoadInt64(&s.sealedPrincipalBinds), atomic.LoadInt64(&s.wireIdentityBinds)
 }
 
 // DispatchLatencyTopN returns up to n per-handler dispatch latency snapshots,
@@ -660,6 +684,7 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 			}
 		}
 		typedPrincipal = true
+		atomic.AddInt64(&s.sealedPrincipalBinds, 1)
 	}
 	// Propagate the e2e trace ID from the wire envelope to ctx so this
 	// node's handler logs, nested rpc.Call sites, and downstream-only
@@ -683,6 +708,7 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 			scopes := rpc.ParseScopes(req.Context["scopes"])
 			if uid := req.Context["userId"]; uid != "" || len(scopes) > 0 {
 				ctx = ss.WithWireIdentity(ctx, uid, scopes)
+				atomic.AddInt64(&s.wireIdentityBinds, 1)
 			}
 		}
 	}
