@@ -61,6 +61,26 @@ type SecureHandler interface {
 // lose the tenant and multi-tenant authz/data-scoping breaks with no
 // compile-time signal. The loom-local default (internal/securityctx) is
 // fail-closed and safe ONLY in builds with no HSTLES domain handlers.
+// EXTENSIONS, AND WHAT WRAPPING ONE COSTS. Five optional interfaces in this
+// package are type-asserted on the value supplied here, and a failed assertion
+// SKIPS the behaviour rather than erroring: ScopeStamper and
+// AuthenticatedPrincipalStamper (the RPC receive path, lifting the wire
+// identity and the reconstructed principal onto ctx), TransportAxisPin (the
+// axis reconciled against the transport-established partition before a
+// principal reaches dispatch), and ExecutionPrincipalReader with
+// PartitionPrincipalReader (the task executor).
+//
+// A DECORATOR MUST THEREFORE RE-EXPOSE EVERY EXTENSION ITS INNER VALIDATOR
+// IMPLEMENTS. Wrapping a validator to add one behaviour drops the others
+// silently — the assertion fails, the feature stops, and there is no error and
+// no compile-time signal. Declare `var _ <Interface> = <decorator>{}` for each
+// forwarded extension so a dropped method fails the build instead.
+//
+// TransportAxisPin is the one a wrapper must not answer on its own behalf:
+// naming an axis where the inner validator names none converts a receive path
+// that refused every mesh principal into one that admits those whose axis
+// matches the transport. Delegate that answer to the inner validator, or
+// return "" — both preserve what the inner validator alone would have admitted.
 type AuthValidator interface {
 	// ValidateExecutionAuth gates handler execution on the task-executor
 	// path (fail closed: unknown auth state denies RequiresAuth handlers).
