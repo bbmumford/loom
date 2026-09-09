@@ -280,19 +280,11 @@ func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 		want string
 	}{
 		{"None", ScopeNone, "none"},
-		{"Platform", ScopePlatform, "platform"},
-		{"Tenant", ScopeTenant, "tenant"},
-		{"Org", ScopeOrg, "org"},
-		{"User", ScopeUser, "user"},
-		{"Profile", ScopeProfile, "profile"},
 		{"Unknown", ScopeUnknown, "unknown"},
 
-		// The rows above are the deprecated spellings, which keep their own
-		// distinct tokens for as long as they exist: giving one the value of
-		// its replacement would turn two arms of a consumer's switch into a
-		// duplicate case. The rows below are the replacements. This table is
-		// what proves the two sets stayed apart, and the rows above are the
-		// ones to delete when the deprecated constants go.
+		// One row per declarable tag. A tag whose token drifts from this table
+		// stops matching what producers already stamped, so the drift shows up
+		// here rather than as a denial nobody can explain.
 		{"Allowlisted", ScopeAllowlisted, "allowlisted"},
 		{"Partition", ScopePartition, "partition"},
 		{"WithinPartition", ScopeWithinPartition, "within_partition"},

@@ -52,12 +52,6 @@ const (
 	ScopeWithinPartition = scope.ScopeWithinPartition // pinned + within-transport axes
 	ScopeSubject         = scope.ScopeSubject         // pinned axis + authenticated subject
 
-	// Deprecated aliases, re-exported so a consumer migrates without breaking.
-	ScopePlatform = scope.ScopePlatform // Deprecated: use ScopeAllowlisted
-	ScopeTenant   = scope.ScopeTenant   // Deprecated: use ScopePartition
-	ScopeOrg      = scope.ScopeOrg      // Deprecated: use ScopeWithinPartition
-	ScopeUser     = scope.ScopeUser     // Deprecated: use ScopeSubject
-	ScopeProfile  = scope.ScopeProfile  // Deprecated: use ScopePartition
 	// ScopeUnknown is the fail-closed sentinel installed by mapProtoScope
 	// when it sees a proto enum it does not recognise (including an explicit
 	// TENANT_SCOPE_UNSPECIFIED in a .proto file). It is not a declarable tag;

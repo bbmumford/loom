@@ -289,8 +289,8 @@ func (b *Bridge) executeLocal(r *http.Request, h *rpc.Handler, req proto.Message
 // (typically one that defers the axis-bearing tags to the destination while
 // still validating the wire-stamped presence it can see); with a nil policy
 // EnforceScope denies every non-None handler rather than silently forwarding an
-// unevaluated call — the fail-OPEN carve-out for the old ScopePlatform/nil-set
-// case is deliberately gone. Webhook-signature verification is still deferred
+// unevaluated call — the fail-OPEN carve-out for the allowlisted/nil-set case
+// is deliberately gone. Webhook-signature verification is still deferred
 // to the destination (the gateway typically doesn't carry the secret env var;
 // running it here would fail-closed on every signed event passing through a
 // thin gateway), which always runs Registry.Dispatch and always enforces.

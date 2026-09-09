@@ -68,48 +68,6 @@ func TestNewScopePresencePolicy_EmptyAllowlistFailsClosedPlatform(t *testing.T) 
 	}
 }
 
-// TestScopeTenantAndScopePartitionAreIndistinguishable pins the property a
-// consumer's rename depends on: ScopePartition is the neutral name for what
-// ScopePartition already required, so swapping a handler's declaration from one to
-// the other must change nothing this policy decides.
-//
-// The tier table above exercises each tag against a single identity, which
-// passes even if the two are given separate arms that agree only there. This
-// compares them across every identity shape and asserts the REASON as well, so a
-// split that changes either the verdict or the diagnosis is caught. Without it a
-// rename across the consumer fleet could alter dispatch admission with nothing
-// failing.
-func TestScopeTenantAndScopePartitionAreIndistinguishable(t *testing.T) {
-	p := NewScopePresencePolicy("plat")
-
-	ids := []struct {
-		name string
-		id   AuthenticatedIdentity
-	}{
-		{"empty", NewScopeIdentity("", "", "")},
-		{"pinned only", NewScopeIdentity("t1", "", "")},
-		{"pinned+within", NewScopeIdentity("t1", "org1", "")},
-		{"pinned+subject", NewScopeIdentity("t1", "", "usr1")},
-		{"full", NewScopeIdentity("t1", "org1", "usr1")},
-		{"allowlisted platform", NewScopeIdentity("plat", "", "")},
-		{"within only, no pinned", NewScopeIdentity("", "org1", "")},
-		{"subject only, no pinned", NewScopeIdentity("", "", "usr1")},
-	}
-
-	for _, c := range ids {
-		tenantOK, tenantWhy := p.CheckPresence(ScopePartition, c.id)
-		partOK, partWhy := p.CheckPresence(ScopePartition, c.id)
-		if tenantOK != partOK {
-			t.Errorf("%s: ScopePartition=%v but ScopePartition=%v — the neutral name is no longer a synonym, so renaming a handler changes what it admits",
-				c.name, tenantOK, partOK)
-		}
-		if tenantWhy != partWhy {
-			t.Errorf("%s: denial reasons diverged — ScopePartition %q vs ScopePartition %q",
-				c.name, tenantWhy, partWhy)
-		}
-	}
-}
-
 // TestScopePresenceTurnsOnAxisPresenceNotOnALevelOrder records what the policy
 // actually keys on, because the tag NAMES read as a hierarchy and the mechanism
 // is not one: each tag names which axes must be PRESENT, and no tag subsumes
