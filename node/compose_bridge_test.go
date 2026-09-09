@@ -158,7 +158,7 @@ func (v *composeAuthValidator) ValidateExecutionAuth(ctx context.Context, h port
 	return nil
 }
 
-func (v *composeAuthValidator) WithTenantID(ctx context.Context, _ string) context.Context {
+func (v *composeAuthValidator) WithPartitionID(ctx context.Context, _ string) context.Context {
 	return ctx
 }
 
@@ -187,7 +187,7 @@ func (*composeAuthWithoutPrincipalReader) ValidateExecutionAuth(
 	return nil
 }
 
-func (*composeAuthWithoutPrincipalReader) WithTenantID(
+func (*composeAuthWithoutPrincipalReader) WithPartitionID(
 	ctx context.Context,
 	_ string,
 ) context.Context {
@@ -212,7 +212,7 @@ func (v *composeRPCAuthProbe) ValidateExecutionAuth(
 	return v.err
 }
 
-func (v *composeRPCAuthProbe) WithTenantID(
+func (v *composeRPCAuthProbe) WithPartitionID(
 	ctx context.Context,
 	_ string,
 ) context.Context {

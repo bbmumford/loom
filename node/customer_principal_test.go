@@ -74,7 +74,7 @@ func (customerPrincipalValidator) ValidateExecutionAuth(
 ) error {
 	return nil
 }
-func (customerPrincipalValidator) WithTenantID(ctx context.Context, _ string) context.Context {
+func (customerPrincipalValidator) WithPartitionID(ctx context.Context, _ string) context.Context {
 	return ctx
 }
 func (customerPrincipalValidator) WithAuthenticatedPrincipal(
@@ -302,16 +302,16 @@ func (h *platformOnlyProbe) ExecuteRPC(
 	return &handlers.RPCResponse{Success: true}, nil
 }
 
-// stampingTenantValidator's WithTenantID ACTUALLY stamps platform authority (unlike
+// stampingTenantValidator's WithPartitionID ACTUALLY stamps platform authority (unlike
 // customerPrincipalValidator's no-op). It exists so this test can discriminate the
 // removed req.Context["tenantId"] fallback: only a validator that stamps on
-// WithTenantID makes the fallback's authority-minting observable.
+// WithPartitionID makes the fallback's authority-minting observable.
 type stampingTenantValidator struct{}
 
 func (stampingTenantValidator) ValidateExecutionAuth(context.Context, ports.SecureHandler) error {
 	return nil
 }
-func (stampingTenantValidator) WithTenantID(ctx context.Context, partitionID string) context.Context {
+func (stampingTenantValidator) WithPartitionID(ctx context.Context, partitionID string) context.Context {
 	return rpcscope.WithAuthenticatedScope(ctx, rpcscope.AxisTransportPinned, partitionID)
 }
 func (stampingTenantValidator) WithAuthenticatedPrincipal(
@@ -325,11 +325,11 @@ func (stampingTenantValidator) WithAuthenticatedPrincipal(
 // discriminating proof that node/rpc.go does NOT mint platform authority from the
 // mutable req.Context["tenantId"] map. The request carries tenantId ONLY in that map
 // (no authenticated transport, no typed Principal), and the validator would stamp
-// platform authority if WithTenantID were called. With the fallback removed, nothing
-// calls WithTenantID, so the platform axis stays empty and the platform-scoped
+// platform authority if WithPartitionID were called. With the fallback removed, nothing
+// calls WithPartitionID, so the platform axis stays empty and the platform-scoped
 // handler is DENIED (calls==0). Restoring the deleted
-// `else if tid := req.Context["tenantId"]; tid != "" { WithTenantID }` branch turns
-// this RED: WithTenantID stamps the platform partition and the handler is invoked.
+// `else if tid := req.Context["tenantId"]; tid != "" { WithPartitionID }` branch turns
+// this RED: WithPartitionID stamps the platform partition and the handler is invoked.
 func TestRPCServerRejectsWireTenantWithoutAuthenticatedTransport(t *testing.T) {
 	registry := handlers.NewHandlerRegistry()
 	registry.SetPresencePolicy(customerScopePolicy())

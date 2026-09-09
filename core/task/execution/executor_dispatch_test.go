@@ -128,14 +128,14 @@ func (a *executorAuthProbe) ValidateExecutionAuth(ctx context.Context, _ ports.S
 	return nil
 }
 
-func (a *executorAuthProbe) WithTenantID(ctx context.Context, tenantID string) context.Context {
+func (a *executorAuthProbe) WithPartitionID(ctx context.Context, partitionID string) context.Context {
 	a.stamped++
-	return context.WithValue(ctx, executorTenantKey{}, tenantID)
+	return context.WithValue(ctx, executorTenantKey{}, partitionID)
 }
 
 func (a *executorAuthProbe) ExecutionPartitionID(ctx context.Context) (string, bool) {
-	tenantID, ok := ctx.Value(executorTenantKey{}).(string)
-	return tenantID, ok && tenantID != ""
+	partitionID, ok := ctx.Value(executorTenantKey{}).(string)
+	return partitionID, ok && partitionID != ""
 }
 
 func (a *executorAuthProbe) ExecutionPrincipal(ctx context.Context) (ports.ExecutionPrincipal, bool) {
@@ -263,7 +263,7 @@ func TestExecutorUsesCanonicalTaskDispatchPipeline(t *testing.T) {
 		t.Fatalf("auth validations = %d, want 1", auth.validated)
 	}
 	if auth.stamped != 0 {
-		t.Fatalf("WithTenantID calls = %d, want 0: task body must not mint authority", auth.stamped)
+		t.Fatalf("WithPartitionID calls = %d, want 0: task body must not mint authority", auth.stamped)
 	}
 	if want := []string{"before", "handler", "after"}; !reflect.DeepEqual(events, want) {
 		t.Fatalf("events = %v, want %v", events, want)
@@ -355,12 +355,12 @@ func (a *executorAuthWithoutTenantReader) ValidateExecutionAuth(
 	return nil
 }
 
-func (a *executorAuthWithoutTenantReader) WithTenantID(
+func (a *executorAuthWithoutTenantReader) WithPartitionID(
 	ctx context.Context,
-	tenantID string,
+	partitionID string,
 ) context.Context {
 	a.stamped++
-	return context.WithValue(ctx, executorTenantKey{}, tenantID)
+	return context.WithValue(ctx, executorTenantKey{}, partitionID)
 }
 
 func TestExecutorRejectsValidatorWithoutExecutionPrincipalReader(t *testing.T) {
@@ -395,7 +395,7 @@ func TestExecutorRejectsValidatorWithoutExecutionPrincipalReader(t *testing.T) {
 	}
 	if auth.stamped != 0 || auth.validated != 0 {
 		t.Fatalf(
-			"validator calls = (WithTenantID=%d, ValidateExecutionAuth=%d), want (0, 0)",
+			"validator calls = (WithPartitionID=%d, ValidateExecutionAuth=%d), want (0, 0)",
 			auth.stamped,
 			auth.validated,
 		)
@@ -475,7 +475,7 @@ func TestExecutorCarriesExactGatewayPrincipalFromBackgroundContext(t *testing.T)
 		t.Fatalf("principal AuthorizeExecution calls = %d, want admission setup + assignment recheck", principal.authorized)
 	}
 	if auth.stamped != 0 {
-		t.Fatalf("WithTenantID calls = %d, want 0: gateway principal owns context binding", auth.stamped)
+		t.Fatalf("WithPartitionID calls = %d, want 0: gateway principal owns context binding", auth.stamped)
 	}
 	if auth.validated != 1 {
 		t.Fatalf("auth validations = %d, want 1", auth.validated)

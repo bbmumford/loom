@@ -666,7 +666,7 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 	// and never establish authority.
 	transportPartition := handlers.TransportPartitionFromContext(ctx)
 	if transportPartition != "" && transportPartition != "default" {
-		ctx = s.authValidator.WithTenantID(ctx, transportPartition)
+		ctx = s.authValidator.WithPartitionID(ctx, transportPartition)
 	}
 	// No req.Context["tenantId"] fallback: RPCRequest.Context is mutable wire
 	// metadata and must never mint platform authority. Only an authenticated
