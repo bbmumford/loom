@@ -26,7 +26,7 @@ import (
 type ctxKey int
 
 const (
-	tenantIDKey ctxKey = iota
+	partitionIDKey ctxKey = iota
 	userIDKey
 	scopesKey
 	authTypeKey
@@ -34,14 +34,14 @@ const (
 	executionPrincipalKey
 )
 
-// WithTenantID stamps the partition onto ctx under the loom-local key.
-func WithTenantID(ctx context.Context, partitionID string) context.Context {
-	return context.WithValue(ctx, tenantIDKey, partitionID)
+// WithPartitionID stamps the partition onto ctx under the loom-local key.
+func WithPartitionID(ctx context.Context, partitionID string) context.Context {
+	return context.WithValue(ctx, partitionIDKey, partitionID)
 }
 
-// ExtractTenantID reads the loom-local partition key ("" when absent).
-func ExtractTenantID(ctx context.Context) string {
-	if v, ok := ctx.Value(tenantIDKey).(string); ok {
+// ExtractPartitionID reads the loom-local partition key ("" when absent).
+func ExtractPartitionID(ctx context.Context) string {
+	if v, ok := ctx.Value(partitionIDKey).(string); ok {
 		return v
 	}
 	return ""
@@ -142,16 +142,16 @@ func (defaultValidator) ValidateExecutionAuth(ctx context.Context, h ports.Secur
 	return nil
 }
 
-func (defaultValidator) WithTenantID(ctx context.Context, partitionID string) context.Context {
-	return WithTenantID(ctx, partitionID)
+func (defaultValidator) WithPartitionID(ctx context.Context, partitionID string) context.Context {
+	return WithPartitionID(ctx, partitionID)
 }
 
 // ExecutionPartitionID reads the private Pure-Loom partition principal without
-// creating one. This is the read-only executor side of WithTenantID: callers
+// creating one. This is the read-only executor side of WithPartitionID: callers
 // must establish the principal before task dispatch, and the mutable task body
 // is only compared against it.
 func (defaultValidator) ExecutionPartitionID(ctx context.Context) (string, bool) {
-	partitionID := ExtractTenantID(ctx)
+	partitionID := ExtractPartitionID(ctx)
 	return partitionID, partitionID != ""
 }
 

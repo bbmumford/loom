@@ -46,7 +46,7 @@ func (a *allowingRPCAuth) ValidateExecutionAuth(context.Context, ports.SecureHan
 	return nil
 }
 
-func (*allowingRPCAuth) WithTenantID(ctx context.Context, _ string) context.Context {
+func (*allowingRPCAuth) WithPartitionID(ctx context.Context, _ string) context.Context {
 	return ctx
 }
 

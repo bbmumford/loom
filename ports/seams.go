@@ -56,7 +56,7 @@ type SecureHandler interface {
 // (§0.3 #5 — the HIGHEST-DANGER cut, shared unexported context keys).
 //
 // The HSTLES-build implementation MUST delegate to the real helpers package:
-// WithTenantID must write the SAME unexported context key that HSTLES domain
+// WithPartitionID must write the SAME unexported context key that HSTLES domain
 // handlers read via helpers.ExtractTenantID, or nested rpc.Calls silently
 // lose the tenant and multi-tenant authz/data-scoping breaks with no
 // compile-time signal. The loom-local default (internal/securityctx) is
@@ -86,8 +86,8 @@ type AuthValidator interface {
 	// path (fail closed: unknown auth state denies RequiresAuth handlers).
 	ValidateExecutionAuth(ctx context.Context, h SecureHandler) error
 
-	// WithTenantID stamps the tenant onto ctx for nested calls.
-	WithTenantID(ctx context.Context, tenantID string) context.Context
+	// WithPartitionID stamps the partition onto ctx for nested calls.
+	WithPartitionID(ctx context.Context, partitionID string) context.Context
 }
 
 // PartitionPrincipalReader is an OPTIONAL, read-only extension implemented by an
@@ -206,7 +206,7 @@ type TransportAxisPin interface {
 // implement ScopeStamper simply does not get mesh-propagated scopes — the
 // safe, non-breaking default (enforcement stays closed until the endpoint
 // adopts it). The HSTLES/ORBTR validator implements it by delegating to the
-// real security-helpers keys (symmetric to WithTenantID); loom's default
+// real security-helpers keys (symmetric to WithPartitionID); loom's default
 // securityctx validator implements it against its loom-local keys.
 type ScopeStamper interface {
 	// WithWireIdentity stamps the mesh-propagated userId + scope-list onto

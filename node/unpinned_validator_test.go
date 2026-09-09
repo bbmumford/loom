@@ -27,7 +27,7 @@ func (unpinnedValidator) ValidateExecutionAuth(context.Context, ports.SecureHand
 	return nil
 }
 
-func (unpinnedValidator) WithTenantID(ctx context.Context, _ string) context.Context { return ctx }
+func (unpinnedValidator) WithPartitionID(ctx context.Context, _ string) context.Context { return ctx }
 
 func (unpinnedValidator) WithAuthenticatedPrincipal(
 	ctx context.Context,

@@ -17,14 +17,14 @@ package scope
 // reads by, and both sides must agree on the string.
 const (
 	// AxisTransportPinned is the axis a consumer's ports.TransportAxisPin may
-	// name as the one reconciled against the transport-established tenant on
-	// receive (the cross-tenant forge gate). node/handlers validateScope
+	// name as the one reconciled against the transport-established partition on
+	// receive (the cross-partition forge gate). node/handlers validateScope
 	// reconciles it against the transport binding; WithTransportPartition stamps it
 	// from the server-resolved value.
-	AxisTransportPinned = "platform_tenant"
+	AxisTransportPinned = "transport_pinned"
 
 	// AxisWithinTransport is the within-transport axis: it is deliberately NOT
-	// the pinned axis, so a partition/owner derives from it within the pinned
-	// tenant after the forge gate.
-	AxisWithinTransport = "customer_org"
+	// the pinned axis, so a narrower scope derives from it within the pinned
+	// partition after the forge gate.
+	AxisWithinTransport = "within_transport"
 )

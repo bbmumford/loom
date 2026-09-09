@@ -77,7 +77,7 @@ func TestDefaultExecutionTenantIDReadsWithoutMinting(t *testing.T) {
 		t.Fatalf("empty context principal = (%q, %v), want (\"\", false)", partitionID, ok)
 	}
 
-	ctx := WithTenantID(context.Background(), "org-authoritative")
+	ctx := WithPartitionID(context.Background(), "org-authoritative")
 	if partitionID, ok := reader.ExecutionPartitionID(ctx); !ok || partitionID != "org-authoritative" {
 		t.Fatalf(
 			"established context principal = (%q, %v), want (org-authoritative, true)",
