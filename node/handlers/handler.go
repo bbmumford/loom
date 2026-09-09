@@ -42,13 +42,6 @@ const (
 	ScopeWithinPartition = scope.ScopeWithinPartition // pinned + within-transport axes
 	ScopeSubject         = scope.ScopeSubject         // pinned axis + authenticated subject
 
-	// Deprecated aliases, re-exported so a consumer migrates without breaking.
-	ScopePlatform = scope.ScopePlatform // Deprecated: use ScopeAllowlisted
-	ScopeTenant   = scope.ScopeTenant   // Deprecated: use ScopePartition
-	ScopeOrg      = scope.ScopeOrg      // Deprecated: use ScopeWithinPartition
-	ScopeUser     = scope.ScopeUser     // Deprecated: use ScopeSubject
-	ScopeProfile  = scope.ScopeProfile  // Deprecated: use ScopePartition
-
 	// ScopeUnknown is the fail-closed sentinel a proto scope decays to when it
 	// is unrecognised. validateScope rejects any handler bound to it, so a
 	// decayed value denies instead of reading as "no scope required". Never set

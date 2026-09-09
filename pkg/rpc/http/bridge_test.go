@@ -132,9 +132,9 @@ func newPostRequest(ctx context.Context) *http.Request {
 	return r.WithContext(ctx)
 }
 
-// TestExecuteLocal_ScopeUser_Denied — missing user_id on a ScopeSubject
+// TestExecuteLocal_ScopeSubject_Denied — missing user_id on a ScopeSubject
 // handler must fail closed with ErrScopeDenied before the handler runs.
-func TestExecuteLocal_ScopeUser_Denied(t *testing.T) {
+func TestExecuteLocal_ScopeSubject_Denied(t *testing.T) {
 	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopeSubject))
 	req := &structpb.Struct{}
 	_, err := bridge.executeLocal(newPostRequest(context.Background()), h, req)
@@ -150,9 +150,9 @@ func TestExecuteLocal_ScopeUser_Denied(t *testing.T) {
 	}
 }
 
-// TestExecuteLocal_ScopeTenant_Denied — missing tenantId on ScopePartition
+// TestExecuteLocal_ScopePartition_Denied — missing tenantId on ScopePartition
 // fails closed.
-func TestExecuteLocal_ScopeTenant_Denied(t *testing.T) {
+func TestExecuteLocal_ScopePartition_Denied(t *testing.T) {
 	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopePartition))
 	_, err := bridge.executeLocal(newPostRequest(context.Background()), h, &structpb.Struct{})
 	if !errors.Is(err, rpc.ErrScopeDenied) {
@@ -173,9 +173,9 @@ func TestExecuteLocal_ScopeNone_Passes(t *testing.T) {
 	}
 }
 
-// TestExecuteLocal_ScopeUser_StampedCtx_Passes — positive path: a stamped
+// TestExecuteLocal_ScopeSubject_StampedCtx_Passes — positive path: a stamped
 // ctx (tenantId+userId) satisfies ScopeSubject and the handler runs.
-func TestExecuteLocal_ScopeUser_StampedCtx_Passes(t *testing.T) {
+func TestExecuteLocal_ScopeSubject_StampedCtx_Passes(t *testing.T) {
 	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopeSubject))
 	ctx := rpc.WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "", "u-1"))
 	out, err := bridge.executeLocal(newPostRequest(ctx), h, &structpb.Struct{})
@@ -187,7 +187,7 @@ func TestExecuteLocal_ScopeUser_StampedCtx_Passes(t *testing.T) {
 	}
 }
 
-func TestExecuteLocal_ScopeOrg_IgnoresMutableWireHints(t *testing.T) {
+func TestExecuteLocal_ScopeWithinPartition_IgnoresMutableWireHints(t *testing.T) {
 	var calls int
 	handler := stubHandler(rpc.ScopeWithinPartition)
 	handler.Func = func(_ context.Context, req proto.Message) (proto.Message, error) {
@@ -281,9 +281,9 @@ func TestExecuteProxy_Policy_PlatformSatisfied_ReachesMesh(t *testing.T) {
 	}
 }
 
-// TestExecuteProxy_ScopeTenant_Denied — non-platform scopes ARE enforced
+// TestExecuteProxy_ScopePartition_Denied — non-platform scopes ARE enforced
 // on the proxy path so malformed callers fail before wasting mesh dispatch.
-func TestExecuteProxy_ScopeTenant_Denied(t *testing.T) {
+func TestExecuteProxy_ScopePartition_Denied(t *testing.T) {
 	reg := rpc.NewRegistry()
 	reg.SetPresencePolicy(refPolicy())
 	h := rpc.Handler{
@@ -383,10 +383,10 @@ type wrappedErr struct{ inner error }
 func (w *wrappedErr) Error() string { return "wrapped: " + w.inner.Error() }
 func (w *wrappedErr) Unwrap() error { return w.inner }
 
-// TestExecuteLocal_ScopeUser_HandlerNeverRunsOnDenial — ensures the
+// TestExecuteLocal_ScopeSubject_HandlerNeverRunsOnDenial — ensures the
 // fail-closed gate actually prevents handler execution (no side effects
 // on a denied request). Distinct from the status-code test.
-func TestExecuteLocal_ScopeUser_HandlerNeverRunsOnDenial(t *testing.T) {
+func TestExecuteLocal_ScopeSubject_HandlerNeverRunsOnDenial(t *testing.T) {
 	called := false
 	h := rpc.Handler{
 		Namespace: "test",

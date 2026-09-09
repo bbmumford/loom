@@ -17,9 +17,9 @@
 // enforcement opt-out) and the two non-declarable sentinels (ScopeUnset /
 // ScopeUnknown), which it refuses to admit or, at dispatch, fails closed on.
 //
-// The value constants are retained (rather than collapsed to a single opaque
-// string) to avoid a 434-site consumer churn: existing call sites keep
-// naming rpc.ScopeTenant / handlers.ScopeOrg and keep compiling.
+// The tags stay separate values rather than collapsing to one opaque string
+// because a handler declares WHICH parts of the identity it needs present, and
+// a single token could not carry that.
 package scope
 
 // ScopeTag is the opaque partition/scope label a handler declares at registration.
@@ -36,8 +36,8 @@ type ScopeTag string
 // peer must be rebuilt together. loom carries them as opaque labels; only a
 // consumer's PresencePolicy assigns them meaning.
 //
-// The rpc and handlers packages re-export every tag below, deprecated aliases
-// included. Both surfaces MUST stay 1:1 with this list.
+// The rpc and handlers packages re-export every tag below. All three surfaces
+// MUST stay 1:1 with this list.
 const (
 	// ScopeUnset is the invalid zero value. It means no scope decision was
 	// made and MUST be rejected at registration and fail closed at dispatch.
@@ -75,26 +75,6 @@ const (
 	// subject, i.e. an individual principal rather than only a partition.
 	ScopeSubject ScopeTag = "subject"
 
-	// The names below are the previous spellings, kept so a consumer migrates
-	// call sites without its tree breaking mid-change. They keep their own
-	// distinct tokens on purpose: giving one the same value as its replacement
-	// would collapse two arms of a consumer's switch into a duplicate case and
-	// break the very trees this staging exists to protect. The presence policy
-	// evaluates each old spelling under the same rule as its replacement, so a
-	// call site behaves identically before and after it is swapped. They are
-	// removed once no consumer references them.
-
-	// Deprecated: use ScopeAllowlisted.
-	ScopePlatform ScopeTag = "platform"
-	// Deprecated: use ScopePartition.
-	ScopeTenant ScopeTag = "tenant"
-	// Deprecated: use ScopeWithinPartition.
-	ScopeOrg ScopeTag = "org"
-	// Deprecated: use ScopeSubject.
-	ScopeUser ScopeTag = "user"
-	// Deprecated: use ScopePartition — it carries the identical presence rule.
-	ScopeProfile ScopeTag = "profile"
-
 	// ScopeUnknown is the fail-closed sentinel installed by rpc.mapProtoScope
 	// when it sees a proto enum it does not recognise (including an explicit
 	// TENANT_SCOPE_UNSPECIFIED in a .proto file). It is not a declarable tag:
@@ -112,9 +92,8 @@ const (
 // which already delegates every non-sentinel tag to the consumer's
 // PresencePolicy and denies when the policy reports it unsatisfied — so a tag
 // loom's admission does not recognise still fails CLOSED at enforcement (an
-// unconfigured policy denies every non-None handler). The blessed ScopePlatform
-// /Tenant/Org/User/Profile constants remain as consumer conveniences, not as
-// loom's admissible set.
+// unconfigured policy denies every non-None handler). The declared tags below
+// are consumer conveniences, not loom's admissible set.
 func IsDeclared(s ScopeTag) bool {
 	return s != ScopeUnset && s != ScopeUnknown
 }

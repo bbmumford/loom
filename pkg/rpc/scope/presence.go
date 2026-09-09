@@ -7,18 +7,17 @@ import "fmt"
 // ships no policy by default — a registry with a nil policy fails every non-None
 // handler CLOSED — so this is the canonical implementation a consumer installs
 // via Registry.SetPresencePolicy when it wants tier-presence enforcement, in
-// place of writing its own. platformAllow bears solely on ScopePlatform; the
-// other tiers turn on axis presence, so a caller with an established
-// transport-pinned axis satisfies ScopeTenant/ScopeUser/ScopeProfile regardless
-// of membership.
+// place of writing its own. platformAllow bears solely on ScopeAllowlisted; the
+// other tags turn on axis presence, so a caller with an established
+// transport-pinned axis satisfies ScopePartition regardless of membership.
 type scopePresencePolicy struct {
 	platformAllow map[string]struct{}
 }
 
-// NewScopePresencePolicy builds the reference PresencePolicy whose ScopePlatform
-// tier admits exactly the supplied platform-partition values. Empty strings are
-// dropped, so an empty argument list yields a policy whose ScopePlatform tier is
-// never satisfied (fail-closed) while the other tiers still turn on axis presence.
+// NewScopePresencePolicy builds the reference PresencePolicy whose
+// ScopeAllowlisted tag admits exactly the supplied values. Empty strings are
+// dropped, so an empty argument list yields a policy where ScopeAllowlisted is
+// never satisfied (fail-closed) while the other tags still turn on axis presence.
 func NewScopePresencePolicy(platformPartitions ...string) PresencePolicy {
 	allow := make(map[string]struct{}, len(platformPartitions))
 	for _, p := range platformPartitions {
@@ -49,17 +48,17 @@ func (p scopePresencePolicy) CheckPresence(declared ScopeTag, id AuthenticatedId
 	switch declared {
 	case ScopeNone:
 		return true, ""
-	case ScopeAllowlisted, ScopePlatform:
+	case ScopeAllowlisted:
 		if p.isPlatform(pinned) {
 			return true, ""
 		}
 		return false, "requires a transport-pinned axis the policy admits"
-	case ScopePartition, ScopeTenant, ScopeProfile:
+	case ScopePartition:
 		if pinned != "" {
 			return true, ""
 		}
 		return false, "requires an authenticated transport-pinned axis"
-	case ScopeWithinPartition, ScopeOrg:
+	case ScopeWithinPartition:
 		if pinned == "" {
 			return false, "requires an authenticated transport-pinned axis"
 		}
@@ -67,7 +66,7 @@ func (p scopePresencePolicy) CheckPresence(declared ScopeTag, id AuthenticatedId
 			return false, "requires an authenticated within-transport axis"
 		}
 		return true, ""
-	case ScopeSubject, ScopeUser:
+	case ScopeSubject:
 		if pinned == "" {
 			return false, "requires an authenticated transport-pinned axis"
 		}
