@@ -37,17 +37,17 @@ func TestNewScopePresencePolicy_Tiers(t *testing.T) {
 		want     bool
 	}{
 		{"none admits anyone", ScopeNone, none, true},
-		{"platform needs allowlisted pinned", ScopePlatform, platform, true},
-		{"platform denies non-allowlisted", ScopePlatform, partition, false},
-		{"platform denies empty", ScopePlatform, none, false},
-		{"tenant needs pinned", ScopeTenant, partition, true},
-		{"tenant denies empty", ScopeTenant, none, false},
+		{"platform needs allowlisted pinned", ScopeAllowlisted, platform, true},
+		{"platform denies non-allowlisted", ScopeAllowlisted, partition, false},
+		{"platform denies empty", ScopeAllowlisted, none, false},
+		{"tenant needs pinned", ScopePartition, partition, true},
+		{"tenant denies empty", ScopePartition, none, false},
 		{"partition (neutral) needs pinned", ScopePartition, partition, true},
-		{"org needs pinned+within", ScopeOrg, full, true},
-		{"org denies pinned-only", ScopeOrg, partition, false},
-		{"user needs pinned+subject", ScopeUser, full, true},
-		{"user denies no-subject", ScopeUser, partition, false},
-		{"profile needs pinned", ScopeProfile, partition, true},
+		{"org needs pinned+within", ScopeWithinPartition, full, true},
+		{"org denies pinned-only", ScopeWithinPartition, partition, false},
+		{"user needs pinned+subject", ScopeSubject, full, true},
+		{"user denies no-subject", ScopeSubject, partition, false},
+		{"profile needs pinned", ScopePartition, partition, true},
 		{"unknown fails closed", ScopeUnknown, full, false},
 	}
 	for _, c := range cases {
@@ -59,18 +59,18 @@ func TestNewScopePresencePolicy_Tiers(t *testing.T) {
 
 func TestNewScopePresencePolicy_EmptyAllowlistFailsClosedPlatform(t *testing.T) {
 	p := NewScopePresencePolicy() // no platform partitions
-	if ok, _ := p.CheckPresence(ScopePlatform, NewScopeIdentity("anything", "", "")); ok {
-		t.Fatal("empty allowlist must never satisfy ScopePlatform")
+	if ok, _ := p.CheckPresence(ScopeAllowlisted, NewScopeIdentity("anything", "", "")); ok {
+		t.Fatal("empty allowlist must never satisfy ScopeAllowlisted")
 	}
 	// Non-platform tiers still turn on axis presence.
-	if ok, _ := p.CheckPresence(ScopeTenant, NewScopeIdentity("t1", "", "")); !ok {
+	if ok, _ := p.CheckPresence(ScopePartition, NewScopeIdentity("t1", "", "")); !ok {
 		t.Fatal("tenant tier turns on pinned-axis presence, independent of the platform allowlist")
 	}
 }
 
 // TestScopeTenantAndScopePartitionAreIndistinguishable pins the property a
 // consumer's rename depends on: ScopePartition is the neutral name for what
-// ScopeTenant already required, so swapping a handler's declaration from one to
+// ScopePartition already required, so swapping a handler's declaration from one to
 // the other must change nothing this policy decides.
 //
 // The tier table above exercises each tag against a single identity, which
@@ -97,14 +97,14 @@ func TestScopeTenantAndScopePartitionAreIndistinguishable(t *testing.T) {
 	}
 
 	for _, c := range ids {
-		tenantOK, tenantWhy := p.CheckPresence(ScopeTenant, c.id)
+		tenantOK, tenantWhy := p.CheckPresence(ScopePartition, c.id)
 		partOK, partWhy := p.CheckPresence(ScopePartition, c.id)
 		if tenantOK != partOK {
-			t.Errorf("%s: ScopeTenant=%v but ScopePartition=%v — the neutral name is no longer a synonym, so renaming a handler changes what it admits",
+			t.Errorf("%s: ScopePartition=%v but ScopePartition=%v — the neutral name is no longer a synonym, so renaming a handler changes what it admits",
 				c.name, tenantOK, partOK)
 		}
 		if tenantWhy != partWhy {
-			t.Errorf("%s: denial reasons diverged — ScopeTenant %q vs ScopePartition %q",
+			t.Errorf("%s: denial reasons diverged — ScopePartition %q vs ScopePartition %q",
 				c.name, tenantWhy, partWhy)
 		}
 	}
@@ -113,35 +113,35 @@ func TestScopeTenantAndScopePartitionAreIndistinguishable(t *testing.T) {
 // TestScopePresenceTurnsOnAxisPresenceNotOnALevelOrder records what the policy
 // actually keys on, because the tag NAMES read as a hierarchy and the mechanism
 // is not one: each tag names which axes must be PRESENT, and no tag subsumes
-// another. A reader who assumes an order would expect ScopeUser to satisfy
-// ScopeOrg's requirement, and it does not.
+// another. A reader who assumes an order would expect ScopeSubject to satisfy
+// ScopeWithinPartition's requirement, and it does not.
 func TestScopePresenceTurnsOnAxisPresenceNotOnALevelOrder(t *testing.T) {
 	p := NewScopePresencePolicy("plat")
 
 	pinnedSubject := NewScopeIdentity("t1", "", "usr1")
-	if ok, _ := p.CheckPresence(ScopeUser, pinnedSubject); !ok {
-		t.Fatal("precondition: pinned+subject satisfies ScopeUser")
+	if ok, _ := p.CheckPresence(ScopeSubject, pinnedSubject); !ok {
+		t.Fatal("precondition: pinned+subject satisfies ScopeSubject")
 	}
-	if ok, _ := p.CheckPresence(ScopeOrg, pinnedSubject); ok {
-		t.Error("an identity satisfying ScopeUser also satisfied ScopeOrg — the tags are not ordered, and ScopeOrg turns on the within-transport axis a subject does not supply")
+	if ok, _ := p.CheckPresence(ScopeWithinPartition, pinnedSubject); ok {
+		t.Error("an identity satisfying ScopeSubject also satisfied ScopeWithinPartition — the tags are not ordered, and ScopeWithinPartition turns on the within-transport axis a subject does not supply")
 	}
 
 	pinnedWithin := NewScopeIdentity("t1", "org1", "")
-	if ok, _ := p.CheckPresence(ScopeOrg, pinnedWithin); !ok {
-		t.Fatal("precondition: pinned+within satisfies ScopeOrg")
+	if ok, _ := p.CheckPresence(ScopeWithinPartition, pinnedWithin); !ok {
+		t.Fatal("precondition: pinned+within satisfies ScopeWithinPartition")
 	}
-	if ok, _ := p.CheckPresence(ScopeUser, pinnedWithin); ok {
-		t.Error("an identity satisfying ScopeOrg also satisfied ScopeUser — ScopeUser turns on a subject, which the within-transport axis does not supply")
+	if ok, _ := p.CheckPresence(ScopeSubject, pinnedWithin); ok {
+		t.Error("an identity satisfying ScopeWithinPartition also satisfied ScopeSubject — ScopeSubject turns on a subject, which the within-transport axis does not supply")
 	}
 
 	// The platform allowlist is a membership test, not a tier above the others:
-	// an ordinary pinned identity satisfies ScopeTenant and must still be refused
-	// ScopePlatform.
+	// an ordinary pinned identity satisfies ScopePartition and must still be refused
+	// ScopeAllowlisted.
 	ordinary := NewScopeIdentity("t1", "", "")
-	if ok, _ := p.CheckPresence(ScopeTenant, ordinary); !ok {
-		t.Fatal("precondition: pinned satisfies ScopeTenant")
+	if ok, _ := p.CheckPresence(ScopePartition, ordinary); !ok {
+		t.Fatal("precondition: pinned satisfies ScopePartition")
 	}
-	if ok, _ := p.CheckPresence(ScopePlatform, ordinary); ok {
-		t.Error("a non-allowlisted pinned identity satisfied ScopePlatform")
+	if ok, _ := p.CheckPresence(ScopeAllowlisted, ordinary); ok {
+		t.Error("a non-allowlisted pinned identity satisfied ScopeAllowlisted")
 	}
 }

@@ -102,7 +102,7 @@ func TestResolvedRPCWithAuthPinsExactRegistrationAcrossReplacement(t *testing.T)
 
 func TestAuthenticatedRPCScopeIgnoresRequestIdentityHints(t *testing.T) {
 	registry := newScopedRegistry()
-	handler := &resolvedRPCProbe{name: "rpc.org", scope: ScopeOrg}
+	handler := &resolvedRPCProbe{name: "rpc.org", scope: ScopeWithinPartition}
 	var events []string
 	registry.Use(&taskDispatchMiddleware{name: "scope-mw", events: &events})
 	if err := registry.RegisterRPC(handler); err != nil {

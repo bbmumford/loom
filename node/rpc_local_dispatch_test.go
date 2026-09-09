@@ -168,7 +168,7 @@ func TestTheNilGuardsFailClosed(t *testing.T) {
 // which does exactly that — so it is not hypothetical in this codebase.
 func TestDispatchBytesEnforcesTenantScopeJustLikeARemoteCall(t *testing.T) {
 	reg := handlers.NewHandlerRegistry()
-	h := &rpcOnlyHandler{name: "orbtr.io.x.TenantScoped", scope: handlers.ScopeTenant}
+	h := &rpcOnlyHandler{name: "orbtr.io.x.TenantScoped", scope: handlers.ScopePartition}
 	if err := reg.RegisterRPC(h); err != nil {
 		t.Fatalf("RegisterRPC: %v", err)
 	}

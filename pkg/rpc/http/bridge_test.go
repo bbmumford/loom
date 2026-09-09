@@ -38,34 +38,30 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 		switch declared {
 		case scope.ScopeNone:
 			return true, ""
-		case scope.ScopePlatform:
+		case scope.ScopeAllowlisted:
 			if partition == "" {
 				return false, "platform tenant required"
 			}
 			if _, ok := allow[partition]; !ok {
 				return false, "tenant not in platform allowlist"
 			}
-		case scope.ScopeTenant:
+		case scope.ScopePartition:
 			if partition == "" {
 				return false, "tenant required"
 			}
-		case scope.ScopeOrg:
+		case scope.ScopeWithinPartition:
 			if partition == "" {
 				return false, "tenant required"
 			}
 			if id.Scope(scope.AxisWithinTransport) == "" {
 				return false, "organisation required"
 			}
-		case scope.ScopeUser:
+		case scope.ScopeSubject:
 			if partition == "" {
 				return false, "tenant required"
 			}
 			if id.Subject == "" {
 				return false, "user required"
-			}
-		case scope.ScopeProfile:
-			if partition == "" {
-				return false, "tenant required"
 			}
 		default:
 			return false, "unknown scope"
@@ -136,10 +132,10 @@ func newPostRequest(ctx context.Context) *http.Request {
 	return r.WithContext(ctx)
 }
 
-// TestExecuteLocal_ScopeUser_Denied — missing user_id on a ScopeUser
+// TestExecuteLocal_ScopeUser_Denied — missing user_id on a ScopeSubject
 // handler must fail closed with ErrScopeDenied before the handler runs.
 func TestExecuteLocal_ScopeUser_Denied(t *testing.T) {
-	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopeUser))
+	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopeSubject))
 	req := &structpb.Struct{}
 	_, err := bridge.executeLocal(newPostRequest(context.Background()), h, req)
 	if err == nil {
@@ -154,10 +150,10 @@ func TestExecuteLocal_ScopeUser_Denied(t *testing.T) {
 	}
 }
 
-// TestExecuteLocal_ScopeTenant_Denied — missing tenantId on ScopeTenant
+// TestExecuteLocal_ScopeTenant_Denied — missing tenantId on ScopePartition
 // fails closed.
 func TestExecuteLocal_ScopeTenant_Denied(t *testing.T) {
-	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopeTenant))
+	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopePartition))
 	_, err := bridge.executeLocal(newPostRequest(context.Background()), h, &structpb.Struct{})
 	if !errors.Is(err, rpc.ErrScopeDenied) {
 		t.Fatalf("expected ErrScopeDenied, got %v", err)
@@ -178,13 +174,13 @@ func TestExecuteLocal_ScopeNone_Passes(t *testing.T) {
 }
 
 // TestExecuteLocal_ScopeUser_StampedCtx_Passes — positive path: a stamped
-// ctx (tenantId+userId) satisfies ScopeUser and the handler runs.
+// ctx (tenantId+userId) satisfies ScopeSubject and the handler runs.
 func TestExecuteLocal_ScopeUser_StampedCtx_Passes(t *testing.T) {
-	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopeUser))
+	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopeSubject))
 	ctx := rpc.WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "", "u-1"))
 	out, err := bridge.executeLocal(newPostRequest(ctx), h, &structpb.Struct{})
 	if err != nil {
-		t.Fatalf("stamped ctx must satisfy ScopeUser, got %v", err)
+		t.Fatalf("stamped ctx must satisfy ScopeSubject, got %v", err)
 	}
 	if len(out) == 0 {
 		t.Fatal("expected response body")
@@ -193,7 +189,7 @@ func TestExecuteLocal_ScopeUser_StampedCtx_Passes(t *testing.T) {
 
 func TestExecuteLocal_ScopeOrg_IgnoresMutableWireHints(t *testing.T) {
 	var calls int
-	handler := stubHandler(rpc.ScopeOrg)
+	handler := stubHandler(rpc.ScopeWithinPartition)
 	handler.Func = func(_ context.Context, req proto.Message) (proto.Message, error) {
 		calls++
 		return req, nil
@@ -230,12 +226,12 @@ func TestExecuteLocal_ScopeOrg_IgnoresMutableWireHints(t *testing.T) {
 // TestExecuteProxy_NilPolicy_FailsClosed — a gateway with no PresencePolicy
 // MUST fail closed on a proxy handler that declares a scope. The old fail-OPEN
 // carve-out (a thin gateway with nil platforms was allowed to forward a
-// ScopePlatform proxy unenforced) is deliberately gone: the proxy path now runs
+// ScopeAllowlisted proxy unenforced) is deliberately gone: the proxy path now runs
 // EnforceScope with the registry's policy exactly as the local path does, and a
 // nil policy denies. A gateway that proxies scoped handlers must install a
 // policy.
 func TestExecuteProxy_NilPolicy_FailsClosed(t *testing.T) {
-	for _, s := range []rpc.ScopeTag{rpc.ScopePlatform, rpc.ScopeTenant, rpc.ScopeOrg} {
+	for _, s := range []rpc.ScopeTag{rpc.ScopeAllowlisted, rpc.ScopePartition, rpc.ScopeWithinPartition} {
 		reg := rpc.NewRegistry() // no SetPresencePolicy → nil policy
 		h := rpc.Handler{
 			Namespace: "test",
@@ -258,7 +254,7 @@ func TestExecuteProxy_NilPolicy_FailsClosed(t *testing.T) {
 }
 
 // TestExecuteProxy_Policy_PlatformSatisfied_ReachesMesh — with a policy that
-// admits the platform tenant, a ScopePlatform proxy passes scope enforcement
+// admits the platform tenant, a ScopeAllowlisted proxy passes scope enforcement
 // and proceeds to mesh dispatch; the resulting error is a mesh/caller error,
 // NOT ErrScopeDenied.
 func TestExecuteProxy_Policy_PlatformSatisfied_ReachesMesh(t *testing.T) {
@@ -270,7 +266,7 @@ func TestExecuteProxy_Policy_PlatformSatisfied_ReachesMesh(t *testing.T) {
 		Operation: "Op",
 		Request:   (*structpb.Struct)(nil),
 		Response:  (*structpb.Struct)(nil),
-		Scope:     rpc.ScopePlatform,
+		Scope:     rpc.ScopeAllowlisted,
 	}
 	if err := reg.Register(h); err != nil {
 		t.Fatalf("register: %v", err)
@@ -296,7 +292,7 @@ func TestExecuteProxy_ScopeTenant_Denied(t *testing.T) {
 		Operation: "Op",
 		Request:   (*structpb.Struct)(nil),
 		Response:  (*structpb.Struct)(nil),
-		Scope:     rpc.ScopeTenant,
+		Scope:     rpc.ScopePartition,
 	}
 	if err := reg.Register(h); err != nil {
 		t.Fatalf("register: %v", err)
@@ -402,7 +398,7 @@ func TestExecuteLocal_ScopeUser_HandlerNeverRunsOnDenial(t *testing.T) {
 		},
 		Request:  (*structpb.Struct)(nil),
 		Response: (*structpb.Struct)(nil),
-		Scope:    rpc.ScopeUser,
+		Scope:    rpc.ScopeSubject,
 	}
 	reg := rpc.NewRegistry()
 	if err := reg.Register(h); err != nil {

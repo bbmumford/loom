@@ -57,7 +57,7 @@ func TestAuthenticatedIdentityCloneIsDefensive(t *testing.T) {
 // package's enforcement tests), never fail open.
 func TestIsDeclaredAdmitsOpaqueRejectsSentinels(t *testing.T) {
 	declarable := []ScopeTag{
-		ScopeNone, ScopePlatform, ScopeTenant, ScopeOrg, ScopeUser, ScopeProfile,
+		ScopeNone, ScopeAllowlisted, ScopePartition, ScopeWithinPartition, ScopeSubject, ScopePartition,
 		ScopePartition, ScopeTag("consumer-defined-axis"),
 	}
 	for _, s := range declarable {

@@ -99,7 +99,7 @@ func TestTaskScopeIgnoresMetadataIdentityHints(t *testing.T) {
 	var events []string
 	handler := &taskDispatchProbe{
 		name:  "org.task",
-		scope: ScopeOrg,
+		scope: ScopeWithinPartition,
 		run: func(_ context.Context, task *Task) (*TaskResult, error) {
 			calls++
 			return &TaskResult{TaskID: task.ID, Status: TaskStatusCompleted}, nil

@@ -28,11 +28,11 @@ func TestScopeAlias_HandlersEqualsRPC(t *testing.T) {
 		hnd  handlers.Scope
 	}{
 		{"None", ScopeNone, handlers.ScopeNone},
-		{"Platform", ScopePlatform, handlers.ScopePlatform},
-		{"Tenant", ScopeTenant, handlers.ScopeTenant},
-		{"Org", ScopeOrg, handlers.ScopeOrg},
-		{"User", ScopeUser, handlers.ScopeUser},
-		{"Profile", ScopeProfile, handlers.ScopeProfile},
+		{"Platform", ScopeAllowlisted, handlers.ScopeAllowlisted},
+		{"Tenant", ScopePartition, handlers.ScopePartition},
+		{"Org", ScopeWithinPartition, handlers.ScopeWithinPartition},
+		{"User", ScopeSubject, handlers.ScopeSubject},
+		{"Profile", ScopePartition, handlers.ScopePartition},
 		{"Unknown", ScopeUnknown, handlers.ScopeUnknown},
 	}
 	for _, c := range cases {
@@ -53,29 +53,29 @@ func TestScopeAlias_HandlersEqualsRPC(t *testing.T) {
 func TestScopeAlias_TypeIdentity(t *testing.T) {
 	// Round-trip each canonical value through both aliases; if the
 	// aliases diverge, the assignments fail to compile.
-	var s ScopeTag = handlers.ScopeProfile
-	var h handlers.Scope = ScopeProfile
-	var c scope.ScopeTag = ScopeProfile
-	if s != h || h != c || c != ScopeProfile {
+	var s ScopeTag = handlers.ScopePartition
+	var h handlers.Scope = ScopePartition
+	var c scope.ScopeTag = ScopePartition
+	if s != h || h != c || c != ScopePartition {
 		t.Fatalf("Profile scope failed identity round-trip: rpc=%q handlers=%q scope=%q", s, h, c)
 	}
 }
 
 // TestScopeAlias_ProfileEnforceScopeParity guards the Profile-tier gap that
-// finding rev-069 closed: a handler declared with rpc.ScopeProfile MUST
+// finding rev-069 closed: a handler declared with rpc.ScopePartition MUST
 // receive the same enforcement whether it dispatches through EnforceScope
 // (rpc) or validateScope (handlers). Because the two implementations
 // now consult the same constant, this test asserts they refuse the same
 // missing-partition input rather than one silently accepting.
 func TestScopeAlias_ProfileEnforceScopeParity(t *testing.T) {
-	// rpc.EnforceScope side: a ScopeProfile handler with an empty ctx
+	// rpc.EnforceScope side: a ScopePartition handler with an empty ctx
 	// (no platform-partition axis) must be denied with ErrScopeDenied under the
 	// reference policy — mirroring what validateScope does on the
 	// handlers side with the same policy.
-	h := &Handler{Namespace: "app", Domain: "billing", Operation: "GetProfile", Scope: ScopeProfile}
+	h := &Handler{Namespace: "app", Domain: "billing", Operation: "GetProfile", Scope: ScopePartition}
 	err := EnforceScope(t.Context(), h, refPolicy())
 	if err == nil {
-		t.Fatalf("EnforceScope(ScopeProfile, empty ctx) unexpectedly passed — Profile tier must require a tenant axis")
+		t.Fatalf("EnforceScope(ScopePartition, empty ctx) unexpectedly passed — Profile tier must require a tenant axis")
 	}
 	// handlers.validateScope side is exercised in
 	// mesh/node/handlers/scope_test.go:TestValidateTenantScope_Profile_MissingTenantFailsClosed.

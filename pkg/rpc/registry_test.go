@@ -21,7 +21,7 @@ func TestRegistryBasics(t *testing.T) {
 		},
 		Request:  (*emptypb.Empty)(nil),
 		Response: (*wrapperspb.StringValue)(nil),
-		Scope:    ScopeTenant,
+		Scope:    ScopePartition,
 		Tags:     []string{"users", "write"},
 	}
 
@@ -133,7 +133,7 @@ func TestMetadataFor(t *testing.T) {
 		},
 		Request:  (*emptypb.Empty)(nil),
 		Response: (*wrapperspb.StringValue)(nil),
-		Scope:    ScopeTenant,
+		Scope:    ScopePartition,
 		Tags:     []string{"users", "write"},
 	}
 	if err := reg.Register(src); err != nil {
@@ -147,8 +147,8 @@ func TestMetadataFor(t *testing.T) {
 	if got.Func != nil {
 		t.Error("MetadataFor must strip Func")
 	}
-	if got.Scope != ScopeTenant {
-		t.Errorf("Scope = %v, want ScopeTenant", got.Scope)
+	if got.Scope != ScopePartition {
+		t.Errorf("Scope = %v, want ScopePartition", got.Scope)
 	}
 	if got.Domain != "identity" || got.Operation != "CreateUser" {
 		t.Errorf("identity drift: %+v", got)
@@ -191,13 +191,13 @@ func TestStripFuncs(t *testing.T) {
 			},
 			Request:  (*emptypb.Empty)(nil),
 			Response: (*wrapperspb.StringValue)(nil),
-			Scope:    ScopeTenant,
+			Scope:    ScopePartition,
 			Tags:     []string{"a", "b"},
 			OpClass:  OpRealtime,
 		},
 		{
 			Namespace: "hstles", Domain: "identity", Operation: "Op2",
-			Scope: ScopeOrg,
+			Scope: ScopeWithinPartition,
 		},
 	}
 
@@ -210,7 +210,7 @@ func TestStripFuncs(t *testing.T) {
 			t.Errorf("out[%d].Func not stripped", i)
 		}
 	}
-	if out[0].Scope != ScopeTenant || out[0].OpClass != OpRealtime {
+	if out[0].Scope != ScopePartition || out[0].OpClass != OpRealtime {
 		t.Errorf("Scope/OpClass not preserved: %+v", out[0])
 	}
 	// Source must still carry its Func — StripFuncs must not mutate input.
