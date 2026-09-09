@@ -33,34 +33,30 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 		switch declared {
 		case scope.ScopeNone:
 			return true, ""
-		case scope.ScopePlatform:
+		case scope.ScopeAllowlisted:
 			if partition == "" {
 				return false, "platform tenant required"
 			}
 			if _, ok := allow[partition]; !ok {
 				return false, "tenant not in platform allowlist"
 			}
-		case scope.ScopeTenant:
+		case scope.ScopePartition:
 			if partition == "" {
 				return false, "tenant required"
 			}
-		case scope.ScopeOrg:
+		case scope.ScopeWithinPartition:
 			if partition == "" {
 				return false, "tenant required"
 			}
 			if id.Scope(scope.AxisWithinTransport) == "" {
 				return false, "organisation required"
 			}
-		case scope.ScopeUser:
+		case scope.ScopeSubject:
 			if partition == "" {
 				return false, "tenant required"
 			}
 			if id.Subject == "" {
 				return false, "user required"
-			}
-		case scope.ScopeProfile:
-			if partition == "" {
-				return false, "tenant required"
 			}
 		default:
 			return false, "unknown scope"
@@ -113,7 +109,7 @@ func TestEnforceScope_None(t *testing.T) {
 // consumer policy loom cannot judge presence, so any declared (non-None)
 // handler is denied rather than silently admitted.
 func TestEnforceScope_NilPolicyDeniesNonNone(t *testing.T) {
-	for _, s := range []ScopeTag{ScopeTenant, ScopeOrg, ScopeUser, ScopeProfile, ScopePlatform} {
+	for _, s := range []ScopeTag{ScopePartition, ScopeWithinPartition, ScopeSubject, ScopePartition, ScopeAllowlisted} {
 		h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: s}
 		ctx := WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "acme", "u1"))
 		if err := EnforceScope(ctx, h, nil); !errors.Is(err, ErrScopeDenied) {
@@ -178,7 +174,7 @@ func TestEnforceScope_Requirement_TwoArm(t *testing.T) {
 // TestEnforceScope_PolicyFalseDenies proves a policy that reports unsatisfied
 // denies, and the reason is surfaced in the wrapped error.
 func TestEnforceScope_PolicyFalseDenies(t *testing.T) {
-	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopeTenant}
+	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopePartition}
 	deny := scope.PresencePolicyFunc(func(scope.ScopeTag, scope.AuthenticatedIdentity) (bool, string) {
 		return false, "policy-said-no"
 	})
@@ -279,7 +275,7 @@ func TestBridgeWireIdentity_NilSafe(t *testing.T) {
 }
 
 func TestEnforceScope_Platform(t *testing.T) {
-	h := &Handler{Namespace: "hstles", Domain: "identity", Operation: "Mint", Scope: ScopePlatform}
+	h := &Handler{Namespace: "hstles", Domain: "identity", Operation: "Mint", Scope: ScopeAllowlisted}
 	policy := refPolicy("orbtr", "hstles")
 
 	// Caller without tenant — denied
@@ -301,7 +297,7 @@ func TestEnforceScope_Platform(t *testing.T) {
 }
 
 func TestEnforceScope_Tenant(t *testing.T) {
-	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopeTenant}
+	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopePartition}
 	policy := refPolicy()
 	if err := EnforceScope(context.Background(), h, policy); !errors.Is(err, ErrScopeDenied) {
 		t.Errorf("expected ErrScopeDenied for missing tenant, got %v", err)
@@ -313,7 +309,7 @@ func TestEnforceScope_Tenant(t *testing.T) {
 }
 
 func TestEnforceScope_Org(t *testing.T) {
-	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopeOrg}
+	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopeWithinPartition}
 	policy := refPolicy()
 
 	// Tenant only — denied for missing org
@@ -348,7 +344,7 @@ func TestEnforceScope_Org(t *testing.T) {
 }
 
 func TestEnforceScope_User(t *testing.T) {
-	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopeUser}
+	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopeSubject}
 	policy := refPolicy()
 
 	ctx := WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "", ""))
@@ -393,7 +389,7 @@ func TestRegistryDispatch_UsesOnlyAuthenticatedScopeIdentity(t *testing.T) {
 		Namespace: "test",
 		Domain:    "scope",
 		Operation: "OrgRead",
-		Scope:     ScopeOrg,
+		Scope:     ScopeWithinPartition,
 		Request:   (*structpb.Struct)(nil),
 		Response:  (*structpb.Struct)(nil),
 		Func: func(_ context.Context, req proto.Message) (proto.Message, error) {
@@ -442,7 +438,7 @@ func TestRegistryDispatch_NilPolicyFailsClosed(t *testing.T) {
 		Namespace: "test",
 		Domain:    "scope",
 		Operation: "TenantRead",
-		Scope:     ScopeTenant,
+		Scope:     ScopePartition,
 		Request:   (*structpb.Struct)(nil),
 		Response:  (*structpb.Struct)(nil),
 		Func: func(_ context.Context, req proto.Message) (proto.Message, error) {

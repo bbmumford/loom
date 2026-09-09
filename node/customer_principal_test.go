@@ -26,7 +26,7 @@ func customerScopePolicy() rpcscope.PresencePolicyFunc {
 		switch declared {
 		case handlers.ScopeNone:
 			return true, ""
-		case handlers.ScopeOrg:
+		case handlers.ScopeWithinPartition:
 			if partition == "" {
 				return false, "authenticated platform tenant context required"
 			}
@@ -54,7 +54,7 @@ func (h *customerPrincipalProbe) RequiresAuth() bool         { return false }
 func (h *customerPrincipalProbe) AllowedAuthTypes() []string { return nil }
 func (h *customerPrincipalProbe) Scopes() []string           { return nil }
 func (h *customerPrincipalProbe) Scope() handlers.Scope {
-	return handlers.ScopeOrg
+	return handlers.ScopeWithinPartition
 }
 func (h *customerPrincipalProbe) AllowedPartitions() []string { return nil }
 func (h *customerPrincipalProbe) ExecuteRPC(
@@ -282,7 +282,7 @@ func TestRPCServerForwardingPreservesTypedPrincipal(t *testing.T) {
 	}
 }
 
-// platformOnlyProbe is a platform-tier-scoped handler (ScopeTenant): the
+// platformOnlyProbe is a platform-tier-scoped handler (ScopePartition): the
 // presence policy admits it only when the platform axis is present. It counts
 // invocations so a test can assert it was NOT reached.
 type platformOnlyProbe struct{ calls int32 }
@@ -292,7 +292,7 @@ func (h *platformOnlyProbe) Role() string                { return "orbtr.test" }
 func (h *platformOnlyProbe) RequiresAuth() bool          { return false }
 func (h *platformOnlyProbe) AllowedAuthTypes() []string  { return nil }
 func (h *platformOnlyProbe) Scopes() []string            { return nil }
-func (h *platformOnlyProbe) Scope() handlers.Scope       { return handlers.ScopeTenant }
+func (h *platformOnlyProbe) Scope() handlers.Scope       { return handlers.ScopePartition }
 func (h *platformOnlyProbe) AllowedPartitions() []string { return nil }
 func (h *platformOnlyProbe) ExecuteRPC(
 	ctx context.Context,

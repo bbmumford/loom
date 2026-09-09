@@ -153,7 +153,7 @@ func (h *executorTaskProbe) RequiresAuth() bool         { return true }
 func (h *executorTaskProbe) AllowedAuthTypes() []string { return nil }
 func (h *executorTaskProbe) Scopes() []string           { return nil }
 func (h *executorTaskProbe) Scope() handlers.Scope {
-	return handlers.ScopeTenant
+	return handlers.ScopePartition
 }
 
 type blockingExecutorTaskProbe struct {
@@ -169,7 +169,7 @@ func (*blockingExecutorTaskProbe) RequiresAuth() bool         { return true }
 func (*blockingExecutorTaskProbe) AllowedAuthTypes() []string { return nil }
 func (*blockingExecutorTaskProbe) Scopes() []string           { return nil }
 func (*blockingExecutorTaskProbe) Scope() handlers.Scope {
-	return handlers.ScopeTenant
+	return handlers.ScopePartition
 }
 func (*blockingExecutorTaskProbe) AllowedPartitions() []string { return nil }
 func (h *blockingExecutorTaskProbe) ExecuteTask(

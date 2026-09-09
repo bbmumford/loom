@@ -48,34 +48,30 @@ func scopeRefPolicy(platforms ...string) rpcscope.PresencePolicyFunc {
 		switch declared {
 		case ScopeNone:
 			return true, ""
-		case ScopePlatform:
+		case ScopeAllowlisted:
 			if tenant == "" {
 				return false, "authenticated platform access required"
 			}
 			if _, ok := allow[tenant]; !ok {
 				return false, "tenant not in platform allowlist"
 			}
-		case ScopeTenant:
+		case ScopePartition:
 			if tenant == "" {
 				return false, "authenticated platform tenant context required"
 			}
-		case ScopeOrg:
+		case ScopeWithinPartition:
 			if tenant == "" {
 				return false, "authenticated platform tenant context required"
 			}
 			if id.Scope(rpcscope.AxisWithinTransport) == "" {
 				return false, "authenticated organisation context required"
 			}
-		case ScopeUser:
+		case ScopeSubject:
 			if tenant == "" {
 				return false, "authenticated platform tenant context required"
 			}
 			if id.Subject == "" {
 				return false, "authenticated user context required"
-			}
-		case ScopeProfile:
-			if tenant == "" {
-				return false, "authenticated platform tenant context required"
 			}
 		default:
 			return false, "unknown tenant scope (fail-closed sentinel)"
@@ -112,17 +108,17 @@ func ctxWithRPC(m map[string]interface{}) context.Context {
 }
 
 // TestValidateTenantScope_Profile_MissingTenantFailsClosed asserts that the
-// newly-added ScopeProfile arm rejects a request that is not carrying a
+// newly-added ScopePartition arm rejects a request that is not carrying a
 // tenant. Before finding rev-069 this scope value silently matched the empty
 // default (fall-through) — profile-scoped handlers were effectively
 // unenforced when declared via the handlers package.
 func TestValidateTenantScope_Profile_MissingTenantFailsClosed(t *testing.T) {
 	r := newScopedRegistry()
-	h := &stubMeta{name: "billing.getProfile", scope: ScopeProfile}
+	h := &stubMeta{name: "billing.getProfile", scope: ScopePartition}
 
 	err := r.validateScope(ctxWithRPC(nil), h)
 	if err == nil {
-		t.Fatalf("expected ScopeProfile without tenant to fail closed; got nil")
+		t.Fatalf("expected ScopePartition without tenant to fail closed; got nil")
 	}
 	if !strings.Contains(err.Error(), "tenant") {
 		t.Fatalf("expected error to mention tenant requirement; got %v", err)
@@ -135,12 +131,12 @@ func TestValidateTenantScope_Profile_MissingTenantFailsClosed(t *testing.T) {
 // per Quorum ADR-0012 — the dispatch tier only checks the tenant prerequisite.
 func TestValidateTenantScope_Profile_WithTenantPasses(t *testing.T) {
 	r := newScopedRegistry()
-	h := &stubMeta{name: "billing.getProfile", scope: ScopeProfile}
+	h := &stubMeta{name: "billing.getProfile", scope: ScopePartition}
 
 	ctx := rpcscope.WithAuthenticatedIdentity(context.Background(), scopeIdentity("acme", "", ""))
 	err := r.validateScope(ctx, h)
 	if err != nil {
-		t.Fatalf("expected ScopeProfile with tenant to pass; got %v", err)
+		t.Fatalf("expected ScopePartition with tenant to pass; got %v", err)
 	}
 }
 
@@ -200,7 +196,7 @@ func TestValidateTenantScope_None_Passes(t *testing.T) {
 }
 
 func TestValidateTenantScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing.T) {
-	h := &stubMeta{name: "platform.op", scope: ScopePlatform}
+	h := &stubMeta{name: "platform.op", scope: ScopeAllowlisted}
 	identity := func(partitionID string) context.Context {
 		return rpcscope.WithAuthenticatedIdentity(
 			context.Background(),
@@ -246,9 +242,9 @@ func TestValidateTenantScope_LegacyScopes_StillEnforce(t *testing.T) {
 		scope Scope
 		want  string // substring expected in error
 	}{
-		{name: "Tenant", scope: ScopeTenant, want: "tenant context"},
-		{name: "Org", scope: ScopeOrg, want: "tenant context"},
-		{name: "User", scope: ScopeUser, want: "tenant context"},
+		{name: "Tenant", scope: ScopePartition, want: "tenant context"},
+		{name: "Org", scope: ScopeWithinPartition, want: "tenant context"},
+		{name: "User", scope: ScopeSubject, want: "tenant context"},
 	}
 	r := newScopedRegistry()
 	for _, c := range cases {
@@ -291,10 +287,12 @@ func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 		{"Profile", ScopeProfile, "profile"},
 		{"Unknown", ScopeUnknown, "unknown"},
 
-		// The replacements carry their own tokens. Each old spelling above
-		// keeps its own distinct value on purpose: collapsing one onto its
-		// replacement would turn two arms of a consumer's switch into a
-		// duplicate case, so this table is also what proves they stayed apart.
+		// The rows above are the deprecated spellings, which keep their own
+		// distinct tokens for as long as they exist: giving one the value of
+		// its replacement would turn two arms of a consumer's switch into a
+		// duplicate case. The rows below are the replacements. This table is
+		// what proves the two sets stayed apart, and the rows above are the
+		// ones to delete when the deprecated constants go.
 		{"Allowlisted", ScopeAllowlisted, "allowlisted"},
 		{"Partition", ScopePartition, "partition"},
 		{"WithinPartition", ScopeWithinPartition, "within_partition"},
@@ -319,7 +317,7 @@ func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 // (#R-697 Directive-1, "prove enforcement not config-presence") rests on, and
 // it had no direct coverage. The switch arms above return only on failure, so
 // the reconcile is reached on every scope whose context check passes; these
-// cases drive a ScopeTenant handler (partition present) straight into it.
+// cases drive a ScopePartition handler (partition present) straight into it.
 func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 	const reqTenant = "acme"
 	cases := []struct {
@@ -341,7 +339,7 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 	r := newScopedRegistry()
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			h := &stubMeta{name: "tenant.op", scope: ScopeTenant}
+			h := &stubMeta{name: "tenant.op", scope: ScopePartition}
 			ctx := context.Background()
 			if !c.noStamp {
 				ctx = WithTransportPartition(ctx, c.transport)
@@ -369,7 +367,7 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 
 func TestValidateTenantScope_OrganizationIgnoresMutableHints(t *testing.T) {
 	r := newScopedRegistry()
-	h := &stubMeta{name: "org.read", scope: ScopeOrg}
+	h := &stubMeta{name: "org.read", scope: ScopeWithinPartition}
 
 	for _, body := range []map[string]interface{}{
 		{"tenant_id": "orbtr", "org_id": "forged"},
@@ -379,7 +377,7 @@ func TestValidateTenantScope_OrganizationIgnoresMutableHints(t *testing.T) {
 		ctx := WithTransportPartition(ctxWithRPC(body), "orbtr")
 		err := r.validateScope(ctx, h)
 		if err == nil || !strings.Contains(err.Error(), "organisation") {
-			t.Fatalf("mutable org hint %#v must not satisfy ScopeOrg; got %v", body, err)
+			t.Fatalf("mutable org hint %#v must not satisfy ScopeWithinPartition; got %v", body, err)
 		}
 	}
 
@@ -389,6 +387,6 @@ func TestValidateTenantScope_OrganizationIgnoresMutableHints(t *testing.T) {
 	}), "orbtr")
 	ctx = rpcscope.WithAuthenticatedIdentity(ctx, scopeIdentity("orbtr", "acme", ""))
 	if err := r.validateScope(ctx, h); err != nil {
-		t.Fatalf("exact authenticated organisation must satisfy ScopeOrg despite body hints: %v", err)
+		t.Fatalf("exact authenticated organisation must satisfy ScopeWithinPartition despite body hints: %v", err)
 	}
 }

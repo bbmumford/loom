@@ -936,7 +936,7 @@ func TestComposeInvokeTaskUsesHandlerResolvedBeforeAdmission(t *testing.T) {
 func TestComposeInvokeTaskUsesRegistryTenantScopeGate(t *testing.T) {
 	h := &composeTaskProbe{
 		name:  "compose.tenant-task",
-		scope: handlers.ScopeTenant,
+		scope: handlers.ScopePartition,
 		ran:   make(chan context.Context, 1),
 	}
 	rt := composeRuntimeFixture(t, h)
