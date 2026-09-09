@@ -44,13 +44,20 @@ type ScopeTag = scope.ScopeTag
 // scope subpackage is an implementation detail. New tags MUST be added
 // in rpc/scope/scopetag.go so both re-exports pick them up together.
 const (
-	ScopeNone      = scope.ScopeNone      // Opts out of scope enforcement
-	ScopePlatform  = scope.ScopePlatform  // Opaque label; a PresencePolicy assigns meaning
-	ScopeTenant    = scope.ScopeTenant    // Opaque label; a PresencePolicy assigns meaning
-	ScopeOrg       = scope.ScopeOrg       // Opaque label; a PresencePolicy assigns meaning
-	ScopeUser      = scope.ScopeUser      // Opaque label; a PresencePolicy assigns meaning
-	ScopeProfile   = scope.ScopeProfile   // Opaque label; a PresencePolicy assigns meaning
-	ScopePartition = scope.ScopePartition // Opaque label; a PresencePolicy assigns meaning
+	ScopeNone = scope.ScopeNone // Opts out of scope enforcement
+
+	// The declarable tags, each naming what must be present on the identity.
+	ScopeAllowlisted     = scope.ScopeAllowlisted     // pinned axis the policy admits
+	ScopePartition       = scope.ScopePartition       // pinned axis present
+	ScopeWithinPartition = scope.ScopeWithinPartition // pinned + within-transport axes
+	ScopeSubject         = scope.ScopeSubject         // pinned axis + authenticated subject
+
+	// Deprecated aliases, re-exported so a consumer migrates without breaking.
+	ScopePlatform = scope.ScopePlatform // Deprecated: use ScopeAllowlisted
+	ScopeTenant   = scope.ScopeTenant   // Deprecated: use ScopePartition
+	ScopeOrg      = scope.ScopeOrg      // Deprecated: use ScopeWithinPartition
+	ScopeUser     = scope.ScopeUser     // Deprecated: use ScopeSubject
+	ScopeProfile  = scope.ScopeProfile  // Deprecated: use ScopePartition
 	// ScopeUnknown is the fail-closed sentinel installed by mapProtoScope
 	// when it sees a proto enum it does not recognise (including an explicit
 	// TENANT_SCOPE_UNSPECIFIED in a .proto file). It is not a declarable tag;
