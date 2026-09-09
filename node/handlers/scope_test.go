@@ -290,6 +290,15 @@ func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 		{"User", ScopeUser, "user"},
 		{"Profile", ScopeProfile, "profile"},
 		{"Unknown", ScopeUnknown, "unknown"},
+
+		// The replacements carry their own tokens. Each old spelling above
+		// keeps its own distinct value on purpose: collapsing one onto its
+		// replacement would turn two arms of a consumer's switch into a
+		// duplicate case, so this table is also what proves they stayed apart.
+		{"Allowlisted", ScopeAllowlisted, "allowlisted"},
+		{"Partition", ScopePartition, "partition"},
+		{"WithinPartition", ScopeWithinPartition, "within_partition"},
+		{"Subject", ScopeSubject, "subject"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

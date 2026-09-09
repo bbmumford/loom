@@ -49,17 +49,17 @@ func (p scopePresencePolicy) CheckPresence(declared ScopeTag, id AuthenticatedId
 	switch declared {
 	case ScopeNone:
 		return true, ""
-	case ScopePlatform:
+	case ScopeAllowlisted, ScopePlatform:
 		if p.isPlatform(pinned) {
 			return true, ""
 		}
-		return false, "requires platform tier"
-	case ScopeTenant, ScopePartition:
+		return false, "requires a transport-pinned axis the policy admits"
+	case ScopePartition, ScopeTenant, ScopeProfile:
 		if pinned != "" {
 			return true, ""
 		}
 		return false, "requires an authenticated transport-pinned axis"
-	case ScopeOrg:
+	case ScopeWithinPartition, ScopeOrg:
 		if pinned == "" {
 			return false, "requires an authenticated transport-pinned axis"
 		}
@@ -67,17 +67,12 @@ func (p scopePresencePolicy) CheckPresence(declared ScopeTag, id AuthenticatedId
 			return false, "requires an authenticated within-transport axis"
 		}
 		return true, ""
-	case ScopeUser:
+	case ScopeSubject, ScopeUser:
 		if pinned == "" {
 			return false, "requires an authenticated transport-pinned axis"
 		}
 		if subj == "" {
 			return false, "requires an authenticated subject"
-		}
-		return true, ""
-	case ScopeProfile:
-		if pinned == "" {
-			return false, "requires an authenticated transport-pinned axis"
 		}
 		return true, ""
 	default:

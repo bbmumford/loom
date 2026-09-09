@@ -30,15 +30,14 @@ package scope
 // consumer's PresencePolicy does.
 type ScopeTag string
 
-// Canonical scope tags. String values are load-bearing wire tokens — they
-// appear in proto descriptors, telemetry, and the reflection registry, so they
-// MUST NOT change without a coordinated redeploy. loom carries them as opaque
-// labels; only a consumer's PresencePolicy assigns them meaning.
+// Canonical scope tags. String values are load-bearing wire tokens — they appear
+// in proto descriptors, telemetry, and the reflection registry, so a producer and
+// a consumer agree only while they spell them the same way; change one and every
+// peer must be rebuilt together. loom carries them as opaque labels; only a
+// consumer's PresencePolicy assigns them meaning.
 //
-// The rpc package re-exports these as rpc.ScopeTag{None,Platform,Tenant,Org,
-// User,Profile,Partition,Unknown}; the handlers package re-exports them as
-// handlers.Scope{None,Platform,Tenant,Org,User,Profile,Partition,Unknown}.
-// Both surfaces MUST stay 1:1 with this list.
+// The rpc and handlers packages re-export every tag below, deprecated aliases
+// included. Both surfaces MUST stay 1:1 with this list.
 const (
 	// ScopeUnset is the invalid zero value. It means no scope decision was
 	// made and MUST be rejected at registration and fail closed at dispatch.
@@ -52,29 +51,49 @@ const (
 	// is the ONE tag loom admits without consulting a PresencePolicy.
 	ScopeNone ScopeTag = "none"
 
-	// ScopePlatform is an opaque label a PresencePolicy may treat as
-	// "restricted to the platform itself". loom assigns it no meaning.
-	ScopePlatform ScopeTag = "platform"
+	// The declarable tags name what must be PRESENT on the authenticated
+	// identity, which is what a PresencePolicy actually tests — never who the
+	// caller is. scopePresencePolicy evaluates exactly these; a consumer policy
+	// may read them differently, but loom itself assigns them no identity.
 
-	// ScopeTenant is an opaque label a PresencePolicy may treat as "requires a
-	// tenant-bound caller". loom assigns it no meaning.
-	ScopeTenant ScopeTag = "tenant"
+	// ScopeAllowlisted requires the transport-pinned axis to carry a value the
+	// consumer's policy admits. It is the narrowest tag: the policy decides
+	// membership, loom only reports that the axis was present and consulted.
+	ScopeAllowlisted ScopeTag = "allowlisted"
 
-	// ScopeOrg is an opaque label a PresencePolicy may treat as "requires a
-	// customer-organisation-bound caller". loom assigns it no meaning.
-	ScopeOrg ScopeTag = "org"
-
-	// ScopeUser is an opaque label a PresencePolicy may treat as "requires a
-	// user-bound caller". loom assigns it no meaning.
-	ScopeUser ScopeTag = "user"
-
-	// ScopeProfile is an opaque label a PresencePolicy may treat as "requires
-	// a billing-profile-bound caller". loom assigns it no meaning.
-	ScopeProfile ScopeTag = "profile"
-
-	// ScopePartition is an opaque label a PresencePolicy may treat as "requires
-	// a partition-bound caller". loom assigns it no meaning.
+	// ScopePartition requires a non-empty transport-pinned axis and nothing
+	// more — the caller reached us over a transport that established a
+	// partition, whatever that partition denotes to the consumer.
 	ScopePartition ScopeTag = "partition"
+
+	// ScopeWithinPartition requires the transport-pinned axis AND the
+	// within-transport axis, i.e. a caller located inside the established
+	// partition rather than merely inside its transport.
+	ScopeWithinPartition ScopeTag = "within_partition"
+
+	// ScopeSubject requires the transport-pinned axis AND an authenticated
+	// subject, i.e. an individual principal rather than only a partition.
+	ScopeSubject ScopeTag = "subject"
+
+	// The names below are the previous spellings, kept so a consumer migrates
+	// call sites without its tree breaking mid-change. They keep their own
+	// distinct tokens on purpose: giving one the same value as its replacement
+	// would collapse two arms of a consumer's switch into a duplicate case and
+	// break the very trees this staging exists to protect. The presence policy
+	// evaluates each old spelling under the same rule as its replacement, so a
+	// call site behaves identically before and after it is swapped. They are
+	// removed once no consumer references them.
+
+	// Deprecated: use ScopeAllowlisted.
+	ScopePlatform ScopeTag = "platform"
+	// Deprecated: use ScopePartition.
+	ScopeTenant ScopeTag = "tenant"
+	// Deprecated: use ScopeWithinPartition.
+	ScopeOrg ScopeTag = "org"
+	// Deprecated: use ScopeSubject.
+	ScopeUser ScopeTag = "user"
+	// Deprecated: use ScopePartition — it carries the identical presence rule.
+	ScopeProfile ScopeTag = "profile"
 
 	// ScopeUnknown is the fail-closed sentinel installed by rpc.mapProtoScope
 	// when it sees a proto enum it does not recognise (including an explicit
