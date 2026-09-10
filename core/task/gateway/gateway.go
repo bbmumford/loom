@@ -28,9 +28,9 @@ type realClock struct{}
 
 func (realClock) Now() time.Time { return time.Now() }
 
-// PartitionLimiter implements fairness over immutable authenticated owners.
+// PartitionLimiter implements fairness over immutable authenticated partitions.
 type PartitionLimiter interface {
-	Allow(now time.Time, owner ports.ExecutionPartitionKey) bool
+	Allow(now time.Time, partitionKey ports.ExecutionPartitionKey) bool
 }
 
 type noopLimiter struct{}
@@ -54,12 +54,12 @@ type GatewayConfig struct {
 
 // Gateway coordinates task scheduling for a mesh role.
 type Gateway struct {
-	id      string
-	queue   *queue.TaskQueue
-	config  GatewayConfig
-	clock   Clock
-	limiter PartitionLimiter
-	owner   ports.ExecutionPrincipalReader
+	id         string
+	queue      *queue.TaskQueue
+	config     GatewayConfig
+	clock      Clock
+	limiter    PartitionLimiter
+	principals ports.ExecutionPrincipalReader
 
 	offers      chan task.TaskOffer
 	assignments chan task.Assignment
@@ -102,7 +102,7 @@ type taskAdmission struct {
 	submitted         *task.Task
 	current           *task.Task
 	principal         ports.ExecutionPrincipal
-	owner             ports.ExecutionPartitionKey
+	partitionKey      ports.ExecutionPartitionKey
 	pinnedID          string
 	pinnedPartitionID string
 }
@@ -110,7 +110,7 @@ type taskAdmission struct {
 // GatewayOption allows optional configuration injection.
 type GatewayOption func(*Gateway)
 
-// WithLimiter injects a custom authenticated-owner limiter.
+// WithLimiter injects a custom authenticated-partition limiter.
 func WithLimiter(l PartitionLimiter) GatewayOption {
 	return func(g *Gateway) { g.limiter = l }
 }
@@ -125,7 +125,7 @@ func WithClock(clock Clock) GatewayOption {
 // server-private context key established by authenticated transport/session
 // or an explicit service root; no Task field is passed to it.
 func WithExecutionPrincipalReader(reader ports.ExecutionPrincipalReader) GatewayOption {
-	return func(g *Gateway) { g.owner = reader }
+	return func(g *Gateway) { g.principals = reader }
 }
 
 // NewGateway constructs a gateway with sane defaults.
@@ -239,18 +239,18 @@ func (g *Gateway) Enqueue(t *task.Task) error {
 }
 
 // EnqueueAuthorized admits a task only when the injected product reader can
-// read a server-established principal carrying a nonzero opaque owner key.
+// read a server-established principal carrying a nonzero opaque partition key.
 // The principal is retained privately against this exact task pointer for
 // execution-time re-authorization; it is never indexed by Task.ID and no
-// mutable Task field participates in owner construction.
+// mutable Task field participates in partition-key construction.
 func (g *Gateway) EnqueueAuthorized(ctx context.Context, t *task.Task) error {
 	if t == nil {
 		return errors.New("task: enqueue nil task")
 	}
-	if g.owner == nil {
+	if g.principals == nil {
 		return errors.New("task: authorized enqueue requires an execution principal reader")
 	}
-	principal, ok := g.owner.ExecutionPrincipal(ctx)
+	principal, ok := g.principals.ExecutionPrincipal(ctx)
 	if !ok || principal == nil || !principal.PartitionKey().Valid() {
 		return errors.New("task: authorized enqueue requires an established execution principal")
 	}
@@ -265,11 +265,11 @@ func (g *Gateway) enqueue(t *task.Task, principal ports.ExecutionPrincipal, bind
 		return errors.New("task: enqueue requires a nonempty task ID")
 	}
 	now := g.clock.Now()
-	var owner ports.ExecutionPartitionKey
+	var partitionKey ports.ExecutionPartitionKey
 	if bind && principal != nil {
-		owner = principal.PartitionKey()
-		if !g.limiter.Allow(now, owner) {
-			return fmt.Errorf("task: execution owner %s rate limited", owner.Fingerprint())
+		partitionKey = principal.PartitionKey()
+		if !g.limiter.Allow(now, partitionKey) {
+			return fmt.Errorf("task: execution partition %s rate limited", partitionKey.Fingerprint())
 		}
 	}
 
@@ -301,21 +301,21 @@ func (g *Gateway) enqueue(t *task.Task, principal ports.ExecutionPrincipal, bind
 		return errors.New("task: task ID is already admitted")
 	}
 	if bind {
-		if g.partitionOutstanding[owner] >= g.config.MaxOutstandingPerPartition {
+		if g.partitionOutstanding[partitionKey] >= g.config.MaxOutstandingPerPartition {
 			g.mu.Unlock()
 			return fmt.Errorf(
-				"task: execution owner %s outstanding limit reached",
-				owner.Fingerprint(),
+				"task: execution partition %s outstanding limit reached",
+				partitionKey.Fingerprint(),
 			)
 		}
-		g.partitionOutstanding[owner]++
+		g.partitionOutstanding[partitionKey]++
 	}
 
 	admission := &taskAdmission{
 		submitted:         t,
 		current:           owned,
 		principal:         principal,
-		owner:             owner,
+		partitionKey:      partitionKey,
 		pinnedID:          owned.ID,
 		pinnedPartitionID: owned.TenantID,
 	}
@@ -334,7 +334,7 @@ func (g *Gateway) enqueue(t *task.Task, principal ports.ExecutionPrincipal, bind
 	return nil
 }
 
-// EstablishedExecutionPartition returns only the opaque owner key bound to the
+// EstablishedExecutionPartition returns only the opaque partition key bound to the
 // exact admitted task pointer. It is not an ID lookup: a decoded copy or
 // same-ID replacement is intentionally unbound.
 func (g *Gateway) EstablishedExecutionPartition(t *task.Task) (ports.ExecutionPartitionKey, bool) {
@@ -344,15 +344,15 @@ func (g *Gateway) EstablishedExecutionPartition(t *task.Task) (ports.ExecutionPa
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	admission, ok := g.admissionForPointerLocked(t)
-	if !ok || admission.principal == nil || !admission.owner.Valid() {
+	if !ok || admission.principal == nil || !admission.partitionKey.Valid() {
 		return ports.ExecutionPartitionKey{}, false
 	}
-	return admission.owner, true
+	return admission.partitionKey, true
 }
 
 // AuthorizeAssignment re-runs the product principal's current execution
 // authorization for the exact admitted task pointer. It returns a context
-// populated only through product-private keys plus the immutable owner key for
+// populated only through product-private keys plus the immutable partition key for
 // an independent executor-side equality check.
 func (g *Gateway) AuthorizeAssignment(
 	ctx context.Context,
@@ -364,13 +364,13 @@ func (g *Gateway) AuthorizeAssignment(
 	g.mu.Lock()
 	admission, ok := g.admissionsByTask[t]
 	g.mu.Unlock()
-	if !ok || admission.principal == nil || !admission.owner.Valid() {
+	if !ok || admission.principal == nil || !admission.partitionKey.Valid() {
 		return ctx, ports.ExecutionPartitionKey{}, nil, errors.New("task: assignment has no established execution principal")
 	}
 	if t.ID != admission.pinnedID || t.TenantID != admission.pinnedPartitionID {
 		return ctx, ports.ExecutionPartitionKey{}, nil, errors.New("task: assignment identity changed after admission")
 	}
-	owner := admission.owner
+	partitionKey := admission.partitionKey
 	authorized, release, err := admission.principal.AuthorizeExecution(ctx)
 	if err != nil {
 		return ctx, ports.ExecutionPartitionKey{}, nil, fmt.Errorf("task: execution principal rejected assignment: %w", err)
@@ -381,9 +381,9 @@ func (g *Gateway) AuthorizeAssignment(
 		}
 		return ctx, ports.ExecutionPartitionKey{}, nil, errors.New("task: execution principal returned an incomplete authorization lease")
 	}
-	if admission.principal.PartitionKey() != owner {
+	if admission.principal.PartitionKey() != partitionKey {
 		release()
-		return ctx, ports.ExecutionPartitionKey{}, nil, errors.New("task: execution principal owner changed during authorization")
+		return ctx, ports.ExecutionPartitionKey{}, nil, errors.New("task: execution principal partition changed during authorization")
 	}
 
 	// AuthorizeExecution is product code and may block while policy or
@@ -404,11 +404,11 @@ func (g *Gateway) AuthorizeAssignment(
 		release()
 		return ctx, ports.ExecutionPartitionKey{}, nil, errors.New("task: assignment admission changed during authorization")
 	}
-	if identityChanged || admission.owner != owner || admission.principal.PartitionKey() != owner {
+	if identityChanged || admission.partitionKey != partitionKey || admission.principal.PartitionKey() != partitionKey {
 		release()
 		return ctx, ports.ExecutionPartitionKey{}, nil, errors.New("task: assignment identity changed during authorization")
 	}
-	return authorized, owner, release, nil
+	return authorized, partitionKey, release, nil
 }
 
 // Offers exposes the outbound offer stream.
@@ -740,11 +740,11 @@ func (g *Gateway) releaseAdmissionLocked(t *task.Task) {
 		// synchronized read while the task is active.
 		admission.submitted.Status = t.Status
 	}
-	if admission.owner.Valid() {
-		if remaining := g.partitionOutstanding[admission.owner] - 1; remaining > 0 {
-			g.partitionOutstanding[admission.owner] = remaining
+	if admission.partitionKey.Valid() {
+		if remaining := g.partitionOutstanding[admission.partitionKey] - 1; remaining > 0 {
+			g.partitionOutstanding[admission.partitionKey] = remaining
 		} else {
-			delete(g.partitionOutstanding, admission.owner)
+			delete(g.partitionOutstanding, admission.partitionKey)
 		}
 	}
 }

@@ -18,16 +18,16 @@ import (
 type gatewayPrincipalKey struct{}
 
 type gatewayPrincipal struct {
-	owner ports.ExecutionPartitionKey
+	partitionKey ports.ExecutionPartitionKey
 }
 
-func (p gatewayPrincipal) PartitionKey() ports.ExecutionPartitionKey { return p.owner }
+func (p gatewayPrincipal) PartitionKey() ports.ExecutionPartitionKey { return p.partitionKey }
 
 func (p gatewayPrincipal) AuthorizeExecution(
 	ctx context.Context,
 ) (context.Context, func(), error) {
-	if !p.owner.Valid() {
-		return ctx, nil, fmt.Errorf("principal owner is invalid")
+	if !p.partitionKey.Valid() {
+		return ctx, nil, fmt.Errorf("principal partitionKey is invalid")
 	}
 	return context.WithValue(
 		ctx,
@@ -45,11 +45,11 @@ func (gatewayPrincipalReader) ExecutionPrincipal(ctx context.Context) (ports.Exe
 
 func gatewayPrincipalFor(t *testing.T, canonical string) gatewayPrincipal {
 	t.Helper()
-	owner, err := ports.NewExecutionPartitionKey(canonical)
+	partitionKey, err := ports.NewExecutionPartitionKey(canonical)
 	if err != nil {
 		t.Fatalf("NewExecutionPartitionKey: %v", err)
 	}
-	return gatewayPrincipal{owner: owner}
+	return gatewayPrincipal{partitionKey: partitionKey}
 }
 
 func gatewayPrincipalContext(principal gatewayPrincipal) context.Context {
@@ -61,12 +61,12 @@ func gatewayPrincipalContext(principal gatewayPrincipal) context.Context {
 }
 
 type blockingGatewayPrincipal struct {
-	owner   ports.ExecutionPartitionKey
-	entered chan struct{}
-	release <-chan struct{}
+	partitionKey ports.ExecutionPartitionKey
+	entered      chan struct{}
+	release      <-chan struct{}
 }
 
-func (p *blockingGatewayPrincipal) PartitionKey() ports.ExecutionPartitionKey { return p.owner }
+func (p *blockingGatewayPrincipal) PartitionKey() ports.ExecutionPartitionKey { return p.partitionKey }
 
 func (p *blockingGatewayPrincipal) AuthorizeExecution(
 	ctx context.Context,
@@ -94,41 +94,41 @@ func TestEnqueueAuthorizedBindsOnlyTheExactTaskPointer(t *testing.T) {
 	}
 	defer g.Stop()
 
-	principal := gatewayPrincipalFor(t, "realm=test|tenant=app|org=owner|kind=user|id=7|space=default")
+	principal := gatewayPrincipalFor(t, "realm=test|tenant=app|org=partitionKey|kind=user|id=7|space=default")
 	authorized := &task.Task{ID: "same-id", TenantID: "mutable-body-value"}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(principal), authorized); err != nil {
 		t.Fatalf("EnqueueAuthorized: %v", err)
 	}
-	if owner, ok := g.EstablishedExecutionPartition(authorized); !ok || owner != principal.owner {
+	if partitionKey, ok := g.EstablishedExecutionPartition(authorized); !ok || partitionKey != principal.partitionKey {
 		t.Fatalf("authorized binding = (%s, %v), want (%s, true)",
-			owner.Fingerprint(), ok, principal.owner.Fingerprint())
+			partitionKey.Fingerprint(), ok, principal.partitionKey.Fingerprint())
 	}
 
 	collision := *authorized
-	if owner, ok := g.EstablishedExecutionPartition(&collision); ok || owner.Valid() {
-		t.Fatalf("same-ID copy binding = (%s, %v), want empty/false", owner.Fingerprint(), ok)
+	if partitionKey, ok := g.EstablishedExecutionPartition(&collision); ok || partitionKey.Valid() {
+		t.Fatalf("same-ID copy binding = (%s, %v), want empty/false", partitionKey.Fingerprint(), ok)
 	}
 
-	bodyOnly := &task.Task{ID: "body-only", TenantID: "owner"}
+	bodyOnly := &task.Task{ID: "body-only", TenantID: "partitionKey"}
 	if err := g.Enqueue(bodyOnly); err != nil {
 		t.Fatalf("legacy Enqueue: %v", err)
 	}
-	if owner, ok := g.EstablishedExecutionPartition(bodyOnly); ok || owner.Valid() {
-		t.Fatalf("body-only binding = (%s, %v), want empty/false", owner.Fingerprint(), ok)
+	if partitionKey, ok := g.EstablishedExecutionPartition(bodyOnly); ok || partitionKey.Valid() {
+		t.Fatalf("body-only binding = (%s, %v), want empty/false", partitionKey.Fingerprint(), ok)
 	}
 
-	// Mutable body partition data neither selects nor vetoes the opaque owner.
+	// Mutable body partition data neither selects nor vetoes the opaque partitionKey.
 	// Product authorization—not this generic gateway—owns that policy.
 	foreign := &task.Task{ID: "foreign", TenantID: "other"}
 	err = g.EnqueueAuthorized(gatewayPrincipalContext(principal), foreign)
 	if err != nil {
-		t.Fatalf("body claim influenced owner admission: %v", err)
+		t.Fatalf("body claim influenced partitionKey admission: %v", err)
 	}
-	if owner, ok := g.EstablishedExecutionPartition(foreign); !ok || owner != principal.owner {
-		t.Fatal("authorized task did not retain the established opaque owner")
+	if partitionKey, ok := g.EstablishedExecutionPartition(foreign); !ok || partitionKey != principal.partitionKey {
+		t.Fatal("authorized task did not retain the established opaque partitionKey")
 	}
 
-	missing := &task.Task{ID: "missing", TenantID: "owner"}
+	missing := &task.Task{ID: "missing", TenantID: "partitionKey"}
 	err = g.EnqueueAuthorized(context.Background(), missing)
 	if err == nil || !strings.Contains(err.Error(), "established execution principal") {
 		t.Fatalf("missing principal error = %v, want fail-closed error", err)
@@ -149,7 +149,7 @@ func TestAuthorizedBindingMovesToRetryCloneAndReleasesAtTerminal(t *testing.T) {
 	}
 	defer g.Stop()
 
-	principal := gatewayPrincipalFor(t, "realm=test|tenant=app|org=owner|kind=service|id=retry|space=default")
+	principal := gatewayPrincipalFor(t, "realm=test|tenant=app|org=partitionKey|kind=service|id=retry|space=default")
 	original := &task.Task{ID: "retry-task", TenantID: "body"}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(principal), original); err != nil {
 		t.Fatalf("EnqueueAuthorized: %v", err)
@@ -191,9 +191,9 @@ func TestAuthorizedBindingMovesToRetryCloneAndReleasesAtTerminal(t *testing.T) {
 	if retry == original || retry == owned || retry.Attempt != 1 {
 		t.Fatalf("retry = (%p, attempt %d), want distinct pointer attempt 1", retry, retry.Attempt)
 	}
-	if owner, ok := g.EstablishedExecutionPartition(retry); !ok || owner != principal.owner {
+	if partitionKey, ok := g.EstablishedExecutionPartition(retry); !ok || partitionKey != principal.partitionKey {
 		t.Fatalf("retry binding = (%s, %v), want (%s, true)",
-			owner.Fingerprint(), ok, principal.owner.Fingerprint())
+			partitionKey.Fingerprint(), ok, principal.partitionKey.Fingerprint())
 	}
 
 	// A deterministic authorization rejection is terminal and must release
@@ -228,7 +228,7 @@ func TestStopReleasesAuthorizedBindings(t *testing.T) {
 		t.Fatalf("NewGateway: %v", err)
 	}
 
-	principal := gatewayPrincipalFor(t, "realm=test|tenant=app|org=owner|kind=service|id=stop|space=default")
+	principal := gatewayPrincipalFor(t, "realm=test|tenant=app|org=partitionKey|kind=service|id=stop|space=default")
 	admitted := &task.Task{ID: "stop-task", TenantID: "body"}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(principal), admitted); err != nil {
 		t.Fatalf("EnqueueAuthorized: %v", err)
@@ -239,7 +239,7 @@ func TestStopReleasesAuthorizedBindings(t *testing.T) {
 	}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(principal), &task.Task{
 		ID:       "after-stop",
-		TenantID: "owner",
+		TenantID: "partitionKey",
 	}); err == nil || !strings.Contains(err.Error(), "gateway stopped") {
 		t.Fatalf("enqueue after Stop = %v, want stopped error", err)
 	}
@@ -248,7 +248,7 @@ func TestStopReleasesAuthorizedBindings(t *testing.T) {
 func TestAuthorizedAdmissionIsBoundedIndependentlyPerOpaqueOwner(t *testing.T) {
 	g, err := NewGateway(
 		GatewayConfig{
-			ID:                         "owner-limit-test",
+			ID:                         "partitionKey-limit-test",
 			MaxOutstandingPerPartition: 1,
 		},
 		WithExecutionPrincipalReader(gatewayPrincipalReader{}),
@@ -262,14 +262,14 @@ func TestAuthorizedAdmissionIsBoundedIndependentlyPerOpaqueOwner(t *testing.T) {
 	secondOwner := gatewayPrincipalFor(t, "realm=test|tenant=app|org=two|kind=service|id=w|space=ops")
 	first := &task.Task{ID: "first"}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstPartition), first); err != nil {
-		t.Fatalf("first owner admission: %v", err)
+		t.Fatalf("first partitionKey admission: %v", err)
 	}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstPartition), &task.Task{ID: "over-limit"}); err == nil ||
 		!strings.Contains(err.Error(), "outstanding limit") {
-		t.Fatalf("same-owner second admission = %v, want outstanding limit", err)
+		t.Fatalf("same-partitionKey second admission = %v, want outstanding limit", err)
 	}
-	if err := g.EnqueueAuthorized(gatewayPrincipalContext(secondOwner), &task.Task{ID: "other-owner"}); err != nil {
-		t.Fatalf("independent owner was coupled to first owner's limit: %v", err)
+	if err := g.EnqueueAuthorized(gatewayPrincipalContext(secondOwner), &task.Task{ID: "other-partitionKey"}); err != nil {
+		t.Fatalf("independent partitionKey was coupled to first partitionKey's limit: %v", err)
 	}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstPartition), first); err == nil ||
 		!strings.Contains(err.Error(), "already admitted") {
@@ -280,7 +280,7 @@ func TestAuthorizedAdmissionIsBoundedIndependentlyPerOpaqueOwner(t *testing.T) {
 	g.releaseAdmissionLocked(g.admissionsBySubmitted[first].current)
 	g.mu.Unlock()
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstPartition), &task.Task{ID: "after-release"}); err != nil {
-		t.Fatalf("owner slot did not settle after terminal release: %v", err)
+		t.Fatalf("partitionKey slot did not settle after terminal release: %v", err)
 	}
 }
 
@@ -390,10 +390,10 @@ func TestQueueRejectionRollsBackOwnerAndPointerAdmission(t *testing.T) {
 		t.Fatalf("second admission = %v, want queue-full rejection", err)
 	}
 	if _, ok := g.EstablishedExecutionPartition(second); ok {
-		t.Fatal("queue rejection stranded a private owner binding")
+		t.Fatal("queue rejection stranded a private partitionKey binding")
 	}
-	if got := g.partitionOutstanding[principal.owner]; got != 1 {
-		t.Fatalf("owner outstanding = %d, want 1 after rollback", got)
+	if got := g.partitionOutstanding[principal.partitionKey]; got != 1 {
+		t.Fatalf("partitionKey outstanding = %d, want 1 after rollback", got)
 	}
 
 	firstOwned := g.queue.Pop()
@@ -456,7 +456,7 @@ func TestStopDuringBlockingAuthorizationInvalidatesTheResult(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGateway: %v", err)
 	}
-	owner, err := ports.NewExecutionPartitionKey(
+	partitionKey, err := ports.NewExecutionPartitionKey(
 		"realm=test|tenant=app|org=one|kind=service|id=blocked|space=ops",
 	)
 	if err != nil {
@@ -464,9 +464,9 @@ func TestStopDuringBlockingAuthorizationInvalidatesTheResult(t *testing.T) {
 	}
 	release := make(chan struct{})
 	principal := &blockingGatewayPrincipal{
-		owner:   owner,
-		entered: make(chan struct{}),
-		release: release,
+		partitionKey: partitionKey,
+		entered:      make(chan struct{}),
+		release:      release,
 	}
 	admissionCtx := context.WithValue(
 		context.Background(),
