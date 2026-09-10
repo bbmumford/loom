@@ -25,12 +25,12 @@ import (
 
 const (
 	composeTaskCompletionRetention         = 1024
-	defaultComposeTaskOwnerRetention       = 64
+	defaultComposeTaskPartitionRetention   = 64
 	defaultComposeTaskMaxInFlight          = 256
-	defaultComposeTaskOwnerMaxInFlight     = 32
+	defaultComposeTaskPartitionMaxInFlight = 32
 	composeTaskHandleEntropyBytes          = 32
 	composeTaskAdmissionFullError          = "compose task admission limit reached"
-	composeTaskOwnerAdmissionFullError     = "compose task owner admission limit reached"
+	composeTaskPartitionAdmissionFullError = "compose task partitionKey admission limit reached"
 	composeTaskPrincipalMissingError       = "compose task execution principal missing"
 	composeTaskPrincipalAuthorizationError = "compose task execution principal rejected"
 )
@@ -48,11 +48,11 @@ type ComposeTaskCompletion struct {
 
 // composeTaskCompletionRecord is intentionally private. A Deferred handle is
 // correlation, never bearer authority: every stored terminal record retains
-// the immutable opaque owner captured at admission plus the exact request
+// the immutable opaque partitionKey captured at admission plus the exact request
 // digest that produced it.
 type composeTaskCompletionRecord struct {
 	completion    ComposeTaskCompletion
-	owner         ports.ExecutionPartitionKey
+	partitionKey  ports.ExecutionPartitionKey
 	requestDigest [sha256.Size]byte
 	trigger       compose.TriggerInvocation
 	hasTrigger    bool
@@ -152,7 +152,7 @@ func (rt *Runtime) composeInvoke(
 		observer := rt.cfg.ComposeTaskCompletionObserver
 		var (
 			executionCtx     context.Context
-			owner            ports.ExecutionPartitionKey
+			partitionKey     ports.ExecutionPartitionKey
 			releasePrincipal func()
 			err              error
 		)
@@ -162,12 +162,12 @@ func (rt *Runtime) composeInvoke(
 			// same principal here is not only redundant: a writer queued
 			// between two RWMutex reads can block the second read behind
 			// itself while the first lease remains held. Reconfirm the opaque
-			// owner from the authorized context without reacquiring policy.
+			// partitionKey from the authorized context without reacquiring policy.
 			executionCtx = ctx
-			_, owner, err = establishedComposePrincipal(ctx, auth)
+			_, partitionKey, err = establishedComposePrincipal(ctx, auth)
 			releasePrincipal = func() {}
 		} else {
-			executionCtx, owner, releasePrincipal, err =
+			executionCtx, partitionKey, releasePrincipal, err =
 				authorizeComposePrincipal(ctx, auth)
 		}
 		if err != nil {
@@ -179,7 +179,7 @@ func (rt *Runtime) composeInvoke(
 				Err:  err.Error(),
 			}
 		}
-		if admissionErr := rt.tryAcquireComposeTaskSlot(owner); admissionErr != "" {
+		if admissionErr := rt.tryAcquireComposeTaskSlot(partitionKey); admissionErr != "" {
 			releasePrincipal()
 			if releaseTrigger != nil {
 				releaseTrigger()
@@ -195,7 +195,7 @@ func (rt *Runtime) composeInvoke(
 			if releaseTrigger != nil {
 				releaseTrigger()
 			}
-			rt.releaseComposeTaskSlot(owner)
+			rt.releaseComposeTaskSlot(partitionKey)
 			return compose.FunctionResult{
 				Kind: compose.ResultFailure,
 				Err:  "compose task handle generation failed",
@@ -219,7 +219,7 @@ func (rt *Runtime) composeInvoke(
 				defer releaseTrigger()
 			}
 			defer releasePrincipal()
-			defer rt.releaseComposeTaskSlot(owner)
+			defer rt.releaseComposeTaskSlot(partitionKey)
 			defer cancelTask()
 			defer stopRuntimeCancel()
 			result, dispatchErr := dispatchResolvedComposeTask(
@@ -233,7 +233,7 @@ func (rt *Runtime) composeInvoke(
 				taskCtx,
 				task.ID,
 				fn,
-				owner,
+				partitionKey,
 				requestDigest,
 				trigger,
 				result,
@@ -250,7 +250,7 @@ func (rt *Runtime) composeInvoke(
 			if releaseTrigger != nil {
 				releaseTrigger()
 			}
-			rt.releaseComposeTaskSlot(owner)
+			rt.releaseComposeTaskSlot(partitionKey)
 			stopRuntimeCancel()
 			cancelTask()
 			return compose.FunctionResult{Kind: compose.ResultFailure, Err: "node runtime is shutting down"}
@@ -271,22 +271,22 @@ func (rt *Runtime) composeTaskInFlightLimit() int64 {
 	return defaultComposeTaskMaxInFlight
 }
 
-func (rt *Runtime) composeTaskOwnerInFlightLimit() int64 {
+func (rt *Runtime) composeTaskPartitionInFlightLimit() int64 {
 	if rt != nil && rt.cfg.ComposeTaskMaxInFlightPerPartition > 0 {
 		return int64(rt.cfg.ComposeTaskMaxInFlightPerPartition)
 	}
-	return defaultComposeTaskOwnerMaxInFlight
+	return defaultComposeTaskPartitionMaxInFlight
 }
 
-func (rt *Runtime) composeTaskOwnerRetention() int {
+func (rt *Runtime) composeTaskPartitionRetention() int {
 	if rt != nil && rt.cfg.ComposeTaskCompletionRetentionPerPartition > 0 {
 		return rt.cfg.ComposeTaskCompletionRetentionPerPartition
 	}
-	return defaultComposeTaskOwnerRetention
+	return defaultComposeTaskPartitionRetention
 }
 
-func (rt *Runtime) tryAcquireComposeTaskSlot(owner ports.ExecutionPartitionKey) string {
-	if rt == nil || !owner.Valid() {
+func (rt *Runtime) tryAcquireComposeTaskSlot(partitionKey ports.ExecutionPartitionKey) string {
+	if rt == nil || !partitionKey.Valid() {
 		return composeTaskPrincipalMissingError
 	}
 	rt.composeTaskAdmissionMu.Lock()
@@ -299,25 +299,25 @@ func (rt *Runtime) tryAcquireComposeTaskSlot(owner ports.ExecutionPartitionKey) 
 	if rt.composeTaskByPartition == nil {
 		rt.composeTaskByPartition = make(map[ports.ExecutionPartitionKey]int64)
 	}
-	if rt.composeTaskByPartition[owner] >= rt.composeTaskOwnerInFlightLimit() {
+	if rt.composeTaskByPartition[partitionKey] >= rt.composeTaskPartitionInFlightLimit() {
 		rt.composeTaskRejected.Add(1)
-		return composeTaskOwnerAdmissionFullError
+		return composeTaskPartitionAdmissionFullError
 	}
-	rt.composeTaskByPartition[owner]++
+	rt.composeTaskByPartition[partitionKey]++
 	rt.composeTaskInFlight.Add(1)
 	return ""
 }
 
-func (rt *Runtime) releaseComposeTaskSlot(owner ports.ExecutionPartitionKey) {
+func (rt *Runtime) releaseComposeTaskSlot(partitionKey ports.ExecutionPartitionKey) {
 	rt.composeTaskAdmissionMu.Lock()
 	defer rt.composeTaskAdmissionMu.Unlock()
-	if !owner.Valid() || rt.composeTaskByPartition[owner] <= 0 {
-		panic("compose task owner in-flight counter underflow")
+	if !partitionKey.Valid() || rt.composeTaskByPartition[partitionKey] <= 0 {
+		panic("compose task partitionKey in-flight counter underflow")
 	}
-	if rt.composeTaskByPartition[owner] == 1 {
-		delete(rt.composeTaskByPartition, owner)
+	if rt.composeTaskByPartition[partitionKey] == 1 {
+		delete(rt.composeTaskByPartition, partitionKey)
 	} else {
-		rt.composeTaskByPartition[owner]--
+		rt.composeTaskByPartition[partitionKey]--
 	}
 	if remaining := rt.composeTaskInFlight.Add(-1); remaining < 0 {
 		panic("compose task in-flight counter underflow")
@@ -359,7 +359,7 @@ func dispatchResolvedComposeTask(
 }
 
 // LookupComposeTaskCompletion returns a defensive copy only when the current
-// product-private execution principal has the same opaque owner captured at
+// product-private execution principal has the same opaque partitionKey captured at
 // admission. A false result deliberately conflates running, absent, evicted,
 // and unauthorized handles. Handles are correlation, never bearer authority.
 func (rt *Runtime) LookupComposeTaskCompletion(
@@ -369,13 +369,13 @@ func (rt *Runtime) LookupComposeTaskCompletion(
 	if rt == nil || handle == "" || rt.rpcServer == nil {
 		return ComposeTaskCompletion{}, false
 	}
-	_, owner, release, err := authorizeComposePrincipal(ctx, rt.rpcServer.authValidator)
+	_, partitionKey, release, err := authorizeComposePrincipal(ctx, rt.rpcServer.authValidator)
 	if err != nil {
 		return ComposeTaskCompletion{}, false
 	}
 	defer release()
 	record, ok := rt.lookupComposeTaskCompletion(handle)
-	if !ok || record.owner != owner {
+	if !ok || record.partitionKey != partitionKey {
 		return ComposeTaskCompletion{}, false
 	}
 	completion := record.completion
@@ -399,7 +399,7 @@ func (rt *Runtime) recordComposeTaskCompletion(
 	ctx context.Context,
 	handle string,
 	fn compose.FunctionID,
-	owner ports.ExecutionPartitionKey,
+	partitionKey ports.ExecutionPartitionKey,
 	requestDigest [sha256.Size]byte,
 	trigger *compose.TriggerInvocation,
 	taskResult *handlers.TaskResult,
@@ -409,7 +409,7 @@ func (rt *Runtime) recordComposeTaskCompletion(
 	completion := composeTaskCompletion(handle, fn, taskResult, dispatchErr)
 	record := composeTaskCompletionRecord{
 		completion:    completion,
-		owner:         owner,
+		partitionKey:  partitionKey,
 		requestDigest: requestDigest,
 	}
 	if trigger != nil {
@@ -429,13 +429,13 @@ func (rt *Runtime) recordComposeTaskCompletion(
 		return
 	}
 	rt.composeTaskCompletionOrder = append(rt.composeTaskCompletionOrder, completion.Handle)
-	rt.composeTaskCompletionPartition[owner] = append(
-		rt.composeTaskCompletionPartition[owner],
+	rt.composeTaskCompletionPartition[partitionKey] = append(
+		rt.composeTaskCompletionPartition[partitionKey],
 		completion.Handle,
 	)
 	rt.composeTaskCompletions[completion.Handle] = record
-	for len(rt.composeTaskCompletionPartition[owner]) > rt.composeTaskOwnerRetention() {
-		oldest := rt.composeTaskCompletionPartition[owner][0]
+	for len(rt.composeTaskCompletionPartition[partitionKey]) > rt.composeTaskPartitionRetention() {
+		oldest := rt.composeTaskCompletionPartition[partitionKey][0]
 		rt.removeComposeTaskCompletionLocked(oldest)
 	}
 	for len(rt.composeTaskCompletionOrder) > composeTaskCompletionRetention {
@@ -461,14 +461,14 @@ func (rt *Runtime) removeComposeTaskCompletionLocked(handle string) {
 		rt.composeTaskCompletionOrder,
 		handle,
 	)
-	ownerHandles := removeComposeTaskHandle(
-		rt.composeTaskCompletionPartition[record.owner],
+	partitionHandles := removeComposeTaskHandle(
+		rt.composeTaskCompletionPartition[record.partitionKey],
 		handle,
 	)
-	if len(ownerHandles) == 0 {
-		delete(rt.composeTaskCompletionPartition, record.owner)
+	if len(partitionHandles) == 0 {
+		delete(rt.composeTaskCompletionPartition, record.partitionKey)
 	} else {
-		rt.composeTaskCompletionPartition[record.owner] = ownerHandles
+		rt.composeTaskCompletionPartition[record.partitionKey] = partitionHandles
 	}
 }
 
@@ -486,7 +486,7 @@ func authorizeComposePrincipal(
 	ctx context.Context,
 	auth ports.AuthValidator,
 ) (context.Context, ports.ExecutionPartitionKey, func(), error) {
-	principal, owner, err := establishedComposePrincipal(ctx, auth)
+	principal, partitionKey, err := establishedComposePrincipal(ctx, auth)
 	if err != nil {
 		return ctx, ports.ExecutionPartitionKey{}, nil, err
 	}
@@ -498,11 +498,11 @@ func authorizeComposePrincipal(
 		return ctx, ports.ExecutionPartitionKey{}, nil, errors.New(composeTaskPrincipalAuthorizationError)
 	}
 	rechecked, _, recheckErr := establishedComposePrincipal(authorized, auth)
-	if recheckErr != nil || rechecked.PartitionKey() != owner {
+	if recheckErr != nil || rechecked.PartitionKey() != partitionKey {
 		release()
 		return ctx, ports.ExecutionPartitionKey{}, nil, errors.New(composeTaskPrincipalAuthorizationError)
 	}
-	return authorized, owner, release, nil
+	return authorized, partitionKey, release, nil
 }
 
 func establishedComposePrincipal(

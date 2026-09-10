@@ -1963,7 +1963,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		"ledger_append_errors":            rt.vl1Metrics.ledgerAppendErrors,
 		"compose_task_in_flight":          rt.composeTaskInFlight.Load(),
 		"compose_task_in_flight_limit":    rt.composeTaskInFlightLimit(),
-		"compose_task_owner_limit":        rt.composeTaskOwnerInFlightLimit(),
+		"compose_task_owner_limit":        rt.composeTaskPartitionInFlightLimit(),
 		"compose_task_admission_rejected": rt.composeTaskRejected.Load(),
 	}
 
