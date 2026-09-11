@@ -8,6 +8,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/bbmumford/loom/node/handlers"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // ExportToHandlerRegistry registers all handlers from the rpc.Registry
@@ -58,6 +59,13 @@ func (s *registryShim) AllowedAuthTypes() []string  { return nil }
 func (s *registryShim) Scopes() []string            { return nil }
 func (s *registryShim) Scope() handlers.Scope       { return s.handler.Scope }
 func (s *registryShim) AllowedPartitions() []string { return nil }
+
+// Requirement forwards the wrapped handler's declared Requirement, so a handler
+// registered with one is judged by the same authorization arm on the mesh
+// registry as on the HTTP registry. nil when the handler declares none.
+func (s *registryShim) Requirement() *rpcscope.Requirement { return s.handler.Requirement }
+
+var _ handlers.RequirementDeclarer = (*registryShim)(nil)
 
 // RPCHandler interface — decodes req.Payload into the handler's request
 // prototype, calls the handler, and marshals the response. Payload

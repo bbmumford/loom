@@ -80,6 +80,16 @@ type HandlerMeta interface {
 	AllowedPartitions() []string
 }
 
+// RequirementDeclarer is an optional interface a HandlerMeta implements to
+// declare an authorization Requirement (a capability or nexus arm) instead of
+// relying on its scope tag. validateScope judges a non-nil Requirement only
+// through the registry's authorization policy (SetAuthzPolicy), exactly as
+// pkg/rpc EnforceScope does for the HTTP registry; a handler that declares
+// none, or returns nil, is judged by its scope tag as before.
+type RequirementDeclarer interface {
+	Requirement() *scope.Requirement
+}
+
 // RPCHandler handles synchronous request/response operations.
 type RPCHandler interface {
 	HandlerMeta
@@ -238,6 +248,7 @@ type HandlerRegistry struct {
 	roleMiddleware     map[string][]Middleware // per-role middleware
 	globalMiddleware   []Middleware            // runs for all handlers
 	policy             scope.PresencePolicy    // consumer-supplied scope evaluator (nil fails closed)
+	authz              *scope.Policy           // judges a declared Requirement (nil fails such a handler closed)
 	registrationScopes map[*registrationScopeToken]*registrationScopeState
 	pendingHandlers    map[string]*registrationEntry
 	nextScopeID        uint64
@@ -346,6 +357,30 @@ func (r *HandlerRegistry) presencePolicy() scope.PresencePolicy {
 // return proves that path still fails closed. Mirrors rpc.Registry.PresencePolicy.
 func (r *HandlerRegistry) PresencePolicy() scope.PresencePolicy {
 	return r.presencePolicy()
+}
+
+// SetAuthzPolicy configures the policy that judges a handler's declared
+// Requirement (see RequirementDeclarer). It holds the consumer's capability
+// authorizer; loom never imports one. With no policy set, every handler that
+// declares a Requirement is denied. Mirrors rpc.Registry.SetAuthzPolicy.
+func (r *HandlerRegistry) SetAuthzPolicy(p *scope.Policy) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.authz = p
+}
+
+// authzPolicy returns the configured Requirement policy (or nil, which fails
+// every Requirement-declaring handler closed at validateScope).
+func (r *HandlerRegistry) authzPolicy() *scope.Policy {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.authz
+}
+
+// AuthzPolicy returns the configured Requirement policy (or nil), letting a
+// composition root confirm SetAuthzPolicy seeded this mesh registry.
+func (r *HandlerRegistry) AuthzPolicy() *scope.Policy {
+	return r.authzPolicy()
 }
 
 // GetMiddleware returns global middleware followed by role-specific middleware.
@@ -807,10 +842,29 @@ func (r *HandlerRegistry) Count() int {
 // ---------------------------------------------------------------------------
 
 // validateScope checks that the trusted typed context satisfies the
-// handler's partition scope. RPCRequest.Context and task Metadata are deliberately
-// ignored here: both are mutable request data and cannot establish platform,
-// organisation, or user identity.
+// handler's declared Requirement or, when it declares none, its scope tag.
+// RPCRequest.Context and task Metadata are deliberately ignored here: both are
+// mutable request data and cannot establish platform, organisation, or user
+// identity.
 func (r *HandlerRegistry) validateScope(ctx context.Context, h HandlerMeta) error {
+	identity := scope.AuthenticatedIdentityFromContext(ctx)
+
+	// A declared Requirement is judged only by the registry's authorization
+	// policy, through the function pkg/rpc EnforceScope also calls, so the mesh
+	// and HTTP registries admit the same principals; the scope tag is not
+	// consulted. An open requirement admits without the transport check below.
+	if rd, ok := h.(RequirementDeclarer); ok {
+		if req := rd.Requirement(); req != nil {
+			if ok, reason := scope.AuthorizeRequirement(ctx, *req, r.authzPolicy()); !ok {
+				return fmt.Errorf("%w: handler %s %s", scope.ErrDenied, h.Name(), reason)
+			}
+			if req.Kind == scope.ArmOpen {
+				return nil
+			}
+			return reconcileTransportPartition(ctx, identity, h.Name())
+		}
+	}
+
 	declared := h.Scope()
 	if declared == scope.ScopeNone {
 		// Explicit opt-out — the one tag loom admits without a policy.
@@ -819,8 +873,6 @@ func (r *HandlerRegistry) validateScope(ctx context.Context, h HandlerMeta) erro
 	if declared == scope.ScopeUnset {
 		return fmt.Errorf("%w: handler %s has an undeclared scope (ScopeUnset) — declare a scope explicitly", scope.ErrDenied, h.Name())
 	}
-
-	identity := scope.AuthenticatedIdentityFromContext(ctx)
 
 	// loom delegates ALL scope semantics to the consumer-supplied policy. A
 	// nil policy fails CLOSED: without an evaluator loom cannot judge presence
@@ -835,23 +887,26 @@ func (r *HandlerRegistry) validateScope(ctx context.Context, h HandlerMeta) erro
 		return fmt.Errorf("%w: handler %s denied by presence policy: %s", scope.ErrDenied, h.Name(), reason)
 	}
 
-	// Transport-level verification: a session that arrived on a partition-bound
-	// transport (dedicated, or shared via the preamble) must carry an identity
-	// pinned to that same partition. The "default" transport is the unbound
-	// fallback and admits any partition. This reconciliation does not interpret
-	// the scope tag; it compares the transport binding that
-	// WithTransportPartition established against the identity's pinned axis,
-	// both resolved server-side from the same value.
+	return reconcileTransportPartition(ctx, identity, h.Name())
+}
+
+// reconcileTransportPartition denies a session that arrived on a
+// partition-bound transport (dedicated, or shared via the preamble) carrying an
+// identity pinned to a different partition. The "default" transport is the
+// unbound fallback and admits any partition. It does not interpret any scope
+// tag or requirement; it compares the transport binding that
+// WithTransportPartition established against the identity's pinned axis, both
+// resolved server-side from the same value.
+func reconcileTransportPartition(ctx context.Context, identity scope.AuthenticatedIdentity, handler string) error {
 	partitionID := identity.Scope(scope.AxisTransportPinned)
 	transportPartition := TransportPartitionFromContext(ctx)
 	if transportPartition != "" && transportPartition != "default" && partitionID != "" {
 		if transportPartition != partitionID {
 			return fmt.Errorf("%w: transport/authenticated partition mismatch: transport=%q identity=%q for handler %s",
 				scope.ErrDenied,
-				transportPartition, partitionID, h.Name())
+				transportPartition, partitionID, handler)
 		}
 	}
-
 	return nil
 }
 
