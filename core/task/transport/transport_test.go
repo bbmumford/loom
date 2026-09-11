@@ -29,11 +29,11 @@ func TestBindGatewayTransport(t *testing.T) {
 
 	// Enqueue a task and ensure an offer reaches the transport.
 	testTask := &task.Task{
-		ID:       "task-1",
-		TenantID: "tenant",
-		Role:     "role",
-		Type:     "demo",
-		SLO:      task.TaskSLO{},
+		ID:        "task-1",
+		Partition: "tenant",
+		Role:      "role",
+		Type:      "demo",
+		SLO:       task.TaskSLO{},
 	}
 
 	if err := gw.Enqueue(testTask); err != nil {

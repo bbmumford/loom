@@ -1350,48 +1350,6 @@ func SelectExecutionPath(ctx ExecutionContext) ExecutionPath {
 // Context helpers
 // ---------------------------------------------------------------------------
 
-// GetDomainFromContext extracts the domain from RPCRequest.Context map
-// Returns fallback if domain is missing or invalid
-// Domain should be set by HTTP layer: auth.hstles.com → hstles.com
-func GetDomainFromContext(ctx map[string]interface{}, fallback string) string {
-	if ctx == nil {
-		return fallback
-	}
-
-	domain, ok := ctx["domain"]
-	if !ok {
-		return fallback
-	}
-
-	domainStr, ok := domain.(string)
-	if !ok || domainStr == "" {
-		return fallback
-	}
-
-	return domainStr
-}
-
-// GetPartitionIDFromContext is a legacy accessor for the snake_case
-// RPCRequest.Context hint. It is retained for application compatibility only;
-// validateScope never treats this mutable map as identity authority.
-func GetPartitionIDFromContext(ctx map[string]interface{}) string {
-	if ctx == nil {
-		return ""
-	}
-
-	partitionID, ok := ctx["tenant_id"]
-	if !ok {
-		return ""
-	}
-
-	tenantIDStr, ok := partitionID.(string)
-	if !ok {
-		return ""
-	}
-
-	return tenantIDStr
-}
-
 // ── Transport-bound partition context ───────────────────────────────────────
 // These helpers propagate the transport-resolved partition — the consumer-pinned
 // opaque axis value established at the transport layer — through context.Context

@@ -101,8 +101,8 @@ func scopeIdentity(tenant, org, user string) rpcscope.AuthenticatedIdentity {
 	return id
 }
 
-// ctxWithRPC builds a Go context carrying the RPC context map that
-// GetPartitionIDFromContext / getUserIDFromContext read from.
+// ctxWithRPC builds a Go context carrying a mutable RPC context map, the kind
+// of caller-supplied hint validateScope must never read as identity.
 func ctxWithRPC(m map[string]interface{}) context.Context {
 	return context.WithValue(context.Background(), "rpc_context", m)
 }

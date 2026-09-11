@@ -250,7 +250,7 @@ func TestExecutorUsesCanonicalTaskDispatchPipeline(t *testing.T) {
 	defer releaseAuthorization()
 	result := executor.executeTask(ctx, &meshtask.Task{
 		ID:        "task-1",
-		TenantID:  "orbtr",
+		Partition: "orbtr",
 		Tags:      []string{h.Name()},
 		SLO:       meshtask.TaskSLO{Latency: time.Second},
 		CreatedAt: time.Now(),
@@ -295,7 +295,7 @@ func TestExecutorDoesNotTreatMutableTaskTenantAsOwnerIdentity(t *testing.T) {
 
 	result := executor.executeTask(ctx, &meshtask.Task{
 		ID:        "task-body-axis",
-		TenantID:  "mutable-and-unrelated-body-claim",
+		Partition: "mutable-and-unrelated-body-claim",
 		Tags:      []string{h.Name()},
 		SLO:       meshtask.TaskSLO{Latency: time.Second},
 		CreatedAt: time.Now(),
@@ -322,7 +322,7 @@ func TestExecutorRejectsMissingExecutionPrincipalBeforePipeline(t *testing.T) {
 
 	result := executor.executeTask(context.Background(), &meshtask.Task{
 		ID:        "task-no-owner",
-		TenantID:  "body-cannot-mint-owner",
+		Partition: "body-cannot-mint-owner",
 		Tags:      []string{h.Name()},
 		SLO:       meshtask.TaskSLO{Latency: time.Second},
 		CreatedAt: time.Now(),
@@ -382,7 +382,7 @@ func TestExecutorRejectsValidatorWithoutExecutionPrincipalReader(t *testing.T) {
 		context.WithValue(context.Background(), executorTenantKey{}, "orbtr"),
 		&meshtask.Task{
 			ID:        "task-no-reader",
-			TenantID:  "orbtr",
+			Partition: "orbtr",
 			Tags:      []string{h.Name()},
 			SLO:       meshtask.TaskSLO{Latency: time.Second},
 			CreatedAt: time.Now(),
@@ -435,7 +435,7 @@ func TestExecutorCarriesExactGatewayPrincipalFromBackgroundContext(t *testing.T)
 
 	admitted := &meshtask.Task{
 		ID:        "authorized-task",
-		TenantID:  "hstles",
+		Partition: "hstles",
 		Role:      "executor-test",
 		Tags:      []string{h.Name()},
 		SLO:       meshtask.TaskSLO{Latency: time.Second},
@@ -487,7 +487,7 @@ func TestExecutorCarriesExactGatewayPrincipalFromBackgroundContext(t *testing.T)
 	// A same-ID copy does not possess the pointer-bound admission authority.
 	collision := meshtask.Task{
 		ID:        "authorized-task",
-		TenantID:  "hstles",
+		Partition: "hstles",
 		Role:      "executor-test",
 		Tags:      []string{h.Name()},
 		SLO:       meshtask.TaskSLO{Latency: time.Second},
@@ -512,10 +512,10 @@ func TestExecutorCarriesExactGatewayPrincipalFromBackgroundContext(t *testing.T)
 	}
 
 	// The compatibility enqueue is intentionally body-only and also cannot
-	// establish execution authority from Task.TenantID.
+	// establish execution authority from Task.Partition.
 	bodyOnly := &meshtask.Task{
 		ID:        "body-only-task",
-		TenantID:  "hstles",
+		Partition: "hstles",
 		Role:      "executor-test",
 		Tags:      []string{h.Name()},
 		SLO:       meshtask.TaskSLO{Latency: time.Second},
@@ -584,7 +584,7 @@ func TestExecutorRetainsAuthorizationLeaseThroughHandlerDispatch(t *testing.T) {
 	}
 	task := &meshtask.Task{
 		ID:        "lease-through-dispatch",
-		TenantID:  "hstles",
+		Partition: "hstles",
 		Role:      "executor-test",
 		Tags:      []string{handler.Name()},
 		SLO:       meshtask.TaskSLO{Latency: time.Second},

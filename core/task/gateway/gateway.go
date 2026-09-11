@@ -231,7 +231,7 @@ func (g *Gateway) Stop() {
 // Enqueue inserts a task into the gateway queue.
 //
 // Enqueue is the compatibility, body-only path. It deliberately does not bind
-// Task.TenantID as authority, so an executor started without an independently
+// Task.Partition as authority, so an executor started without an independently
 // established principal will reject the task before auth, middleware, or the
 // handler runs. Authenticated producers should use EnqueueAuthorized.
 func (g *Gateway) Enqueue(t *task.Task) error {
@@ -317,7 +317,7 @@ func (g *Gateway) enqueue(t *task.Task, principal ports.ExecutionPrincipal, bind
 		principal:         principal,
 		partitionKey:      partitionKey,
 		pinnedID:          owned.ID,
-		pinnedPartitionID: owned.TenantID,
+		pinnedPartitionID: owned.Partition,
 	}
 	g.admissionsBySubmitted[t] = admission
 	g.admissionsByTask[owned] = admission
@@ -367,7 +367,7 @@ func (g *Gateway) AuthorizeAssignment(
 	if !ok || admission.principal == nil || !admission.partitionKey.Valid() {
 		return ctx, ports.ExecutionPartitionKey{}, nil, errors.New("task: assignment has no established execution principal")
 	}
-	if t.ID != admission.pinnedID || t.TenantID != admission.pinnedPartitionID {
+	if t.ID != admission.pinnedID || t.Partition != admission.pinnedPartitionID {
 		return ctx, ports.ExecutionPartitionKey{}, nil, errors.New("task: assignment identity changed after admission")
 	}
 	partitionKey := admission.partitionKey
@@ -394,7 +394,7 @@ func (g *Gateway) AuthorizeAssignment(
 	current := g.admissionsByTask[t]
 	stopped := g.stopped
 	sameAdmission := current == admission && admission.current == t
-	identityChanged := t.ID != admission.pinnedID || t.TenantID != admission.pinnedPartitionID
+	identityChanged := t.ID != admission.pinnedID || t.Partition != admission.pinnedPartitionID
 	g.mu.Unlock()
 	if stopped {
 		release()
@@ -706,7 +706,7 @@ func (g *Gateway) scheduleRetryLocked(original *task.Task) {
 	delete(g.admissionsByTask, original)
 	admission.current = clone
 	admission.pinnedID = clone.ID
-	admission.pinnedPartitionID = clone.TenantID
+	admission.pinnedPartitionID = clone.Partition
 	g.admissionsByTask[clone] = admission
 	time.AfterFunc(g.config.RequeueDelay, func() {
 		g.mu.Lock()

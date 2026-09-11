@@ -119,7 +119,7 @@ go executor.Start(ctx)
 // Client creates a task (e.g., from HTTP API or internal trigger)
 task := &task.Task{
     ID:       "task-abc123",
-    TenantID: "tenant-xyz",
+    Partition: "partition-xyz",
     Role:     "identity",          // Which executor role can handle this
     Type:     "getUser",           // Task type
     Tags:     []string{"identity.getUser"}, // Handler name

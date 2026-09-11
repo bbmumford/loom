@@ -300,7 +300,7 @@ func (e *Executor) executeAssignment(ctx context.Context, assignment meshtask.As
 
 	// Re-authorize the product-owned principal retained against this exact
 	// task pointer. This is deliberately not derivable from Task.ID,
-	// Task.TenantID, tags or payload. The product principal repopulates its
+	// Task.Partition, tags or payload. The product principal repopulates its
 	// private identity context and may reject current revocation/policy.
 	execBase, expectedPartition, releaseAuthority, authorityErr := e.gateway.AuthorizeAssignment(ctx, assignment.Task)
 	if releaseAuthority != nil {
@@ -396,16 +396,6 @@ func (e *Executor) executeTask(ctx context.Context, task *meshtask.Task, fence s
 			"task owner rejected: established execution principal is missing")
 	}
 
-	metadata := map[string]interface{}{}
-	sessionID := ""
-	if tenantReader, ok := e.auth.(ports.PartitionPrincipalReader); ok {
-		if platformTenant, established := tenantReader.ExecutionPartitionID(ctx); established &&
-			platformTenant != "" {
-			metadata["tenant_id"] = platformTenant
-			sessionID = platformTenant
-		}
-	}
-
 	// Convert mesh task to node task
 	nodeTask := &handlers.Task{
 		ID:          task.ID,
@@ -414,9 +404,8 @@ func (e *Executor) executeTask(ctx context.Context, task *meshtask.Task, fence s
 		Priority:    int(task.SLO.Priority),
 		Deadline:    time.Now().Add(task.SLO.Latency),
 		Idempotency: task.Idempotency,
-		Metadata:    metadata,
+		Metadata:    map[string]interface{}{},
 		CreatedAt:   task.CreatedAt,
-		SessionID:   sessionID,
 		TraceID:     task.ID, // Use task ID for tracing
 	}
 

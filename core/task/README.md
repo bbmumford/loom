@@ -32,7 +32,7 @@ gateway.Start(ctx)
 
 _ = gateway.Enqueue(&task.Task{
     ID:        "t-123",
-    TenantID:  "tenant-1",
+    Partition:  "partition-1",
     Role:      "identity",
     Type:      "verify",
     SLO:       task.TaskSLO{Latency: 500 * time.Millisecond, Priority: 5},
