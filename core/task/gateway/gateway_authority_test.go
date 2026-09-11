@@ -95,7 +95,7 @@ func TestEnqueueAuthorizedBindsOnlyTheExactTaskPointer(t *testing.T) {
 	defer g.Stop()
 
 	principal := gatewayPrincipalFor(t, "realm=test|tenant=app|org=partitionKey|kind=user|id=7|space=default")
-	authorized := &task.Task{ID: "same-id", TenantID: "mutable-body-value"}
+	authorized := &task.Task{ID: "same-id", Partition: "mutable-body-value"}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(principal), authorized); err != nil {
 		t.Fatalf("EnqueueAuthorized: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestEnqueueAuthorizedBindsOnlyTheExactTaskPointer(t *testing.T) {
 		t.Fatalf("same-ID copy binding = (%s, %v), want empty/false", partitionKey.Fingerprint(), ok)
 	}
 
-	bodyOnly := &task.Task{ID: "body-only", TenantID: "partitionKey"}
+	bodyOnly := &task.Task{ID: "body-only", Partition: "partitionKey"}
 	if err := g.Enqueue(bodyOnly); err != nil {
 		t.Fatalf("legacy Enqueue: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestEnqueueAuthorizedBindsOnlyTheExactTaskPointer(t *testing.T) {
 
 	// Mutable body partition data neither selects nor vetoes the opaque partitionKey.
 	// Product authorization—not this generic gateway—owns that policy.
-	foreign := &task.Task{ID: "foreign", TenantID: "other"}
+	foreign := &task.Task{ID: "foreign", Partition: "other"}
 	err = g.EnqueueAuthorized(gatewayPrincipalContext(principal), foreign)
 	if err != nil {
 		t.Fatalf("body claim influenced partitionKey admission: %v", err)
@@ -128,7 +128,7 @@ func TestEnqueueAuthorizedBindsOnlyTheExactTaskPointer(t *testing.T) {
 		t.Fatal("authorized task did not retain the established opaque partitionKey")
 	}
 
-	missing := &task.Task{ID: "missing", TenantID: "partitionKey"}
+	missing := &task.Task{ID: "missing", Partition: "partitionKey"}
 	err = g.EnqueueAuthorized(context.Background(), missing)
 	if err == nil || !strings.Contains(err.Error(), "established execution principal") {
 		t.Fatalf("missing principal error = %v, want fail-closed error", err)
@@ -150,7 +150,7 @@ func TestAuthorizedBindingMovesToRetryCloneAndReleasesAtTerminal(t *testing.T) {
 	defer g.Stop()
 
 	principal := gatewayPrincipalFor(t, "realm=test|tenant=app|org=partitionKey|kind=service|id=retry|space=default")
-	original := &task.Task{ID: "retry-task", TenantID: "body"}
+	original := &task.Task{ID: "retry-task", Partition: "body"}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(principal), original); err != nil {
 		t.Fatalf("EnqueueAuthorized: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestStopReleasesAuthorizedBindings(t *testing.T) {
 	}
 
 	principal := gatewayPrincipalFor(t, "realm=test|tenant=app|org=partitionKey|kind=service|id=stop|space=default")
-	admitted := &task.Task{ID: "stop-task", TenantID: "body"}
+	admitted := &task.Task{ID: "stop-task", Partition: "body"}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(principal), admitted); err != nil {
 		t.Fatalf("EnqueueAuthorized: %v", err)
 	}
@@ -238,8 +238,8 @@ func TestStopReleasesAuthorizedBindings(t *testing.T) {
 		t.Fatal("Stop retained an authorized task binding")
 	}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(principal), &task.Task{
-		ID:       "after-stop",
-		TenantID: "partitionKey",
+		ID:        "after-stop",
+		Partition: "partitionKey",
 	}); err == nil || !strings.Contains(err.Error(), "gateway stopped") {
 		t.Fatalf("enqueue after Stop = %v, want stopped error", err)
 	}
@@ -296,9 +296,9 @@ func TestAdmissionOwnsSnapshotAndRejectsAllExternalPointerReuse(t *testing.T) {
 
 	principal := gatewayPrincipalFor(t, "realm=test|tenant=app|org=one|kind=user|id=7|space=ops")
 	submitted := &task.Task{
-		ID:       "immutable-id",
-		TenantID: "body-tenant",
-		Payload:  []byte(`{"safe":true}`),
+		ID:        "immutable-id",
+		Partition: "body-tenant",
+		Payload:   []byte(`{"safe":true}`),
 	}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(principal), submitted); err != nil {
 		t.Fatalf("EnqueueAuthorized: %v", err)
@@ -312,7 +312,7 @@ func TestAdmissionOwnsSnapshotAndRejectsAllExternalPointerReuse(t *testing.T) {
 	}
 
 	submitted.ID = "caller-mutated-id"
-	submitted.TenantID = "caller-mutated-tenant"
+	submitted.Partition = "caller-mutated-tenant"
 	submitted.Payload[0] = '['
 	owned := g.queue.Pop()
 	if owned == nil {
@@ -321,7 +321,7 @@ func TestAdmissionOwnsSnapshotAndRejectsAllExternalPointerReuse(t *testing.T) {
 	if owned == submitted {
 		t.Fatal("queue retained caller-owned pointer")
 	}
-	if owned.ID != "immutable-id" || owned.TenantID != "body-tenant" ||
+	if owned.ID != "immutable-id" || owned.Partition != "body-tenant" ||
 		string(owned.Payload) != `{"safe":true}` {
 		t.Fatalf("owned snapshot changed with caller: %+v payload=%s", owned, owned.Payload)
 	}
@@ -335,9 +335,9 @@ func TestAdmissionOwnsSnapshotAndRejectsAllExternalPointerReuse(t *testing.T) {
 		t.Fatal("offer exposed gateway-owned pointer")
 	}
 	offer.Task.ID = "offer-mutated-id"
-	offer.Task.TenantID = "offer-mutated-tenant"
+	offer.Task.Partition = "offer-mutated-tenant"
 	state := g.open["immutable-id"]
-	if state == nil || state.task.ID != "immutable-id" || state.task.TenantID != "body-tenant" {
+	if state == nil || state.task.ID != "immutable-id" || state.task.Partition != "body-tenant" {
 		t.Fatalf("offer mutation reached gateway state: %+v", state)
 	}
 }
@@ -353,7 +353,7 @@ func TestAssignmentIdentityMutationRejectsBeforePrincipalAuthorization(t *testin
 	defer g.Stop()
 
 	principal := gatewayPrincipalFor(t, "realm=test|tenant=app|org=one|kind=service|id=w|space=ops")
-	submitted := &task.Task{ID: "pinned-id", TenantID: "pinned-tenant"}
+	submitted := &task.Task{ID: "pinned-id", Partition: "pinned-tenant"}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(principal), submitted); err != nil {
 		t.Fatalf("EnqueueAuthorized: %v", err)
 	}
@@ -473,7 +473,7 @@ func TestStopDuringBlockingAuthorizationInvalidatesTheResult(t *testing.T) {
 		gatewayPrincipalKey{},
 		ports.ExecutionPrincipal(principal),
 	)
-	submitted := &task.Task{ID: "blocked-authorization", TenantID: "body"}
+	submitted := &task.Task{ID: "blocked-authorization", Partition: "body"}
 	if err := g.EnqueueAuthorized(admissionCtx, submitted); err != nil {
 		t.Fatalf("EnqueueAuthorized: %v", err)
 	}

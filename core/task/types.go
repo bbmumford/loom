@@ -34,7 +34,7 @@ type TaskSLO struct {
 // Task encapsulates a unit of work that can be executed by a mesh executor.
 type Task struct {
 	ID          string               `json:"id"`
-	TenantID    string               `json:"tenantId"`
+	Partition   string               `json:"partition"`
 	Role        string               `json:"role"`
 	Type        string               `json:"type"`
 	Tags        []string             `json:"tags,omitempty"`
