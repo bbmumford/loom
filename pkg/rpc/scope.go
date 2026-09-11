@@ -73,10 +73,11 @@ func RPCContextValue(ctx context.Context, key string) (string, bool) {
 
 // TenantFromContext returns the "tenantId" an in-process writer stamped via
 // WithRPCContext, or "". It is never taken from the wire, and it names the
-// node's transport-pinned value, not a data partition: read
-// AuthenticatedScopeIdentityFromContext(ctx).Partition() to select data.
+// node's transport-pinned value, not a data partition.
 //
-// Deprecated: read the typed identity instead.
+// Deprecated: select data on AuthenticatedScopeIdentityFromContext(ctx).Partition(),
+// and gate a platform-plane operation on an explicit capability the caller
+// holds, not on this value.
 func TenantFromContext(ctx context.Context) string {
 	return rpcContextMap(ctx)["tenantId"]
 }
@@ -87,14 +88,6 @@ func TenantFromContext(ctx context.Context) string {
 // Deprecated: read AuthenticatedScopeIdentityFromContext(ctx).Subject.
 func UserFromContext(ctx context.Context) string {
 	return rpcContextMap(ctx)["userId"]
-}
-
-// OrgFromContext returns the "orgId" an in-process writer stamped via
-// WithRPCContext, or "".
-//
-// Deprecated: read AuthenticatedScopeIdentityFromContext(ctx).Partition().
-func OrgFromContext(ctx context.Context) string {
-	return rpcContextMap(ctx)["orgId"]
 }
 
 // AuthenticatedScopeIdentity is the typed, server-established identity used by
