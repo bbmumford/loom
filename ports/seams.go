@@ -211,17 +211,16 @@ type BootstrapInfo struct {
 	PublicIP    string
 }
 
-// VerifyBootstrapFunc abstracts the hstles.anchor.VerifyBootstrap client
-// call previously hard-coded in the mesh runtime (§0.3 #7 — the coupling
-// the original cut-list missed). Non-anchor nodes invoke it during VL1
-// bootstrap. Semantics the implementation and caller preserve exactly:
+// VerifyBootstrapFunc is the bootstrap admission check non-anchor nodes
+// invoke during VL1 bootstrap; anchor.Client is the implementation that asks
+// an anchor-capable node. Semantics the implementation and caller preserve
+// exactly:
 //   - err != nil (verifier unreachable) → graceful ALLOW — the Noise
 //     handshake is the real security boundary, availability wins;
 //   - allowed=false → reject the join with 403 and reason;
 //   - anchor-capable nodes skip the call entirely.
 //
-// nil = always allow (standalone/dev meshes). The HSTLES implementation
-// performs the rpc.Call against its anchor domain proto.
+// nil = always allow (standalone/dev meshes).
 type VerifyBootstrapFunc func(ctx context.Context, info BootstrapInfo) (allowed bool, reason string, err error)
 
 // AddressSource identifies a reach address discovery source, priority-ordered

@@ -1283,9 +1283,9 @@ func Initialize(cfg Config) (*Runtime, error) {
 	// Step 8: Anchor Service — start if anchor keys are configured.
 	// All anchor-capable nodes generate snapshots independently (no leader election).
 	if rt.isAnchorCapable() {
-		// Register injected external RPC domains (e.g. the HSTLES anchor
-		// domain providing hstles.anchor.VerifyBootstrap) so other nodes can
-		// dispatch them here. Each registrar runs against a fresh registry
+		// Register injected external RPC domains (e.g. anchor.Register, which
+		// answers loom.anchor.VerifyBootstrap) so other nodes can dispatch
+		// them here. Each registrar runs against a fresh registry
 		// which is then exported to the handler registry.
 		if registry := rt.Registry(); registry != nil && len(rt.cfg.RegisterDomains) > 0 {
 			rpcRegistry := rpc.NewRegistry()
@@ -3982,8 +3982,8 @@ func (rt *Runtime) handleVL1Upgrade(w http.ResponseWriter, r *http.Request) {
 		r.RemoteAddr, clientUDPPort, clientFailoverPort)
 
 	// Auth: anchor-capable nodes validate locally, thin apps delegate to
-	// the injected verifier (the HSTLES impl performs the
-	// hstles.anchor.VerifyBootstrap rpc.Call; nil = allow all).
+	// the injected verifier (anchor.Client calls loom.anchor.VerifyBootstrap
+	// on an anchor-capable node; nil = allow all).
 	if !rt.isAnchorCapable() && rt.cfg.VerifyBootstrap != nil {
 		var clientRolesList []string
 		if clientRoles != "" {
