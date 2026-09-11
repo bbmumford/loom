@@ -9,18 +9,15 @@ package scope
 // itself is neutral: an AuthenticatedIdentity's Scopes marshal as a repeated
 // pb.ScopeAxis{Name,Value} map (pkg/dispatch) and reconstruct generically from
 // it (node/rpc.go bindAuthenticatedPrincipal); loom binds no axis to a named
-// scalar proto field. loom assigns these names no meaning beyond "the value that
-// travelled under this axis name" — a consumer's PresencePolicy and its
-// ports.TransportAxisPin decide which axis pins against the transport-established
-// partition. The names below describe an axis by its TRANSPORT RELATIONSHIP, not by
-// an identity level: they are the vocabulary a producer stamps and a consumer
-// reads by, and both sides must agree on the string.
+// scalar proto field. The received values are the sending peer's assertion; a
+// consumer's ports.PrincipalAdmitter decides whether a transport may carry them.
+// The names below describe an axis by its TRANSPORT RELATIONSHIP, not by an
+// identity level: they are the vocabulary a producer stamps and a consumer reads
+// by, and both sides must agree on the string.
 const (
-	// AxisTransportPinned is the axis a consumer's ports.TransportAxisPin may
-	// name as the one reconciled against the transport-established partition on
-	// receive (the cross-partition forge gate). node/handlers validateScope
-	// reconciles it against the transport binding; WithTransportPartition stamps it
-	// from the server-resolved value.
+	// AxisTransportPinned is the axis the reference presence policy reads and
+	// node/handlers validateScope reconciles against the transport binding;
+	// WithTransportPartition stamps it from the server-resolved value.
 	AxisTransportPinned = "transport_pinned"
 
 	// AxisWithinTransport is the within-transport axis: it is deliberately NOT

@@ -7,6 +7,7 @@ package node
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -84,11 +85,18 @@ func (customerPrincipalValidator) WithAuthenticatedPrincipal(
 	return rpcscope.WithAuthenticatedPrincipal(ctx, principal)
 }
 
-// TransportPinnedAxis names the platform-partition axis as the one the RPC server
-// gates against the transport partition (ports.TransportAxisPin) — the consumer
-// supplies the name; loom never hard-codes it.
-func (customerPrincipalValidator) TransportPinnedAxis() string {
-	return rpcscope.AxisTransportPinned
+// AdmitPrincipal is a consumer admitter with the rule HSTLES applies: the
+// pinned axis a peer asserts must equal the transport partition it arrived on.
+// loom applies no rule of its own; this one lives in the consumer.
+func (customerPrincipalValidator) AdmitPrincipal(
+	_ context.Context,
+	transportPartition string,
+	principal rpcscope.AuthenticatedPrincipal,
+) error {
+	if pinned := principal.Identity().Scope(rpcscope.AxisTransportPinned); pinned != transportPartition {
+		return fmt.Errorf("pinned axis %q does not match the transport", pinned)
+	}
+	return nil
 }
 
 func customerPrincipalRequest() *pb.RPCRequest {
@@ -101,7 +109,8 @@ func customerPrincipalRequest() *pb.RPCRequest {
 				{Name: rpcscope.AxisTransportPinned, Value: "orbtr"},
 				{Name: rpcscope.AxisWithinTransport, Value: "org-A"},
 			},
-			Scopes: []string{"org.read", "org.write"},
+			Scopes:    []string{"org.read", "org.write"},
+			Partition: "org-A",
 		},
 	}
 }
@@ -127,6 +136,7 @@ func TestRPCServerBindsTypedPrincipalFromTenantTransport(t *testing.T) {
 	}
 	if identity := probe.got.Identity(); identity.Scope(rpcscope.AxisTransportPinned) != "orbtr" ||
 		identity.Scope(rpcscope.AxisWithinTransport) != "org-A" ||
+		identity.Partition() != "org-A" ||
 		identity.Subject != "user-A" {
 		t.Fatalf("handler identity = %#v", identity)
 	}
@@ -146,29 +156,29 @@ func TestRPCServerRejectsPrincipalTamperingBeforeHandler(t *testing.T) {
 	}{
 		{
 			// Forge: a peer bound to transport orbtr presents a principal whose
-			// pinned (platform-partition) axis is another partition. The gate rejects it.
+			// pinned axis is another partition. The consumer admitter rejects it.
 			name: "pinned-axis forge",
 			mutate: func(req *pb.RPCRequest) {
 				req.Principal.Axes[0].Value = "foreign-platform"
 			},
 			transport: "orbtr",
-			want:      "pinned-axis mismatch",
+			want:      "does not match the transport",
 		},
 		{
 			// Forge by omission: the pinned axis is absent, so its value cannot
 			// equal the transport partition.
 			name: "pinned-axis absent",
 			mutate: func(req *pb.RPCRequest) {
-				req.Principal.Axes = req.Principal.Axes[1:] // drop platform_tenant
+				req.Principal.Axes = req.Principal.Axes[1:] // drop the pinned axis
 			},
 			transport: "orbtr",
-			want:      "pinned-axis mismatch",
+			want:      "does not match the transport",
 		},
 		{
 			name:      "unbound transport",
 			mutate:    func(*pb.RPCRequest) {},
 			transport: "default",
-			want:      "tenant-bound transport",
+			want:      "partition-bound transport",
 		},
 	}
 

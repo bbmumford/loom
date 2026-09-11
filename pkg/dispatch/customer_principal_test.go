@@ -32,7 +32,7 @@ func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing
 			{Name: rpcscope.AxisWithinTransport, Value: "org-A"},
 		},
 		Subject: "user-A",
-	}
+	}.WithPartition("org-A")
 	principal, err := rpcscope.NewAuthenticatedPrincipal(
 		identity,
 		[]string{"orbtr.io.plugins.read", "orbtr.io.plugins.publish"},
@@ -61,6 +61,9 @@ func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing
 	}
 	if got := req.Principal.Subject; got != "user-A" {
 		t.Fatalf("subject = %q", got)
+	}
+	if got := req.Principal.GetPartition(); got != "org-A" {
+		t.Fatalf("partition = %q, want org-A", got)
 	}
 	if got := req.Principal.Scopes; len(got) != 2 ||
 		got[0] != "orbtr.io.plugins.read" ||
