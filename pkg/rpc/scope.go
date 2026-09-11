@@ -13,15 +13,15 @@ import (
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
-// rpcContextKey is the typed key used to stamp the RPCRequest.Context map
-// onto a Go context.Context. Receivers (BidiRPC server, local dispatch,
-// HTTP bridge) call WithRPCContext to surface the wire-side context map
-// to in-process handlers + scope enforcement.
+// rpcContextKey is the typed key for the in-process string map WithRPCContext
+// stamps onto a Go context.Context. Only server code in the calling process
+// writes it; loom's receive path does not copy the wire request map into it.
 type rpcContextKey struct{}
 
-// WithRPCContext stamps the RPCRequest.Context map onto ctx so receivers
-// can read tenantId/userId/orgId/opClass via the *FromContext helpers
-// in this package.
+// WithRPCContext stamps an in-process string map onto ctx. The readers in this
+// package (RPCContextValue, OpClassFromContext, ScopesFromContext and the
+// identity accessors below) read it, and bridgeWireIdentity copies its
+// "userId" and "scopes" keys onto an outgoing mesh request.
 //
 // This map is caller/wire data, not scope authority. EnforceScope deliberately
 // ignores it and reads only the typed identity installed through
@@ -60,8 +60,8 @@ func rpcContextMap(ctx context.Context) map[string]string {
 // RPCContextValue reads one value stamped into the rpc context by WithRPCContext. It is the exported
 // read counterpart to WithRPCContext for a caller that threads a custom key across the mesh dispatch
 // (e.g. a surface session ticket the target's EnforceScope re-verifies); ok is false when the key is
-// absent. Unlike the tenant/user/org accessors this is a plain passthrough of author-set metadata and
-// confers no authority on its own — the reader must still validate whatever it finds.
+// absent. It is a plain passthrough of author-set metadata and confers no authority on its own — the
+// reader must still validate whatever it finds.
 func RPCContextValue(ctx context.Context, key string) (string, bool) {
 	m := rpcContextMap(ctx)
 	if m == nil {
@@ -71,38 +71,28 @@ func RPCContextValue(ctx context.Context, key string) (string, bool) {
 	return v, ok
 }
 
-// TenantFromContext extracts tenantId from the rpc context.
-// Returns "" when no tenant has been stamped.
+// TenantFromContext returns the "tenantId" an in-process writer stamped via
+// WithRPCContext, or "". It is never taken from the wire, and it names the
+// node's transport-pinned value, not a data partition: read
+// AuthenticatedScopeIdentityFromContext(ctx).Partition() to select data.
 //
-// 🛑 THERE IS DELIBERATELY NO WRITE-SIDE COUNTERPART TO THIS, AND THAT
-// ABSENCE IS DOCUMENTED HERE BECAUSE THIS IS WHERE PEOPLE LOOK FOR IT
-// (#R-1598 ③).
-//
-// On the SEND side, dispatch stamps tenantId from the process-wide platform
-// tenant (HWPCaller.SetPlatformTenant) and copies ONLY scopes and userId out
-// of the caller's context — so a partition placed in a ctx before an outgoing
-// call is SILENTLY IGNORED and the RPC goes out carrying the platform
-// identity. That is #R-782/#K-32's anti-spoof property, not an oversight: a
-// caller-supplied context must not be able to choose the authoritative
-// tenant.
-//
-// So the value this returns is the PLATFORM tenant, and it authenticates the
-// calling node — it is not the end user's org and must not be used as an
-// authorisation subject. The authenticated principal travels as userId +
-// scopes; per platform §4.2 (ruled #R-1598 ①) a handler that needs the
-// end-user partition RESOLVES IT SERVER-SIDE from that principal, the same way
-// §4.6 requires ingress routing be a server-side lookup rather than a token
-// decode.
+// Deprecated: read the typed identity instead.
 func TenantFromContext(ctx context.Context) string {
 	return rpcContextMap(ctx)["tenantId"]
 }
 
-// UserFromContext extracts userId (if set by upstream auth middleware).
+// UserFromContext returns the "userId" an in-process writer stamped via
+// WithRPCContext, or "".
+//
+// Deprecated: read AuthenticatedScopeIdentityFromContext(ctx).Subject.
 func UserFromContext(ctx context.Context) string {
 	return rpcContextMap(ctx)["userId"]
 }
 
-// OrgFromContext extracts orgId (if set by upstream session middleware).
+// OrgFromContext returns the "orgId" an in-process writer stamped via
+// WithRPCContext, or "".
+//
+// Deprecated: read AuthenticatedScopeIdentityFromContext(ctx).Partition().
 func OrgFromContext(ctx context.Context) string {
 	return rpcContextMap(ctx)["orgId"]
 }

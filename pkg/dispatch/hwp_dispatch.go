@@ -115,11 +115,10 @@ type HWPCaller struct {
 	// counter in streamid.go.nextDynamicStreamID to prevent collisions
 	// between HWPCaller and StreamPool allocators sharing the same
 	// session. H-Dispatch-StreamIDCollision fix.)
-	stopCh         chan struct{}
-	bmu            sync.RWMutex               // separate lock for breakers (reduces contention)
-	breakers       map[string]*CircuitBreaker // nodeID → breaker (per-node, not per-role)
-	metrics        *RPCMetrics
-	platformTenant string // HSTLES platform tenant (e.g., "orbtr", "hstles") — injected into every RPC context
+	stopCh   chan struct{}
+	bmu      sync.RWMutex               // separate lock for breakers (reduces contention)
+	breakers map[string]*CircuitBreaker // nodeID → breaker (per-node, not per-role)
+	metrics  *RPCMetrics
 
 	// routeCache memoizes the result of finder.FindRoutes per
 	// (role, method) for routeCacheTTL. FindRoutes walks the latency +
@@ -183,25 +182,13 @@ const defaultProbeTimeout = 10 * time.Second
 // remaining 7 s of probeCtx are available for the dynamic-stream attempt.
 const bidiProbeTimeout = 3 * time.Second
 
-// SetPlatformTenant sets the platform tenant ID that is propagated in every
-// outgoing RPC context map. This ensures HSTLES handlers with Scope
-// enforcement accept the call and scope it to the correct platform tenant.
+// SetPlatformTenant has no effect. A receiver takes the calling node's
+// partition from the authenticated transport (node/rpc.go reads
+// TransportPartitionFromContext) and reads no partition value from the
+// request context map, so nothing is stamped there.
 //
-// The platform tenant is the HSTLES-level app identity (e.g., "orbtr"),
-// NOT the end-user's org ID. Set once at startup from cfg.Apps.App.TenantID.
-//
-// 🛑 THIS IS THE ONLY WAY tenantId REACHES THE WIRE, AND THERE IS NO
-// PER-CALL OVERRIDE (#R-1598 ③). buildRPCRequestCtx copies only scopes and
-// userId out of the caller's context, so a tenant placed in a ctx before an
-// outgoing call is silently ignored — deliberately, per #R-782/#K-32, so a
-// caller-supplied context cannot choose the authoritative tenant.
-//
-// A caller that needs to act for an end-user tenant does NOT set it here.
-// The authenticated principal travels as userId + scopes and the tenant is
-// resolved SERVER-SIDE at the handler (platform §4.2, ruled #R-1598 ①).
-func (c *HWPCaller) SetPlatformTenant(tenantID string) {
-	c.platformTenant = tenantID
-}
+// Deprecated: delete the call.
+func (c *HWPCaller) SetPlatformTenant(string) {}
 
 // SessionFinder resolves a role + handler to an HWPSession.
 // Implemented by the ConnectionManager which tracks all peer sessions.
@@ -522,7 +509,7 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining = time.Until(deadline)
 	}
-	baseReq := buildRPCRequestCtx(ctx, role, method, payload, remaining, c.platformTenant)
+	baseReq := buildRPCRequestCtx(ctx, role, method, payload, remaining)
 
 	// Set absolute deadline for per-hop TTL
 	if remaining > 0 {
@@ -756,7 +743,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 			remaining = time.Until(deadline)
 		}
 		gradeTimeout := rpcTimeoutForProtocol(session.Protocol())
-		bidiReq := buildRPCRequestCtx(bidiCtx, role, method, payload, remaining, c.platformTenant, gradeTimeout)
+		bidiReq := buildRPCRequestCtx(bidiCtx, role, method, payload, remaining, gradeTimeout)
 		if resp, ok, err := c.finder.CallViaBidi(bidiCtx, nodeID, bidiReq); ok {
 			if err != nil {
 				// Inner-deadline-only: the 10s defaultProbeTimeout cap
@@ -813,7 +800,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 		remaining = time.Until(deadline)
 	}
 	rpcTimeout := rpcTimeoutForProtocol(session.Protocol())
-	req := buildRPCRequestCtx(ctx, role, method, payload, remaining, c.platformTenant, rpcTimeout)
+	req := buildRPCRequestCtx(ctx, role, method, payload, remaining, rpcTimeout)
 	reqData, err := pb.MarshalRequest(req)
 	if err != nil {
 		return nil, nodeID, fmt.Errorf("marshal: %w", err)
@@ -861,17 +848,11 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 }
 
 // buildRPCRequest creates an RPCRequest with deadline propagation and unique ID.
-// platformTenant is injected as "tenantId" in the RPC context map so receiving
-// handlers can enforce Scope (e.g., HSTLES identity handlers require partition context).
 // gradeTimeout overrides the default if positive (from session grade).
-func buildRPCRequest(role, method string, payload []byte, remaining time.Duration, platformTenant string, gradeTimeout ...time.Duration) *pb.RPCRequest {
-	return buildRPCRequestCtx(nil, role, method, payload, remaining, platformTenant, gradeTimeout...)
+func buildRPCRequest(role, method string, payload []byte, remaining time.Duration, gradeTimeout ...time.Duration) *pb.RPCRequest {
+	return buildRPCRequestCtx(nil, role, method, payload, remaining, gradeTimeout...)
 }
 
-// buildRPCRequestCtx is the ctx-aware variant. Use it when the caller
-// has a Go context carrying opClass via WithOpClass — the hint gets
-// propagated to req.Context["opClass"] so the receiver's stream
-// priority + scheduling matches the sender's intent.
 // CallNode implements TargetedCaller: dispatch to ONE named node, or fail.
 //
 // This is deliberately NOT a variant of Call. Call resolves a role to up to
@@ -905,7 +886,7 @@ func (c *HWPCaller) CallNode(ctx context.Context, nodeID, role, method string, p
 	if deadline, ok := ctx.Deadline(); ok {
 		remaining = time.Until(deadline)
 	}
-	req := buildRPCRequestCtx(ctx, role, method, payload, remaining, c.platformTenant)
+	req := buildRPCRequestCtx(ctx, role, method, payload, remaining)
 	if remaining > 0 {
 		req.Deadline = time.Now().Add(remaining).UnixNano()
 	}
@@ -930,7 +911,11 @@ func (c *HWPCaller) CallNode(ctx context.Context, nodeID, role, method string, p
 	return resp.Payload, nil
 }
 
-func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte, remaining time.Duration, platformTenant string, gradeTimeout ...time.Duration) *pb.RPCRequest {
+// buildRPCRequestCtx is the ctx-aware variant of buildRPCRequest. It copies
+// the opClass hint (WithOpClass) to req.Context["opClass"], which the
+// receiver's stream priority reads, and projects the caller's sealed
+// principal onto req.Principal.
+func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte, remaining time.Duration, gradeTimeout ...time.Duration) *pb.RPCRequest {
 	timeout := callerRequestTTL
 	if len(gradeTimeout) > 0 && gradeTimeout[0] > 0 {
 		timeout = gradeTimeout[0]
@@ -940,24 +925,15 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 	}
 	id := strconv.FormatUint(atomic.AddUint64(&requestIDCounter, 1), 36)
 	rpcCtx := map[string]string{"role": role}
-	// tenantId is the PLATFORM identity from startup config — never the end
-	// user's org, and never taken from ctx. See SetPlatformTenant and
-	// rpc.TenantFromContext; a caller needing an end-user partition relies on
-	// server-side resolution from userId+scopes (platform §4.2, #R-1598 ①).
-	if platformTenant != "" {
-		rpcCtx["tenantId"] = platformTenant
-	}
 	if oc := opClassFromContext(ctx); oc != "" {
 		rpcCtx["opClass"] = oc
 	}
-	// #K-32: propagate the caller's authenticated scope-list + userId across
-	// the mesh hop so node-side scope enforcement (RequiredScopes) and
-	// userId-scoped handlers see them. SELECTIVE by design (R-782 security
-	// constraint): copy ONLY these two named keys — never a blanket
-	// rpcContextMap merge — so a caller-supplied ctx cannot override the
-	// authoritative role/tenantId set above (tenant-spoof). scopes is
-	// space-joined per the RFC-6749 §3.3 `scope` convention (space-free
-	// tokens), decoded symmetrically by rpc.ScopesFromContext on the peer.
+	// Carry the caller's scope-list and userId across the mesh hop for a
+	// receiver whose validator implements ports.ScopeStamper (node/rpc.go reads
+	// both keys when the request has no sealed principal). Only these two named
+	// keys are copied, never the whole caller map, so a caller-supplied ctx
+	// cannot overwrite "role". scopes is space-joined (space-free tokens) and
+	// rpc.ParseScopes splits it on the peer.
 	if sc := scopesFromContext(ctx); len(sc) > 0 {
 		rpcCtx["scopes"] = strings.Join(sc, " ")
 	}
