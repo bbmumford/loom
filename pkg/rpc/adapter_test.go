@@ -13,6 +13,7 @@ import (
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
 	"github.com/bbmumford/loom/node/handlers"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // TestRegistryShimImplementsTaskHandler pins the contract that the shim
@@ -39,6 +40,39 @@ func TestRegistryShimImplementsTaskHandler(t *testing.T) {
 	}
 	if _, ok := interface{}(shim).(handlers.TaskHandler); !ok {
 		t.Errorf("shim does not implement handlers.TaskHandler")
+	}
+}
+
+// TestRegistryShimForwardsTheRequirement: the shim that carries an
+// rpc.Registry handler onto the mesh registry reports the handler's declared
+// Requirement (the mesh registry judges it through its authorization policy),
+// and reports nil for a handler that declares none.
+func TestRegistryShimForwardsTheRequirement(t *testing.T) {
+	capability := rpcscope.Capability("orbtr.ai:inference.dispatch")
+	declaring := newRegistryShim(&Handler{
+		Namespace: "orbtr.ai", Domain: "inference", Operation: "Dispatch",
+		Request:     (*wrapperspb.StringValue)(nil),
+		Response:    (*wrapperspb.StringValue)(nil),
+		Scope:       ScopeAllowlisted,
+		Requirement: &capability,
+	})
+	var meta handlers.HandlerMeta = declaring
+	declarer, ok := meta.(handlers.RequirementDeclarer)
+	if !ok {
+		t.Fatal("registry shim does not implement handlers.RequirementDeclarer")
+	}
+	if got := declarer.Requirement(); got == nil || *got != capability {
+		t.Fatalf("forwarded requirement = %v, want %v", got, capability)
+	}
+
+	plain := newRegistryShim(&Handler{
+		Namespace: "orbtr.ai", Domain: "inference", Operation: "Status",
+		Request:  (*wrapperspb.StringValue)(nil),
+		Response: (*wrapperspb.StringValue)(nil),
+		Scope:    ScopeNone,
+	})
+	if got := plain.Requirement(); got != nil {
+		t.Fatalf("handler with no requirement forwarded %v, want nil", got)
 	}
 }
 

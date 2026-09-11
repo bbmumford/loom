@@ -129,3 +129,19 @@ func PrincipalForEnforcement(ctx context.Context) AuthenticatedPrincipal {
 	p, _ := NewAuthenticatedPrincipal(AuthenticatedIdentityFromContext(ctx), nil)
 	return p
 }
+
+// AuthorizeRequirement judges an operation's declared Requirement against the
+// sealed principal on ctx. Both loom enforcement seams call it (pkg/rpc
+// EnforceScope for the HTTP registry, the mesh HandlerRegistry's validateScope)
+// so one Requirement cannot be judged two ways. A nil authz denies: an
+// operation that declares a Requirement is never admitted without an
+// authorization policy to judge it. The reason reads after the handler name.
+func AuthorizeRequirement(ctx context.Context, req Requirement, authz *Policy) (allowed bool, reason string) {
+	if authz == nil {
+		return false, "declares a Requirement but no authorization policy is configured"
+	}
+	if ok, why := authz.Authorize(req, PrincipalForEnforcement(ctx)); !ok {
+		return false, "denied by authorization policy: " + why
+	}
+	return true, ""
+}

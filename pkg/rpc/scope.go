@@ -155,11 +155,8 @@ func EnforceScope(ctx context.Context, h *Handler, policy rpcscope.PresencePolic
 		if len(authz) > 0 {
 			az = authz[0]
 		}
-		if az == nil {
-			return fmt.Errorf("%w: handler %s declares a Requirement but no authorization policy is configured", ErrScopeDenied, h.FQN())
-		}
-		if ok, reason := az.Authorize(*h.Requirement, rpcscope.PrincipalForEnforcement(ctx)); !ok {
-			return fmt.Errorf("%w: handler %s denied by authorization policy: %s", ErrScopeDenied, h.FQN(), reason)
+		if ok, reason := rpcscope.AuthorizeRequirement(ctx, *h.Requirement, az); !ok {
+			return fmt.Errorf("%w: handler %s %s", ErrScopeDenied, h.FQN(), reason)
 		}
 		return nil
 	}
