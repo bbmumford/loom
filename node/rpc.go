@@ -22,7 +22,6 @@ import (
 	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/bbmumford/loom/internal/securityctx"
 	"github.com/bbmumford/loom/node/handlers"
-	"github.com/bbmumford/loom/pkg/rpc"
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/pkg/trace"
 	"github.com/bbmumford/loom/ports"
@@ -304,20 +303,17 @@ type RPCServer struct {
 	serviceName    string
 	activeHandlers int32 // atomic — concurrent handler goroutines
 
-	// sealedPrincipalBinds / wireIdentityBinds count which of the two identity
-	// paths in handleRequest each request took: the sealed path, where
-	// bindAuthenticatedPrincipal reconciles the pinned axis against the
-	// transport-established partition, or the wire path, which lifts userId and
-	// scopes out of req.Context and reconciles nothing.
+	// sealedPrincipalBinds / unsealedRequests count how each request arrived:
+	// with a sealed principal that bindAuthenticatedPrincipal bound, or without
+	// one, in which case it carries no caller identity at all.
 	//
-	// A request takes the wire path whenever it arrives without req.Principal,
-	// which includes a sender whose own principal mint failed — indistinguishable
-	// here from a sender that never had one. The counts are the only signal that
-	// distinguishes "nothing reaches the un-reconciled path" from "we never
-	// looked": a non-zero wire count on a deployment that believes all its
-	// callers are sealed is that belief being wrong. Read via PrincipalPathStats.
+	// A sender whose own principal mint failed is indistinguishable here from a
+	// sender that never had one. A non-zero unsealed count on a deployment that
+	// believes all its callers are sealed is that belief being wrong, and every
+	// such request is being denied by the handlers that declare a scope. Read
+	// via PrincipalPathStats.
 	sealedPrincipalBinds int64          // atomic
-	wireIdentityBinds    int64          // atomic
+	unsealedRequests     int64          // atomic
 	responseCache        *ResponseCache // dedup cache for parallel probes
 
 	// authValidator stamps wire-envelope partition IDs onto the platform-
@@ -422,13 +418,12 @@ func (s *RPCServer) DedupStats() (hits, misses int64) {
 	return 0, 0
 }
 
-// PrincipalPathStats returns how many requests bound identity by the sealed
-// path versus the wire path. A rising wire count is the tell that callers are
-// reaching this node without a principal — either because they never mint one
-// or because their mint silently failed — and it is what makes that visible
-// before a scope gate starts trusting the result.
-func (s *RPCServer) PrincipalPathStats() (sealed, wire int64) {
-	return atomic.LoadInt64(&s.sealedPrincipalBinds), atomic.LoadInt64(&s.wireIdentityBinds)
+// PrincipalPathStats returns how many requests arrived with a sealed principal
+// and how many arrived without one. A rising unsealed count is the tell that
+// callers are reaching this node without a principal, either because they
+// never mint one or because their mint silently failed.
+func (s *RPCServer) PrincipalPathStats() (sealed, unsealed int64) {
+	return atomic.LoadInt64(&s.sealedPrincipalBinds), atomic.LoadInt64(&s.unsealedRequests)
 }
 
 // DispatchLatencyTopN returns up to n per-handler dispatch latency snapshots,
@@ -693,24 +688,12 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 		ctx = trace.WithID(ctx, req.TraceId)
 	}
 
-	// Lift the caller's wire-propagated userId + scope-list onto ctx
-	// via the injected validator (optional ports.ScopeStamper) so scope
-	// enforcement (a handler's RequiredScopes) and userId-scoped handlers see
-	// the authenticated principal that crossed the mesh hop.
-	// buildRPCRequestCtx selectively serialized these into req.Context; a
-	// validator that does not implement ScopeStamper simply ignores them —
-	// the safe, non-breaking default (mesh scope enforcement stays closed
-	// until the endpoint validator adopts it). Mirrors the tenantId lift
-	// above: identity flows through the injected validator, never a
-	// loom-local key an HSTLES build would not read.
+	// A request without a sealed principal carries no caller identity: nothing
+	// in req.Context is lifted into ctx, so every handler that declares a scope
+	// denies it. It is counted, because a sender whose own mint failed looks
+	// exactly like this and the count is the only place that shows up.
 	if !typedPrincipal {
-		if ss, ok := s.authValidator.(ports.ScopeStamper); ok {
-			scopes := rpc.ParseScopes(req.Context["scopes"])
-			if uid := req.Context["userId"]; uid != "" || len(scopes) > 0 {
-				ctx = ss.WithWireIdentity(ctx, uid, scopes)
-				atomic.AddInt64(&s.wireIdentityBinds, 1)
-			}
-		}
+		atomic.AddInt64(&s.unsealedRequests, 1)
 	}
 
 	// 3. Intelligent dispatch: local vs forward decision

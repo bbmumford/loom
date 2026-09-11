@@ -8,7 +8,6 @@ package rpc
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
@@ -19,9 +18,9 @@ import (
 type rpcContextKey struct{}
 
 // WithRPCContext stamps an in-process string map onto ctx. The readers in this
-// package (RPCContextValue, OpClassFromContext, ScopesFromContext and the
-// identity accessors below) read it, and bridgeWireIdentity copies its
-// "userId" and "scopes" keys onto an outgoing mesh request.
+// package (RPCContextValue, OpClassFromContext and the identity accessors
+// below) read it. Nothing copies it onto an outgoing mesh request: identity
+// crosses the hop only as the sealed principal.
 //
 // This map is caller/wire data, not scope authority. EnforceScope deliberately
 // ignores it and reads only the typed identity installed through
@@ -115,28 +114,6 @@ func AuthenticatedScopeIdentityFromContext(ctx context.Context) AuthenticatedSco
 // dispatch.WithOpClass). Receivers use this for stream-priority routing.
 func OpClassFromContext(ctx context.Context) string {
 	return rpcContextMap(ctx)["opClass"]
-}
-
-// ScopesFromContext extracts the caller's authenticated scope list from the
-// rpc context map. The sender stamps it via dispatch.WithScopes, which
-// buildRPCRequestCtx serializes into req.Context["scopes"] as a space-joined
-// string (RFC-6749 §3.3 convention, #K-32); the receiver surfaces that map
-// onto ctx via WithRPCContext, and this splits it back to a slice. Returns
-// nil when no scopes were stamped. strings.Fields drops empty tokens, so a
-// stray double-space in the wire form yields no phantom scope.
-func ScopesFromContext(ctx context.Context) []string {
-	return ParseScopes(rpcContextMap(ctx)["scopes"])
-}
-
-// ParseScopes decodes the space-joined wire form of the scope list back to
-// a slice (nil for empty). Exported so the RPC server's receive path can
-// decode req.Context["scopes"] directly without first re-stamping the map
-// onto a ctx. strings.Fields drops empty tokens (robust to stray spaces).
-func ParseScopes(raw string) []string {
-	if raw == "" {
-		return nil
-	}
-	return strings.Fields(raw)
 }
 
 // ErrScopeDenied is the sentinel returned by EnforceScope when a handler's

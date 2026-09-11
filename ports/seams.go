@@ -61,14 +61,13 @@ type SecureHandler interface {
 // lose the tenant and multi-tenant authz/data-scoping breaks with no
 // compile-time signal. The loom-local default (internal/securityctx) is
 // fail-closed and safe ONLY in builds with no HSTLES domain handlers.
-// EXTENSIONS, AND WHAT WRAPPING ONE COSTS. Five optional interfaces in this
+// EXTENSIONS, AND WHAT WRAPPING ONE COSTS. Four optional interfaces in this
 // package are type-asserted on the value supplied here, and a failed assertion
-// SKIPS the behaviour rather than erroring: ScopeStamper and
-// AuthenticatedPrincipalStamper (the RPC receive path, lifting the wire
-// identity and the reconstructed principal onto ctx), TransportAxisPin (the
-// axis reconciled against the transport-established partition before a
-// principal reaches dispatch), and ExecutionPrincipalReader with
-// PartitionPrincipalReader (the task executor).
+// SKIPS the behaviour rather than erroring: AuthenticatedPrincipalStamper (the
+// RPC receive path, stamping the reconstructed principal onto ctx),
+// TransportAxisPin (the axis reconciled against the transport-established
+// partition before a principal reaches dispatch), and ExecutionPrincipalReader
+// with PartitionPrincipalReader (the task executor).
 //
 // A DECORATOR MUST THEREFORE RE-EXPOSE EVERY EXTENSION ITS INNER VALIDATOR
 // IMPLEMENTS. Wrapping a validator to add one behaviour drops the others
@@ -191,29 +190,6 @@ type AuthenticatedPrincipalStamper interface {
 // still round-trips (over-pinning it would deny that legitimately).
 type TransportAxisPin interface {
 	TransportPinnedAxis() string
-}
-
-// ScopeStamper is an OPTIONAL interface an injected AuthValidator MAY also
-// implement to receive the caller's wire-propagated identity (#K-32). When
-// the RPC server finds its AuthValidator also satisfies ScopeStamper it
-// lifts the userId + scope-list decoded from the request envelope onto ctx,
-// so scope enforcement (a handler's RequiredScopes) and userId-scoped
-// handlers see the authenticated caller that crossed the mesh hop.
-//
-// It is deliberately a SEPARATE, optional interface rather than two more
-// methods on AuthValidator: extending AuthValidator would break every
-// existing injected validator at compile time. A validator that does not
-// implement ScopeStamper simply does not get mesh-propagated scopes — the
-// safe, non-breaking default (enforcement stays closed until the endpoint
-// adopts it). The HSTLES/ORBTR validator implements it by delegating to the
-// real security-helpers keys (symmetric to WithPartitionID); loom's default
-// securityctx validator implements it against its loom-local keys.
-type ScopeStamper interface {
-	// WithWireIdentity stamps the mesh-propagated userId + scope-list onto
-	// ctx as an authenticated principal. Called once per inbound RPC after
-	// the partition lift, before dispatch. An empty userId + nil scopes is a
-	// no-op the implementation may skip.
-	WithWireIdentity(ctx context.Context, userID string, scopes []string) context.Context
 }
 
 // BootstrapInfo is what the VL1 bootstrap handshake knows about a joining

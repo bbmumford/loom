@@ -38,8 +38,8 @@ var ErrNoRouteToNode = errors.New("dispatch: no route to target node")
 //
 // Why optional rather than a method on Caller: adding to Caller would break every
 // implementor. loom already uses optional-capability type assertion in this exact
-// shape elsewhere — ports.ScopeStamper on the auth validator (node/rpc.go), and
-// aether.TicketCapable / RelayCapable / TenantAwareSession / ConnProvider on
+// shape elsewhere — ports.AuthenticatedPrincipalStamper on the auth validator
+// (node/rpc.go), and aether.TicketCapable / RelayCapable / TenantAwareSession / ConnProvider on
 // transports and sessions. A caller that does not implement TargetedCaller simply
 // cannot be targeted, and the rpc layer reports that rather than silently
 // downgrading to role dispatch.
