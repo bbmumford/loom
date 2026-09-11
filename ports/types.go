@@ -45,7 +45,7 @@ type Watermark uint64
 // RECORDS AND LOSSY FOR LAD-SIGNED ONES. §0.5.4 requires owner-signed
 // provenance to survive PROJECTION; it does for swarm, whose signable bytes
 // are fields carried here, and it does NOT for LAD. `lad.signatureContent`
-// additionally covers TenantID, Seq, Timestamp, and ExpiresAt at NANOSECOND
+// additionally covers Partition, Seq, Timestamp, and ExpiresAt at NANOSECOND
 // precision — none of which exist here (ExpiresAtUnixMs is milliseconds).
 // A LAD record projected into this type and mapped back FAILS
 // lad.VerifyRecord; restoring exactly those four restores it, which is the

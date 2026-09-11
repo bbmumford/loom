@@ -20,9 +20,9 @@ var SelfOwnedPublishPrefixes = []string{
 
 // BaselinePolicyConfig returns a PolicyConfig pre-seeded with
 // SelfOwnedPublishPrefixes as open-publish rules, so a node can always publish
-// its own records. It leaves Tenants, Observers, RoleEntitlements, and the
+// its own records. It leaves Partitions, Observers, RoleEntitlements, and the
 // restricted PublishPrefixes for the caller to fill from configured
-// identity/tenant/role roots — those cannot be derived from the topic namespace.
+// identity/partition/role roots — those cannot be derived from the topic namespace.
 //
 // This is the seed that resolves the fail-closed cutover: building a Policy from
 // the ZERO PolicyConfig instead denies every publish (each topic "matches no
