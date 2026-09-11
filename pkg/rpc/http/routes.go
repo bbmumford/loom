@@ -30,7 +30,7 @@ func RegisterAll(reg *rpc.Registry, router chi.Router) {
 }
 
 // RegisterAllWithBridge is the auth-aware variant of RegisterAll: the
-// caller pre-builds a Bridge (optionally configuring TenantInjector +
+// caller pre-builds a Bridge (optionally configuring IdentityInjector +
 // DirectoryAuth) and this function mounts the domain routes + the
 // `/rpc/_directory` view that consults the bridge's own auth predicate.
 //

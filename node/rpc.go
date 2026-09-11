@@ -907,17 +907,17 @@ func (s *RPCServer) writeMessage(ctx context.Context, session aether.Connection,
 	return session.Send(ctx, body)
 }
 
-// HandleIncomingSessions processes incoming VL1 sessions with RPC protocol.
-// Backward-compat: uses "default" as the transport partition for all sessions.
+// HandleIncomingSessions processes incoming VL1 sessions with RPC protocol,
+// binding every session to the unpartitioned "default" transport partition.
 func (s *RPCServer) HandleIncomingSessions(ctx context.Context, listener aether.Listener) {
-	s.HandleIncomingSessionsForTenant(ctx, listener, "default")
+	s.HandleIncomingSessionsForPartition(ctx, listener, "default")
 }
 
-// HandleIncomingSessionsForTenant processes incoming sessions, resolving the
-// transport-level partition ID for each. The fallbackPartitionID is used for sessions
-// that don't carry an embedded tenant (e.g., dedicated single-tenant transports).
-// For shared preamble transports, the tenant ID is extracted from the session.
-func (s *RPCServer) HandleIncomingSessionsForTenant(ctx context.Context, listener aether.Listener, fallbackPartitionID string) {
+// HandleIncomingSessionsForPartition processes incoming sessions, resolving the
+// transport-level partition for each. fallbackPartitionID is used for a session
+// that carries no embedded partition (a dedicated single-partition transport);
+// on a shared preamble transport the partition is read from the session.
+func (s *RPCServer) HandleIncomingSessionsForPartition(ctx context.Context, listener aether.Listener, fallbackPartitionID string) {
 	s.logger.Printf("[RPC] Listening for incoming mesh connections (partition fallback: %s)...", fallbackPartitionID)
 
 	for {

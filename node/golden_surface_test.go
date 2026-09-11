@@ -48,7 +48,7 @@ var goldenRuntimeMethods = []string{
 var goldenRPCServerMethods = []string{
 	"ActiveHandlers", "BidiLatencySnapshots", "BidiPhaseSnapshots",
 	"BidiTimeoutSnapshots", "DedupStats", "DispatchLatencyTopN",
-	"HandleIncomingSessions", "HandleIncomingSessionsForTenant", "Metrics",
+	"HandleIncomingSessions", "HandleIncomingSessionsForPartition", "Metrics",
 	"RecordBidiLatency", "RecordBidiPhaseMarshal", "RecordBidiPhaseSend",
 	"RecordBidiPhaseWait", "RecordBidiTimeout", "RegisterRPC",
 	"ServeMeshStream", "ServeSession", "SetForwarder", "SetLoadAdvisor",
