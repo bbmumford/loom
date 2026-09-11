@@ -30,7 +30,7 @@ var (
 // underlying handshake via WithDialOverride.
 //
 // On the listener side, the underlying NoiseTransport uses SharedTransport
-// as its TenantKeyResolver to dynamically resolve keys from the preamble.
+// as its PartitionKeyResolver to dynamically resolve keys from the preamble.
 type SharedTransport struct {
 	inner *noise.NoiseTransport
 
@@ -39,17 +39,17 @@ type SharedTransport struct {
 }
 
 // NewSharedTransport creates a shared transport backed by a NoiseTransport
-// configured with this SharedTransport as the TenantKeyResolver.
+// configured with this SharedTransport as the PartitionKeyResolver.
 //
 // The config's NetworkKeys field is used as a default/fallback for the
-// transport itself (e.g., for STUN). The TenantKeyResolver is set automatically.
+// transport itself (e.g., for STUN). The PartitionKeyResolver is set automatically.
 func NewSharedTransport(cfg noise.NoiseTransportConfig) (*SharedTransport, error) {
 	st := &SharedTransport{
 		partitionKeys: make(map[aether.ScopeID][][]byte),
 	}
 
 	// Install this SharedTransport as the key resolver for preamble mode.
-	cfg.TenantKeyResolver = st
+	cfg.PartitionKeyResolver = st
 
 	inner, err := noise.NewNoiseTransport(cfg)
 	if err != nil {
@@ -119,7 +119,7 @@ func (s *SharedTransport) PartitionCount() int {
 	return len(s.partitionKeys)
 }
 
-// ResolveKeys implements noise.TenantKeyResolver for the listener's preamble handling.
+// ResolveKeys implements noise.PartitionKeyResolver for the listener's preamble handling.
 func (s *SharedTransport) ResolveKeys(partitionID string) ([][]byte, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -157,7 +157,7 @@ func (s *SharedTransport) Dial(ctx context.Context, target aether.Target) (aethe
 }
 
 // Listen delegates to the underlying NoiseTransport. Preamble handling
-// is done inside the noise package's handleHandshake via TenantKeyResolver.
+// is done inside the noise package's handleHandshake via PartitionKeyResolver.
 func (s *SharedTransport) Listen(ctx context.Context) (aether.Listener, error) {
 	return s.inner.Listen(ctx)
 }

@@ -982,7 +982,7 @@ func (s *RPCServer) HandleIncomingSessionsForTenant(ctx context.Context, listene
 			}
 
 			partitionID := fallbackPartitionID
-			if tas, ok := session.(aether.TenantAwareSession); ok {
+			if tas, ok := session.(aether.PartitionAwareSession); ok {
 				if tid := tas.ScopeID(); tid != "" {
 					partitionID = tid
 				}

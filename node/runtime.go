@@ -3031,7 +3031,7 @@ func (rt *Runtime) acceptIncomingSessionsWithMux(ctx context.Context, listener a
 			}
 
 			partitionID := fallbackPartition
-			if tas, ok := session.(aether.TenantAwareSession); ok {
+			if tas, ok := session.(aether.PartitionAwareSession); ok {
 				if tid := tas.ScopeID(); tid != "" {
 					partitionID = tid
 				}
