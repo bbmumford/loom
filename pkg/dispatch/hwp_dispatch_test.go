@@ -15,35 +15,31 @@ import (
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/health"
 	"github.com/ORBTR/aether/rpc/pb"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // ─── buildRPCRequest tests ──────────────────────────────────────────────────
 
 func TestBuildRequest_PropagatesDeadline(t *testing.T) {
-	req := buildRPCRequest("platform", "platform.CheckHealth", nil, 5*time.Second, "")
+	req := buildRPCRequest("platform", "platform.CheckHealth", nil, 5*time.Second)
 	if time.Duration(req.TimeoutNs) < 4*time.Second || time.Duration(req.TimeoutNs) > 6*time.Second {
 		t.Fatalf("expected ~5s timeout, got %v", time.Duration(req.TimeoutNs))
 	}
 }
 
-// TestBuildRPCRequestCtx_SerializesScopesAndUserID verifies #K-32: the
-// caller's scope-list (space-joined per RFC-6749) + userId that the rpc
-// bridge stamped via WithScopes/WithUserID get serialized into req.Context.
+// TestBuildRPCRequestCtx_SerializesScopesAndUserID verifies the caller's
+// scope-list (space-joined) and userId, stamped via WithScopes/WithUserID,
+// are serialized into req.Context, and that role is the builder's value.
 func TestBuildRPCRequestCtx_SerializesScopesAndUserID(t *testing.T) {
 	ctx := WithScopes(context.Background(), []string{"storage:read", "assistant:write"})
 	ctx = WithUserID(ctx, "user-42")
-	req := buildRPCRequestCtx(ctx, "storage", "orbtr.io.storage.Get", nil, 5*time.Second, "tenant-A")
+	req := buildRPCRequestCtx(ctx, "storage", "orbtr.io.storage.Get", nil, 5*time.Second)
 
 	if got := req.Context["scopes"]; got != "storage:read assistant:write" {
 		t.Errorf("scopes = %q, want space-joined %q", got, "storage:read assistant:write")
 	}
 	if got := req.Context["userId"]; got != "user-42" {
 		t.Errorf("userId = %q, want user-42", got)
-	}
-	// Selective-copy security (R-782): role + tenantId are set authoritatively
-	// by the builder; they must NOT be overridable through the caller ctx.
-	if got := req.Context["tenantId"]; got != "tenant-A" {
-		t.Errorf("tenantId = %q, want tenant-A (authoritative param)", got)
 	}
 	if got := req.Context["role"]; got != "storage" {
 		t.Errorf("role = %q, want storage", got)
@@ -53,7 +49,7 @@ func TestBuildRPCRequestCtx_SerializesScopesAndUserID(t *testing.T) {
 // TestBuildRPCRequestCtx_OmitsEmptyScopesAndUserID verifies the copy is
 // conditional — no scopes/userId stamped means no empty wire keys.
 func TestBuildRPCRequestCtx_OmitsEmptyScopesAndUserID(t *testing.T) {
-	req := buildRPCRequestCtx(context.Background(), "platform", "platform.Ping", nil, time.Second, "")
+	req := buildRPCRequestCtx(context.Background(), "platform", "platform.Ping", nil, time.Second)
 	if _, ok := req.Context["scopes"]; ok {
 		t.Error("scopes key present with none stamped — should be omitted")
 	}
@@ -63,15 +59,15 @@ func TestBuildRPCRequestCtx_OmitsEmptyScopesAndUserID(t *testing.T) {
 }
 
 func TestBuildRequest_NoDeadlineSetsDefault(t *testing.T) {
-	req := buildRPCRequest("platform", "platform.CheckHealth", nil, 0, "")
+	req := buildRPCRequest("platform", "platform.CheckHealth", nil, 0)
 	if time.Duration(req.TimeoutNs) != callerRequestTTL {
 		t.Fatalf("expected default %v, got %v", callerRequestTTL, time.Duration(req.TimeoutNs))
 	}
 }
 
 func TestBuildRequest_SetsUniqueID(t *testing.T) {
-	r1 := buildRPCRequest("a", "a.X", nil, 0, "")
-	r2 := buildRPCRequest("b", "b.Y", nil, 0, "")
+	r1 := buildRPCRequest("a", "a.X", nil, 0)
+	r2 := buildRPCRequest("b", "b.Y", nil, 0)
 	if r1.Id == "" {
 		t.Fatal("expected non-empty ID")
 	}
@@ -81,21 +77,21 @@ func TestBuildRequest_SetsUniqueID(t *testing.T) {
 }
 
 func TestBuildRequest_ShorterDeadlineWins(t *testing.T) {
-	req := buildRPCRequest("x", "x.Y", nil, 2*time.Second, "")
+	req := buildRPCRequest("x", "x.Y", nil, 2*time.Second)
 	if time.Duration(req.TimeoutNs) != 2*time.Second {
 		t.Fatalf("expected 2s, got %v", time.Duration(req.TimeoutNs))
 	}
 }
 
 func TestBuildRequest_LongerDeadlineUsesDefault(t *testing.T) {
-	req := buildRPCRequest("x", "x.Y", nil, 60*time.Second, "")
+	req := buildRPCRequest("x", "x.Y", nil, 60*time.Second)
 	if time.Duration(req.TimeoutNs) != callerRequestTTL {
 		t.Fatalf("expected default %v, got %v", callerRequestTTL, time.Duration(req.TimeoutNs))
 	}
 }
 
 func TestBuildRequest_SetsRoleInContext(t *testing.T) {
-	req := buildRPCRequest("platform", "platform.CheckHealth", []byte("test"), 0, "")
+	req := buildRPCRequest("platform", "platform.CheckHealth", []byte("test"), 0)
 	if req.Context["role"] != "platform" {
 		t.Fatalf("expected role=platform, got %s", req.Context["role"])
 	}
@@ -107,18 +103,30 @@ func TestBuildRequest_SetsRoleInContext(t *testing.T) {
 	}
 }
 
-// TestBuildRequest_TenantIDIsCamelCase pins the wire key for tenant
-// identity. The receiving side (mesh/node.rpc.go + rpc/scope.go) reads
-// req.Context["tenantId"]. If a writer regresses to snake_case the whole
-// scope chain fails closed and every cross-org RPC starts returning 403.
-// Fail-closed guard per the camelCase migration; do not relax to dual-emit.
-func TestBuildRequest_TenantIDIsCamelCase(t *testing.T) {
-	req := buildRPCRequest("platform", "platform.CheckHealth", nil, 0, "orbtr")
-	if got := req.Context["tenantId"]; got != "orbtr" {
-		t.Fatalf("expected req.Context[\"tenantId\"]=orbtr, got %q (full ctx=%v)", got, req.Context)
+// TestBuildRequest_NoPartitionKeyOnTheWire pins that the builder writes no
+// partition value into the mutable request map, even when the caller's ctx
+// carries a sealed principal and a scope-list. A receiver takes the calling
+// node's partition from the authenticated transport and a caller's partition
+// from req.Principal; a map key would be a second, caller-writable copy.
+func TestBuildRequest_NoPartitionKeyOnTheWire(t *testing.T) {
+	principal, err := rpcscope.NewAuthenticatedPrincipal(
+		rpcscope.NewScopeIdentity("pinned-P", "partition-Q", "user-A"), []string{"storage:read"})
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, snake := req.Context["tenant_id"]; snake {
-		t.Fatalf("snake_case tenant_id must not be emitted: %v", req.Context)
+	ctx := rpcscope.WithAuthenticatedPrincipal(context.Background(), principal)
+	ctx = WithScopes(ctx, []string{"storage:read"})
+	ctx = WithUserID(ctx, "user-A")
+
+	for _, req := range []*pb.RPCRequest{
+		buildRPCRequest("platform", "platform.CheckHealth", nil, 0),
+		buildRPCRequestCtx(ctx, "platform", "platform.CheckHealth", nil, 0),
+	} {
+		for _, key := range []string{"tenantId", "tenant_id", "orgId", "org_id", "organizationId", "partition"} {
+			if v, ok := req.Context[key]; ok {
+				t.Fatalf("request map carries %q=%q; want no partition key (full ctx=%v)", key, v, req.Context)
+			}
+		}
 	}
 }
 
@@ -128,7 +136,7 @@ func TestBuildRequest_TenantIDIsCamelCase(t *testing.T) {
 // realtime/critical RPC to the Standard band.
 func TestBuildRequestCtx_OpClassIsCamelCase(t *testing.T) {
 	ctx := WithOpClass(context.Background(), "realtime")
-	req := buildRPCRequestCtx(ctx, "platform", "platform.CheckHealth", nil, 0, "orbtr")
+	req := buildRPCRequestCtx(ctx, "platform", "platform.CheckHealth", nil, 0)
 	if got := req.Context["opClass"]; got != "realtime" {
 		t.Fatalf("expected req.Context[\"opClass\"]=realtime, got %q (full ctx=%v)", got, req.Context)
 	}

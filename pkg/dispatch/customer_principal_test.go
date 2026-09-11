@@ -48,7 +48,6 @@ func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing
 		"orbtr.io.plugins.List",
 		nil,
 		time.Second,
-		"orbtr",
 	)
 
 	if req.Principal == nil {
@@ -76,7 +75,10 @@ func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing
 	}
 }
 
-func TestBuildRPCRequestCtxDoesNotRewritePrincipalToCallerPlatform(t *testing.T) {
+// TestBuildRPCRequestCtxCarriesThePinnedAxisVerbatim: the builder projects the
+// sealed principal's pinned axis unchanged, and it writes no partition value
+// of its own into the mutable request map.
+func TestBuildRPCRequestCtxCarriesThePinnedAxisVerbatim(t *testing.T) {
 	identity := rpcscope.AuthenticatedIdentity{
 		Scopes: []rpcscope.ScopeValue{
 			{Name: rpcscope.AxisTransportPinned, Value: "foreign-platform"},
@@ -90,14 +92,14 @@ func TestBuildRPCRequestCtxDoesNotRewritePrincipalToCallerPlatform(t *testing.T)
 	}
 	ctx := rpcscope.WithAuthenticatedPrincipal(context.Background(), principal)
 
-	req := buildRPCRequestCtx(ctx, "role", "handler", nil, time.Second, "orbtr")
+	req := buildRPCRequestCtx(ctx, "role", "handler", nil, time.Second)
 	if req.Principal == nil {
-		t.Fatal("mismatched principal was silently dropped")
+		t.Fatal("principal was silently dropped")
 	}
 	if got := principalAxis(req.Principal, rpcscope.AxisTransportPinned); got != "foreign-platform" {
-		t.Fatalf("principal rewritten to dispatch platform: %q", got)
+		t.Fatalf("pinned axis rewritten: %q", got)
 	}
-	if got := req.Context["tenantId"]; got != "orbtr" {
-		t.Fatalf("dispatch platform context = %q", got)
+	if v, ok := req.Context["tenantId"]; ok {
+		t.Fatalf("request map carries tenantId=%q; want none", v)
 	}
 }

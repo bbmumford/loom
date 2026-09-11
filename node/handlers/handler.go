@@ -806,19 +806,6 @@ func (r *HandlerRegistry) Count() int {
 // Dispatch — executes a handler with middleware
 // ---------------------------------------------------------------------------
 
-// getUserIDFromContext extracts the user ID from context, checking the RPC context map.
-// Returns "" if no user ID is found.
-func getUserIDFromContext(ctx context.Context) string {
-	rpcCtx := extractContextMap(ctx)
-	if rpcCtx == nil {
-		return ""
-	}
-	if uid, ok := rpcCtx["userID"].(string); ok {
-		return uid
-	}
-	return ""
-}
-
 // validateScope checks that the trusted typed context satisfies the
 // handler's partition scope. RPCRequest.Context and task Metadata are deliberately
 // ignored here: both are mutable request data and cannot establish platform,
