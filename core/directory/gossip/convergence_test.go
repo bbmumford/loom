@@ -30,13 +30,13 @@ var seedTime = time.Unix(1_700_000_000, 0)
 // indistinguishable from a gossiped one.
 func seedMember(t *testing.T, c *cache.DirectoryCache, partition, node string) {
 	t.Helper()
-	body, err := json.Marshal(lad.MemberRecord{TenantID: partition, NodeID: node, CreatedAt: seedTime})
+	body, err := json.Marshal(lad.MemberRecord{Partition: partition, NodeID: node, CreatedAt: seedTime})
 	if err != nil {
 		t.Fatalf("marshal member %s/%s: %v", partition, node, err)
 	}
 	if err := c.Apply(lad.Record{
 		Topic:     lad.TopicMember,
-		TenantID:  partition,
+		Partition: partition,
 		NodeID:    node,
 		Body:      body,
 		Timestamp: seedTime,
@@ -45,14 +45,14 @@ func seedMember(t *testing.T, c *cache.DirectoryCache, partition, node string) {
 	}
 }
 
-// memberKeys is the set of "tenant/node" member identities a cache holds, read
+// memberKeys is the set of "partition/node" member identities a cache holds, read
 // from the same Dump() the exchange serializes — so the assertion checks exactly
 // what the wire would carry, not a private projection.
 func memberKeys(c *cache.DirectoryCache) map[string]bool {
 	keys := map[string]bool{}
 	for _, rec := range c.Dump() {
 		if rec.Topic == lad.TopicMember {
-			keys[rec.TenantID+"/"+rec.NodeID] = true
+			keys[rec.Partition+"/"+rec.NodeID] = true
 		}
 	}
 	return keys

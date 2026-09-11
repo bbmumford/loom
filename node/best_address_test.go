@@ -285,7 +285,7 @@ func hostnameManager(t *testing.T, crossOrigin bool) *ConnectionManager {
 	t.Helper()
 	c := ladcache.NewDirectoryCache()
 	mb, err := json.Marshal(lad.MemberRecord{
-		TenantID: "", NodeID: testNodeIDA, CreatedAt: time.Now(),
+		Partition: "", NodeID: testNodeIDA, CreatedAt: time.Now(),
 		// Producer key + a value the hostname check accepts (needs a dot).
 		Attrs: map[string]string{"serviceName": "node.orbtr.io"},
 	})
@@ -293,7 +293,7 @@ func hostnameManager(t *testing.T, crossOrigin bool) *ConnectionManager {
 		t.Fatal(err)
 	}
 	if err := c.Apply(lad.Record{
-		Topic: lad.TopicMember, TenantID: "", NodeID: testNodeIDA,
+		Topic: lad.TopicMember, Partition: "", NodeID: testNodeIDA,
 		Body: mb, Timestamp: time.Now(),
 	}); err != nil {
 		t.Fatal(err)

@@ -13,3 +13,14 @@ use ../swarm
 // now sends/receives is unpublished in the ../aether working tree. Resolve
 // aether locally until that wire is published and loom bumps its pin.
 use ../aether
+
+// Local dev bridge: loom/go.mod pins ledger v0.0.20 and reach v0.0.14, but
+// the directory code reads ledger.Record.Partition and calls
+// storage.RequirePartitionColumn, which exist only in the unpublished
+// ../ledger working tree. reach is resolved locally with it because the
+// published reach still writes ledger.Record.TenantID and would not compile
+// against the local ledger. Resolve both locally until they are published and
+// loom bumps its pins.
+use ../ledger
+
+use ../reach

@@ -35,7 +35,7 @@ func applyLAD(t *testing.T, c *ladcache.DirectoryCache, topic lad.Topic, nodeID 
 	}
 	rec := lad.Record{
 		Topic:     topic,
-		TenantID:  testTenant,
+		Partition: testTenant,
 		NodeID:    nodeID,
 		Body:      b,
 		Timestamp: time.Now(),
@@ -50,7 +50,7 @@ func applyLAD(t *testing.T, c *ladcache.DirectoryCache, topic lad.Topic, nodeID 
 func ladSideOfTheSameNode(t *testing.T, c *ladcache.DirectoryCache, id ports.NodeID, roles []string, service string) {
 	t.Helper()
 	applyLAD(t, c, lad.TopicMember, string(id), lad.MemberRecord{
-		TenantID:  testTenant,
+		Partition: testTenant,
 		NodeID:    string(id),
 		CreatedAt: time.Now(),
 		// Keys copied from the producer, node/lad_reach_bridge.go:156-158 —
@@ -59,16 +59,16 @@ func ladSideOfTheSameNode(t *testing.T, c *ladcache.DirectoryCache, id ports.Nod
 		Attrs: map[string]string{"serviceName": service, "region": "syd"},
 	})
 	applyLAD(t, c, lad.TopicRole, string(id), lad.RoleRecord{
-		TenantID: testTenant,
-		NodeID:   string(id),
-		Roles:    roles,
-		Handlers: []lad.HandlerMetadata{{Name: "hstles." + service + ".ping"}},
-		Updated:  time.Now(),
+		Partition: testTenant,
+		NodeID:    string(id),
+		Roles:     roles,
+		Handlers:  []lad.HandlerMetadata{{Name: "hstles." + service + ".ping"}},
+		Updated:   time.Now(),
 	})
 	applyLAD(t, c, lad.TopicReach, string(id), lad.ReachRecord{
-		TenantID: testTenant,
-		NodeID:   string(id),
-		Region:   "syd",
+		Partition: testTenant,
+		NodeID:    string(id),
+		Region:    "syd",
 		Addresses: []lad.ReachAddress{
 			{Host: "203.0.113.7", Port: 443, Proto: "ws"},
 			{Host: "fdaa::7", Port: 41641, Proto: "udp"},
@@ -191,7 +191,7 @@ func TestLivenessOverrideExpiresAndEvictionResumes(t *testing.T) {
 
 	// A member last seen well past the gossip cutoff: evictable on sight.
 	applyLAD(t, c, lad.TopicMember, id, lad.MemberRecord{
-		TenantID:  testTenant,
+		Partition: testTenant,
 		NodeID:    id,
 		CreatedAt: time.Now().Add(-30 * time.Minute),
 	})
@@ -222,7 +222,7 @@ func TestZeroTTLClearsTheOverride(t *testing.T) {
 	d, c := newLADDirectory(t)
 	id := "node-clear"
 	applyLAD(t, c, lad.TopicMember, id, lad.MemberRecord{
-		TenantID:  testTenant,
+		Partition: testTenant,
 		NodeID:    id,
 		CreatedAt: time.Now().Add(-30 * time.Minute),
 	})
@@ -285,7 +285,7 @@ func TestSubscribeDeliversHistoryAndLiveExactlyOnce(t *testing.T) {
 	defer cancel()
 
 	applyLAD(t, c, lad.TopicMember, "node-history", lad.MemberRecord{
-		TenantID: testTenant, NodeID: "node-history", CreatedAt: time.Now(),
+		Partition: testTenant, NodeID: "node-history", CreatedAt: time.Now(),
 	})
 
 	ch, err := d.Subscribe(ctx, []ports.Topic{FleetPeerTopic}, 0)
@@ -294,7 +294,7 @@ func TestSubscribeDeliversHistoryAndLiveExactlyOnce(t *testing.T) {
 	}
 
 	applyLAD(t, c, lad.TopicMember, "node-live", lad.MemberRecord{
-		TenantID: testTenant, NodeID: "node-live", CreatedAt: time.Now(),
+		Partition: testTenant, NodeID: "node-live", CreatedAt: time.Now(),
 	})
 
 	got := map[ports.NodeID]int{}
@@ -386,10 +386,10 @@ func TestUnprojectedTopicsErrorRatherThanReturningEmpty(t *testing.T) {
 // §0.5.4 requires that "owner-signed provenance survives gossip, persistence,
 // snapshot, recovery, and PROJECTION". For swarm-native records it does:
 // swarm's signable bytes are fields ports.Record carries. For LAD records it
-// does NOT. lad.signatureContent covers Topic, NodeID, TenantID, Body,
+// does NOT. lad.signatureContent covers Topic, NodeID, Partition, Body,
 // Timestamp, LamportClock, Seq, HLC, ExpiresAt(UnixNano), Tombstone,
 // DeletedAt, TombstoneReason, AuthorPubKey, BlobCID — and ports.Record carries
-// no TenantID, no Seq, no Timestamp, and only MILLISECOND expiry.
+// no Partition, no Seq, no Timestamp, and only MILLISECOND expiry.
 //
 // So anchor.Generator.Generate([]lad.Record) cannot be fed from a
 // ports.DirectorySnapshot: every record's signature would fail to verify. This
@@ -402,7 +402,7 @@ func TestLADSignedRecordDoesNotSurviveThePortEnvelope(t *testing.T) {
 		t.Fatal(err)
 	}
 	orig := lad.Record{
-		Topic: lad.TopicMember, TenantID: testTenant, NodeID: "node-1", Seq: 42,
+		Topic: lad.TopicMember, Partition: testTenant, NodeID: "node-1", Seq: 42,
 		Body: []byte(`{"x":1}`), Timestamp: time.Now(), LamportClock: 7,
 		HLCTimestamp: 99 << 16, ExpiresAt: time.Now().Add(time.Hour),
 	}
@@ -432,7 +432,7 @@ func TestLADSignedRecordDoesNotSurviveThePortEnvelope(t *testing.T) {
 
 	// Restore exactly the fields ports.Record cannot express. If verification
 	// returns only after ALL FOUR, these are the complete set of losses.
-	back.TenantID = orig.TenantID
+	back.Partition = orig.Partition
 	back.Seq = orig.Seq
 	back.Timestamp = orig.Timestamp
 	back.ExpiresAt = orig.ExpiresAt // nanosecond precision, not UnixMilli
@@ -460,7 +460,7 @@ func TestLADReadPathCarriesNoOwnerSignature(t *testing.T) {
 	ctx := context.Background()
 
 	rr := lad.ReachRecord{
-		TenantID: testTenant, NodeID: "node-1", Seq: 5,
+		Partition: testTenant, NodeID: "node-1", Seq: 5,
 		Addresses: []lad.ReachAddress{{Host: "1.2.3.4", Port: 443, Proto: "ws"}},
 		UpdatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
 	}
@@ -469,7 +469,7 @@ func TestLADReadPathCarriesNoOwnerSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := c.Apply(lad.Record{
-		Topic: lad.TopicReach, TenantID: testTenant, NodeID: "node-1", Seq: 5,
+		Topic: lad.TopicReach, Partition: testTenant, NodeID: "node-1", Seq: 5,
 		Body: wire, Timestamp: time.Now(),
 		Signature: []byte("OWNER-SIGNATURE-BYTES"), AuthorPubKey: []byte("OWNER-PUBKEY"),
 	}); err != nil {
@@ -576,7 +576,7 @@ func TestMemberAttrsCarryTheProducersOpenMetadata(t *testing.T) {
 	d, c := newLADDirectory(t)
 	ctx := context.Background()
 	applyLAD(t, c, lad.TopicMember, "node-attrs", lad.MemberRecord{
-		TenantID: testTenant, NodeID: "node-attrs", CreatedAt: time.Now(),
+		Partition: testTenant, NodeID: "node-attrs", CreatedAt: time.Now(),
 		Attrs: map[string]string{"serviceName": "svc", "http_port": "8080"},
 	})
 

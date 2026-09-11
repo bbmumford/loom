@@ -20,6 +20,7 @@ import (
 	"github.com/bbmumford/tursoraft/manager"
 
 	lad "github.com/bbmumford/ledger"
+	ladstorage "github.com/bbmumford/ledger/storage"
 	"github.com/bbmumford/loom/core/internal/bloom"
 )
 
@@ -106,7 +107,7 @@ func DefaultMeshLedgerConfig() MeshLedgerConfig {
 //	CREATE TABLE IF NOT EXISTS lad_records (
 //	    topic TEXT NOT NULL,
 //	    seq INTEGER NOT NULL,
-//	    tenant_id TEXT NOT NULL,
+//	    partition_id TEXT NOT NULL,
 //	    node_id TEXT NOT NULL,
 //	    body TEXT NOT NULL,
 //	    signature BLOB,
@@ -164,20 +165,24 @@ func NewMeshLedger(ctx context.Context, cfg MeshLedgerConfig) (*MeshLedger, erro
 		mgr.Shutdown()
 		return nil, fmt.Errorf("lad: get database handle: %w", err)
 	}
+	if err := ladstorage.RequirePartitionColumn(ctx, db); err != nil {
+		mgr.Shutdown()
+		return nil, err
+	}
 
 	// Initialize schema
 	schema := `
 		CREATE TABLE IF NOT EXISTS lad_records (
 			topic TEXT NOT NULL,
 			seq INTEGER NOT NULL,
-			tenant_id TEXT NOT NULL,
+			partition_id TEXT NOT NULL,
 			node_id TEXT NOT NULL,
 			body TEXT NOT NULL,
 			signature BLOB,
 			timestamp TEXT NOT NULL,
 			PRIMARY KEY (topic, seq)
 		);
-		CREATE INDEX IF NOT EXISTS idx_lad_tenant ON lad_records(tenant_id, topic, seq);
+		CREATE INDEX IF NOT EXISTS idx_lad_partition ON lad_records(partition_id, topic, seq);
 		CREATE INDEX IF NOT EXISTS idx_lad_node ON lad_records(node_id, topic, seq);
 		CREATE INDEX IF NOT EXISTS idx_lad_timestamp ON lad_records(timestamp DESC);
 		
@@ -257,20 +262,23 @@ func NewMeshLedgerWithManager(ctx context.Context, mgr *manager.Manager, cfg Mes
 	if err != nil {
 		return nil, fmt.Errorf("lad: get database handle: %w", err)
 	}
+	if err := ladstorage.RequirePartitionColumn(ctx, db); err != nil {
+		return nil, err
+	}
 
 	// Initialize schema
 	schema := `
 		CREATE TABLE IF NOT EXISTS lad_records (
 			topic TEXT NOT NULL,
 			seq INTEGER NOT NULL,
-			tenant_id TEXT NOT NULL,
+			partition_id TEXT NOT NULL,
 			node_id TEXT NOT NULL,
 			body TEXT NOT NULL,
 			signature BLOB,
 			timestamp TEXT NOT NULL,
 			PRIMARY KEY (topic, seq)
 		);
-		CREATE INDEX IF NOT EXISTS idx_lad_tenant ON lad_records(tenant_id, topic, seq);
+		CREATE INDEX IF NOT EXISTS idx_lad_partition ON lad_records(partition_id, topic, seq);
 		CREATE INDEX IF NOT EXISTS idx_lad_node ON lad_records(node_id, topic, seq);
 		CREATE INDEX IF NOT EXISTS idx_lad_timestamp ON lad_records(timestamp DESC);
 		
@@ -426,7 +434,7 @@ func (l *MeshLedger) Append(ctx context.Context, rec lad.Record) error {
 
 	// Insert record into database (Raft-replicated via tursoraft)
 	query := `
-		INSERT INTO lad_records (topic, seq, tenant_id, node_id, body, signature, timestamp)
+		INSERT INTO lad_records (topic, seq, partition_id, node_id, body, signature, timestamp)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`
 
@@ -441,7 +449,7 @@ func (l *MeshLedger) Append(ctx context.Context, rec lad.Record) error {
 	_, err = l.db.ExecContext(execCtx, query,
 		string(rec.Topic),
 		rec.Seq,
-		rec.TenantID,
+		rec.Partition,
 		rec.NodeID,
 		string(bodyJSON),
 		rec.Signature,
@@ -509,7 +517,7 @@ func (l *MeshLedger) BatchAppend(ctx context.Context, records []lad.Record) erro
 
 	// Prepare insert statement
 	stmt, err := tx.PrepareContext(txCtx, `
-		INSERT INTO lad_records (topic, seq, tenant_id, node_id, body, signature, timestamp)
+		INSERT INTO lad_records (topic, seq, partition_id, node_id, body, signature, timestamp)
 		VALUES (?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
@@ -552,7 +560,7 @@ func (l *MeshLedger) BatchAppend(ctx context.Context, records []lad.Record) erro
 		_, err = stmt.ExecContext(txCtx,
 			string(rec.Topic),
 			rec.Seq,
-			rec.TenantID,
+			rec.Partition,
 			rec.NodeID,
 			string(bodyJSON),
 			rec.Signature,
@@ -632,7 +640,7 @@ func (l *MeshLedger) Stream(ctx context.Context, from lad.CausalWatermark, topic
 
 		// Query historical records
 		query := fmt.Sprintf(`
-			SELECT topic, seq, tenant_id, node_id, body, signature, timestamp
+			SELECT topic, seq, partition_id, node_id, body, signature, timestamp
 			FROM lad_records
 			WHERE 1=1 %s
 			ORDER BY timestamp ASC, topic ASC, seq ASC
@@ -649,7 +657,7 @@ func (l *MeshLedger) Stream(ctx context.Context, from lad.CausalWatermark, topic
 			var rec lad.Record
 			var topicStr, bodyStr, timestampStr string
 
-			if err := rows.Scan(&topicStr, &rec.Seq, &rec.TenantID, &rec.NodeID, &bodyStr, &rec.Signature, &timestampStr); err != nil {
+			if err := rows.Scan(&topicStr, &rec.Seq, &rec.Partition, &rec.NodeID, &bodyStr, &rec.Signature, &timestampStr); err != nil {
 				dbgMesh.Printf("Stream scan error: %v", err)
 				return
 			}
@@ -713,7 +721,7 @@ func (l *MeshLedger) Snapshot(ctx context.Context) (io.ReadCloser, error) {
 	dbgMesh.Printf("Creating snapshot")
 
 	query := `
-		SELECT topic, seq, tenant_id, node_id, body, signature, timestamp
+		SELECT topic, seq, partition_id, node_id, body, signature, timestamp
 		FROM lad_records
 		ORDER BY topic ASC, seq ASC
 	`
@@ -729,7 +737,7 @@ func (l *MeshLedger) Snapshot(ctx context.Context) (io.ReadCloser, error) {
 		var rec lad.Record
 		var topicStr, bodyStr, timestampStr string
 
-		if err := rows.Scan(&topicStr, &rec.Seq, &rec.TenantID, &rec.NodeID, &bodyStr, &rec.Signature, &timestampStr); err != nil {
+		if err := rows.Scan(&topicStr, &rec.Seq, &rec.Partition, &rec.NodeID, &bodyStr, &rec.Signature, &timestampStr); err != nil {
 			return nil, fmt.Errorf("scan snapshot: %w", err)
 		}
 
@@ -875,10 +883,10 @@ func (l *MeshLedger) updateBloomFilter(rec lad.Record) {
 	topicFilter := l.bloomMgr.GetOrCreate(fmt.Sprintf("topic:%s", rec.Topic))
 	topicFilter.Add([]byte(fmt.Sprintf("%s:%d", rec.Topic, rec.Seq)))
 
-	// Scope by tenant+topic for efficient tenant queries
-	if rec.TenantID != "" {
-		tenantFilter := l.bloomMgr.GetOrCreate(fmt.Sprintf("tenant:%s:%s", rec.TenantID, rec.Topic))
-		tenantFilter.Add([]byte(fmt.Sprintf("%s:%s:%d", rec.TenantID, rec.Topic, rec.Seq)))
+	// Scope by partition+topic for efficient partition queries
+	if rec.Partition != "" {
+		partitionFilter := l.bloomMgr.GetOrCreate(fmt.Sprintf("partition:%s:%s", rec.Partition, rec.Topic))
+		partitionFilter.Add([]byte(fmt.Sprintf("%s:%s:%d", rec.Partition, rec.Topic, rec.Seq)))
 	}
 
 	// Scope by node for node-specific queries
@@ -951,7 +959,7 @@ func (l *MeshLedger) rebuildBloomFilters() {
 
 	// Rebuild from all records
 	rows, err := l.db.Query(`
-		SELECT topic, seq, tenant_id, node_id FROM lad_records
+		SELECT topic, seq, partition_id, node_id FROM lad_records
 	`)
 	if err != nil {
 		dbgMesh.Printf("Bloom rebuild query error: %v", err)
@@ -961,17 +969,17 @@ func (l *MeshLedger) rebuildBloomFilters() {
 
 	count := 0
 	for rows.Next() {
-		var topicStr, tenantID, nodeID string
+		var topicStr, partition, nodeID string
 		var seq uint64
-		if err := rows.Scan(&topicStr, &seq, &tenantID, &nodeID); err != nil {
+		if err := rows.Scan(&topicStr, &seq, &partition, &nodeID); err != nil {
 			continue
 		}
 
 		rec := lad.Record{
-			Topic:    lad.Topic(topicStr),
-			Seq:      seq,
-			TenantID: tenantID,
-			NodeID:   nodeID,
+			Topic:     lad.Topic(topicStr),
+			Seq:       seq,
+			Partition: partition,
+			NodeID:    nodeID,
 		}
 		l.updateBloomFilter(rec)
 		count++

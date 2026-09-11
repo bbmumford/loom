@@ -152,7 +152,7 @@ func (d *LADDirectory) Member(ctx context.Context, partition ports.Partition, id
 func (d *LADDirectory) member(m lad.MemberRecord, roles map[string][]string, reach map[string]lad.ReachRecord) ports.Member {
 	out := ports.Member{
 		NodeID:      ports.NodeID(m.NodeID),
-		PartitionID: m.TenantID,
+		PartitionID: m.Partition,
 		ServiceName: attrServiceName(m.Attrs),
 		Region:      m.Attrs["region"],
 	}

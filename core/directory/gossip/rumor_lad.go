@@ -15,7 +15,7 @@ import (
 // doesn't re-apply twice to the local cache.
 //
 // Key includes Seq and LamportClock alongside Timestamp.UnixNano. Two
-// records with the same (topic, tenant, node) emitted in the same
+// records with the same (topic, partition, node) emitted in the same
 // nanosecond — which happens during burst updates (latency flood,
 // multipath flap, reach update cascade) — previously collapsed onto
 // the same key and silently lost the later writes. The cache is
@@ -24,7 +24,7 @@ import (
 // Was the H11 finding. No wire change — key is local-only.
 func LADRumorID(rec lad.Record) string {
 	return fmt.Sprintf("%s:%s:%s:%d:%d:%d",
-		rec.Topic, rec.TenantID, rec.NodeID,
+		rec.Topic, rec.Partition, rec.NodeID,
 		rec.Timestamp.UnixNano(), rec.Seq, rec.LamportClock)
 }
 

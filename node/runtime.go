@@ -3164,7 +3164,7 @@ func (rt *Runtime) PublishHandlersToLAD(ctx context.Context, roles []string, reg
 		handlerMetadata = append(handlerMetadata, metadata)
 	}
 
-	// Create role record with handler metadata. lad.RoleRecord.TenantID is left
+	// Create role record with handler metadata. lad.RoleRecord.Partition is left
 	// unset: a role advert describes what this node serves, not who may reach
 	// it, and readers filter on the enclosing lad.Record instead.
 	roleRec := lad.RoleRecord{
@@ -3180,7 +3180,7 @@ func (rt *Runtime) PublishHandlersToLAD(ctx context.Context, roles []string, reg
 		return fmt.Errorf("marshal role record: %w", err)
 	}
 
-	// Publish to ledger. lad.Record.TenantID is left unset, which publishes this
+	// Publish to ledger. lad.Record.Partition is left unset, which publishes this
 	// advert to every reader rather than to one partition's readers.
 	rec := lad.Record{
 		Topic:        lad.TopicRole,
@@ -4802,7 +4802,7 @@ func (rt *Runtime) BestGradeToHandler(handler string) Grade {
 	// Routed through the LiveDirectory seam, which is enough here because this
 	// caller needs only the node IDs NodesByRole returns. The empty partition
 	// argument names the unpartitioned bucket explicitly: role adverts are
-	// published there (see the lad.Record above, whose TenantID is left unset),
+	// published there (see the lad.Record above, whose Partition is left unset),
 	// so a non-empty partition would find nothing.
 	if rt.liveDir == nil {
 		return GradeF

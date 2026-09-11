@@ -124,7 +124,7 @@ func recordToProto(r lad.Record) *gossippb.LADRecord {
 	pb := &gossippb.LADRecord{
 		Topic:           string(r.Topic),
 		NodeId:          r.NodeID,
-		TenantId:        r.TenantID,
+		Partition:       r.Partition,
 		Body:            []byte(r.Body),
 		TimestampUnix:   r.Timestamp.UnixNano(),
 		LamportClock:    r.LamportClock,
@@ -154,7 +154,7 @@ func protoToRecord(pb *gossippb.LADRecord) lad.Record {
 	r := lad.Record{
 		Topic:           lad.Topic(pb.Topic),
 		NodeID:          pb.NodeId,
-		TenantID:        pb.TenantId,
+		Partition:       pb.Partition,
 		Body:            pb.Body,
 		Timestamp:       time.Unix(0, pb.TimestampUnix),
 		LamportClock:    pb.LamportClock,
