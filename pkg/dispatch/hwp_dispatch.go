@@ -182,14 +182,6 @@ const defaultProbeTimeout = 10 * time.Second
 // remaining 7 s of probeCtx are available for the dynamic-stream attempt.
 const bidiProbeTimeout = 3 * time.Second
 
-// SetPlatformTenant has no effect. A receiver takes the calling node's
-// partition from the authenticated transport (node/rpc.go reads
-// TransportPartitionFromContext) and reads no partition value from the
-// request context map, so nothing is stamped there.
-//
-// Deprecated: delete the call.
-func (c *HWPCaller) SetPlatformTenant(string) {}
-
 // SessionFinder resolves a role + handler to an HWPSession.
 // Implemented by the ConnectionManager which tracks all peer sessions.
 type SessionFinder interface {
