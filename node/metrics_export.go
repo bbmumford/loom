@@ -330,13 +330,13 @@ func (e *MetricsExporter) writeRPCMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# TYPE mesh_rpc_dedup_misses_total counter\n")
 	fmt.Fprintf(w, "mesh_rpc_dedup_misses_total %d\n", misses)
 
-	sealedBinds, wireBinds := e.rpcServer.PrincipalPathStats()
-	fmt.Fprintf(w, "# HELP mesh_rpc_principal_sealed_total Requests whose identity was bound from a sealed principal, reconciled against the transport partition.\n")
+	sealedBinds, unsealed := e.rpcServer.PrincipalPathStats()
+	fmt.Fprintf(w, "# HELP mesh_rpc_principal_sealed_total Requests whose identity was bound from a sealed principal.\n")
 	fmt.Fprintf(w, "# TYPE mesh_rpc_principal_sealed_total counter\n")
 	fmt.Fprintf(w, "mesh_rpc_principal_sealed_total %d\n", sealedBinds)
-	fmt.Fprintf(w, "# HELP mesh_rpc_principal_wire_total Requests whose identity was lifted from the request map with nothing reconciled against the transport partition.\n")
-	fmt.Fprintf(w, "# TYPE mesh_rpc_principal_wire_total counter\n")
-	fmt.Fprintf(w, "mesh_rpc_principal_wire_total %d\n", wireBinds)
+	fmt.Fprintf(w, "# HELP mesh_rpc_principal_unsealed_total Requests that arrived without a sealed principal and so carried no caller identity.\n")
+	fmt.Fprintf(w, "# TYPE mesh_rpc_principal_unsealed_total counter\n")
+	fmt.Fprintf(w, "mesh_rpc_principal_unsealed_total %d\n", unsealed)
 
 	// Active handlers
 	fmt.Fprintf(w, "# HELP mesh_rpc_active_handlers Current concurrent RPC handler goroutines.\n")

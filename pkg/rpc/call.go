@@ -47,7 +47,6 @@ func Call[Resp proto.Message](ctx context.Context, handler string, req proto.Mes
 	}
 
 	role := ExtractRole(handler)
-	ctx = bridgeWireIdentity(ctx)
 	respBytes, err := caller.Call(ctx, role, handler, payload)
 	if err != nil {
 		return zero, err
@@ -75,7 +74,6 @@ func CallRaw(ctx context.Context, handler string, payload []byte) ([]byte, error
 		return nil, fmt.Errorf("dispatch caller not initialized")
 	}
 	role := ExtractRole(handler)
-	ctx = bridgeWireIdentity(ctx)
 	return caller.Call(ctx, role, handler, payload)
 }
 
@@ -133,7 +131,6 @@ func CallNode[Resp proto.Message](ctx context.Context, nodeID, handler string, r
 	}
 
 	role := ExtractRole(handler)
-	ctx = bridgeWireIdentity(ctx)
 	respBytes, err := targeted.CallNode(ctx, nodeID, role, handler, payload)
 	if err != nil {
 		return zero, err
@@ -163,32 +160,7 @@ func CallNodeRaw(ctx context.Context, nodeID, handler string, payload []byte) ([
 			handler, nodeID, caller, sharedDispatch.ErrNoRouteToNode)
 	}
 	role := ExtractRole(handler)
-	ctx = bridgeWireIdentity(ctx)
 	return targeted.CallNode(ctx, nodeID, role, handler, payload)
-}
-
-// bridgeWireIdentity copies the caller's authenticated scope-list + userId
-// from the rpc context map (stamped by the edge's ContextMirror via
-// WithRPCContext — #K-32) onto the dispatch-local keys that buildRPCRequestCtx
-// reads when it serializes req.Context for the mesh hop. This is the ONE
-// place that bridges the two ctx surfaces: pkg/dispatch cannot import pkg/rpc
-// (the rpc→dispatch dependency would cycle), so the rpc layer — which does
-// import dispatch — performs the copy on the way out to the wire. Selective
-// by design (R-782): only scopes + userId cross, never the whole map. Runs
-// only on the mesh path (after the local-dispatch short-circuit), so an
-// in-process handler still reads the same values straight from the rpc map.
-func bridgeWireIdentity(ctx context.Context) context.Context {
-	m := rpcContextMap(ctx)
-	if m == nil {
-		return ctx
-	}
-	if sc := ParseScopes(m["scopes"]); len(sc) > 0 {
-		ctx = sharedDispatch.WithScopes(ctx, sc)
-	}
-	if uid := m["userId"]; uid != "" {
-		ctx = sharedDispatch.WithUserID(ctx, uid)
-	}
-	return ctx
 }
 
 // newInstance creates a new zero-value instance of a proto.Message pointer type.

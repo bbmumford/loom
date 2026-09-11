@@ -27,34 +27,30 @@ func TestBuildRequest_PropagatesDeadline(t *testing.T) {
 	}
 }
 
-// TestBuildRPCRequestCtx_SerializesScopesAndUserID verifies the caller's
-// scope-list (space-joined) and userId, stamped via WithScopes/WithUserID,
-// are serialized into req.Context, and that role is the builder's value.
-func TestBuildRPCRequestCtx_SerializesScopesAndUserID(t *testing.T) {
-	ctx := WithScopes(context.Background(), []string{"storage:read", "assistant:write"})
-	ctx = WithUserID(ctx, "user-42")
+// TestBuildRPCRequestCtx_SendsIdentityOnlyAsThePrincipal: the caller's subject
+// and grants cross the hop only inside req.Principal. The mutable request map
+// carries the builder's role and no userId or scopes key, so a receiver has
+// no unsealed copy to lift into its context.
+func TestBuildRPCRequestCtx_SendsIdentityOnlyAsThePrincipal(t *testing.T) {
+	principal, err := rpcscope.NewAuthenticatedPrincipal(
+		rpcscope.NewScopeIdentity("pinned-P", "partition-Q", "user-42"),
+		[]string{"storage:read", "assistant:write"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := rpcscope.WithAuthenticatedPrincipal(context.Background(), principal)
 	req := buildRPCRequestCtx(ctx, "storage", "orbtr.io.storage.Get", nil, 5*time.Second)
 
-	if got := req.Context["scopes"]; got != "storage:read assistant:write" {
-		t.Errorf("scopes = %q, want space-joined %q", got, "storage:read assistant:write")
-	}
-	if got := req.Context["userId"]; got != "user-42" {
-		t.Errorf("userId = %q, want user-42", got)
+	for _, key := range []string{"userId", "user_id", "scopes"} {
+		if v, ok := req.Context[key]; ok {
+			t.Errorf("request map carries %q=%q; identity must travel only in req.Principal", key, v)
+		}
 	}
 	if got := req.Context["role"]; got != "storage" {
 		t.Errorf("role = %q, want storage", got)
 	}
-}
-
-// TestBuildRPCRequestCtx_OmitsEmptyScopesAndUserID verifies the copy is
-// conditional — no scopes/userId stamped means no empty wire keys.
-func TestBuildRPCRequestCtx_OmitsEmptyScopesAndUserID(t *testing.T) {
-	req := buildRPCRequestCtx(context.Background(), "platform", "platform.Ping", nil, time.Second)
-	if _, ok := req.Context["scopes"]; ok {
-		t.Error("scopes key present with none stamped — should be omitted")
-	}
-	if _, ok := req.Context["userId"]; ok {
-		t.Error("userId key present with none stamped — should be omitted")
+	if req.Principal == nil || req.Principal.Subject != "user-42" || len(req.Principal.Scopes) != 2 {
+		t.Fatalf("principal = %+v, want subject user-42 with 2 grants", req.Principal)
 	}
 }
 
@@ -105,7 +101,7 @@ func TestBuildRequest_SetsRoleInContext(t *testing.T) {
 
 // TestBuildRequest_NoPartitionKeyOnTheWire pins that the builder writes no
 // partition value into the mutable request map, even when the caller's ctx
-// carries a sealed principal and a scope-list. A receiver takes the calling
+// carries a sealed principal. A receiver takes the calling
 // node's partition from the authenticated transport and a caller's partition
 // from req.Principal; a map key would be a second, caller-writable copy.
 func TestBuildRequest_NoPartitionKeyOnTheWire(t *testing.T) {
@@ -115,8 +111,6 @@ func TestBuildRequest_NoPartitionKeyOnTheWire(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := rpcscope.WithAuthenticatedPrincipal(context.Background(), principal)
-	ctx = WithScopes(ctx, []string{"storage:read"})
-	ctx = WithUserID(ctx, "user-A")
 
 	for _, req := range []*pb.RPCRequest{
 		buildRPCRequest("platform", "platform.CheckHealth", nil, 0),

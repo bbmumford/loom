@@ -12,7 +12,7 @@ import (
 	"github.com/bbmumford/loom/ports"
 )
 
-// meshHandler is a minimal ports.SecureHandler for the WithWireIdentity test.
+// meshHandler is a minimal ports.SecureHandler for the scope-check test.
 type meshHandler struct {
 	name   string
 	scopes []string
@@ -25,25 +25,20 @@ func (h meshHandler) Scopes() []string            { return h.scopes }
 func (h meshHandler) Scope() ports.Scope          { return "" }
 func (h meshHandler) AllowedPartitions() []string { return nil }
 
-// TestWithWireIdentity_EnablesScopeEnforcement verifies #K-32: the default
-// validator implements ports.ScopeStamper, and a mesh-propagated principal
-// carrying the required scope passes ValidateExecutionAuth while a missing
-// scope is denied (fail closed) — the receive-side half of the scope plumb.
-func TestWithWireIdentity_EnablesScopeEnforcement(t *testing.T) {
+// TestValidateExecutionAuthChecksTheHandlerScopes: the default validator
+// denies a handler's required scope when no identity is stamped, admits it
+// when the stamped identity holds it, and denies a scope the identity lacks.
+func TestValidateExecutionAuthChecksTheHandlerScopes(t *testing.T) {
 	v := Default()
-	ss, ok := v.(ports.ScopeStamper)
-	if !ok {
-		t.Fatal("default validator must implement ports.ScopeStamper")
-	}
 
-	// No principal stamped → denied (fail closed).
+	// No identity stamped → denied (fail closed).
 	if err := v.ValidateExecutionAuth(context.Background(),
 		meshHandler{name: "storage.Get", scopes: []string{"storage:read"}}); err == nil {
-		t.Fatal("expected deny with no mesh principal")
+		t.Fatal("expected deny with no identity")
 	}
 
-	// Mesh principal carrying the required scope → allowed.
-	ctx := ss.WithWireIdentity(context.Background(), "user-1", []string{"storage:read", "storage:write"})
+	// Identity holding the required scope → allowed.
+	ctx := WithAuth(context.Background(), "user-1", "", []string{"storage:read", "storage:write"})
 	if err := v.ValidateExecutionAuth(ctx,
 		meshHandler{name: "storage.Get", scopes: []string{"storage:read"}}); err != nil {
 		t.Errorf("principal with storage:read should pass: %v", err)
@@ -63,7 +58,7 @@ func TestWithWireIdentity_EnablesScopeEnforcement(t *testing.T) {
 		t.Errorf("ExtractScopes = %v, want 2 scopes", got)
 	}
 	if !IsAuthenticated(ctx) {
-		t.Error("WithWireIdentity should mark the ctx authenticated")
+		t.Error("WithAuth should mark the ctx authenticated")
 	}
 }
 
