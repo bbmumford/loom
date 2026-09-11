@@ -923,10 +923,9 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 	if principal, ok := rpcscope.AuthenticatedPrincipalFromContext(ctx); ok {
 		// Project loom's opaque identity onto the wire generically: every
 		// established axis travels as a ScopeAxis (aether names none), the
-		// subject as Subject, the grants as Scopes. The receiver's injected
-		// policy reconciles the transport-pinned axis and re-derives the owner
-		// partition, which never travels — a peer cannot forge an owner by
-		// setting a field.
+		// subject as Subject, the grants as Scopes and the partition as
+		// Partition. The receiving node's ports.PrincipalAdmitter decides
+		// whether it accepts what this node asserts over that transport.
 		identity := principal.Identity()
 		axes := make([]*pb.ScopeAxis, 0, len(identity.Scopes))
 		for i := range identity.Scopes {
@@ -936,9 +935,10 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 			})
 		}
 		wirePrincipal = &pb.AuthenticatedPrincipal{
-			Subject: identity.Subject,
-			Axes:    axes,
-			Scopes:  principal.Scopes(),
+			Subject:   identity.Subject,
+			Axes:      axes,
+			Scopes:    principal.Scopes(),
+			Partition: identity.Partition(),
 		}
 	}
 	return &pb.RPCRequest{

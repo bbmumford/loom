@@ -63,11 +63,12 @@ type SecureHandler interface {
 // fail-closed and safe ONLY in builds with no HSTLES domain handlers.
 // EXTENSIONS, AND WHAT WRAPPING ONE COSTS. Four optional interfaces in this
 // package are type-asserted on the value supplied here, and a failed assertion
-// SKIPS the behaviour rather than erroring: AuthenticatedPrincipalStamper (the
-// RPC receive path, stamping the reconstructed principal onto ctx),
-// TransportAxisPin (the axis reconciled against the transport-established
-// partition before a principal reaches dispatch), and ExecutionPrincipalReader
-// with PartitionPrincipalReader (the task executor).
+// changes behaviour rather than erroring: AuthenticatedPrincipalStamper (the
+// RPC receive path, stamping the admitted principal onto ctx; skipped when
+// absent), PrincipalAdmitter (the RPC receive path, judging a mesh principal
+// against its transport; every mesh principal is refused when absent), and
+// ExecutionPrincipalReader with PartitionPrincipalReader (the task executor;
+// skipped when absent).
 //
 // A DECORATOR MUST THEREFORE RE-EXPOSE EVERY EXTENSION ITS INNER VALIDATOR
 // IMPLEMENTS. Wrapping a validator to add one behaviour drops the others
@@ -75,11 +76,11 @@ type SecureHandler interface {
 // no compile-time signal. Declare `var _ <Interface> = <decorator>{}` for each
 // forwarded extension so a dropped method fails the build instead.
 //
-// TransportAxisPin is the one a wrapper must not answer on its own behalf:
-// naming an axis where the inner validator names none converts a receive path
-// that refused every mesh principal into one that admits those whose axis
-// matches the transport. Delegate that answer to the inner validator, or
-// return "" — both preserve what the inner validator alone would have admitted.
+// PrincipalAdmitter is the one a wrapper must not answer on its own behalf:
+// admitting where the inner validator implements no admitter converts a receive
+// path that refused every mesh principal into one that accepts whatever a peer
+// asserts. Delegate that answer to the inner validator, or refuse — both
+// preserve what the inner validator alone would have admitted.
 type AuthValidator interface {
 	// ValidateExecutionAuth gates handler execution on the task-executor
 	// path (fail closed: unknown auth state denies RequiresAuth handlers).
@@ -160,14 +161,14 @@ type ExecutionPrincipalReader interface {
 }
 
 // AuthenticatedPrincipalStamper is the preferred receive-side identity seam.
-// The RPC server calls it only after the typed wire principal's platform
-// partition has matched the server-resolved transport ScopeID. Implementations
-// project that one immutable snapshot onto their private product context keys;
-// they must not consult RPCRequest.Context or merge caller fragments.
+// The RPC server calls it only after the PrincipalAdmitter has admitted the
+// typed wire principal. Implementations project that one immutable snapshot
+// onto their private product context keys; they must not consult
+// RPCRequest.Context or merge caller fragments.
 //
-// It remains optional so products that have not adopted customer-organisation
-// authority fail closed at org/user scope rather than gaining authority from
-// the legacy mutable context map.
+// It is optional: without it the product's private identity keys stay empty,
+// so a handler that reads them denies rather than taking authority from the
+// mutable context map.
 type AuthenticatedPrincipalStamper interface {
 	WithAuthenticatedPrincipal(
 		ctx context.Context,
@@ -175,21 +176,26 @@ type AuthenticatedPrincipalStamper interface {
 	) context.Context
 }
 
-// TransportAxisPin is the OPTIONAL consumer seam that names which received
-// identity axis a node reconciles against its transport-established partition.
-// The RPC server gates that axis's wire value for equality with the transport
-// tenant before the reconstructed identity enters dispatch — the cross-tenant
-// forge gate: a mesh peer bound to transport tenant T cannot present a
-// principal whose pinned axis is any tenant but T. loom never names the axis;
-// the consuming project returns the canonical name it stamps that axis under
-// (e.g. its platform-tenant axis). A validator that omits this seam cannot
-// present customer authority over the mesh — the RPC server fails closed rather
-// than accept an un-pinned principal, so a missing seam never becomes a forge
-// hole. The owner partition is NOT pinned here: it is derived receive-side from
-// a within-tenant axis after this gate, so within-tenant multi-owner traffic
-// still round-trips (over-pinning it would deny that legitimately).
-type TransportAxisPin interface {
-	TransportPinnedAxis() string
+// PrincipalAdmitter is the consumer seam that judges a principal a mesh peer
+// asserted before the RPC server installs it. Every field of the wire principal
+// (subject, axes, grants, partition) is the sending node's assertion; the RPC
+// server has already required that it arrived over a partition-bound transport,
+// and passes that server-established transport partition here with the
+// reconstructed principal. A nil error admits the principal exactly as
+// asserted; any error refuses the request.
+//
+// loom names no axis and applies no rule of its own: which assertions a
+// transport may carry is the consuming project's policy. It is required for
+// mesh authority: a validator that does not implement it has every mesh
+// principal refused, so an absent seam never becomes a forge hole. An admitter
+// must not require the principal's partition to equal the transport partition:
+// one transport carries principals of many partitions.
+type PrincipalAdmitter interface {
+	AdmitPrincipal(
+		ctx context.Context,
+		transportPartition string,
+		principal scope.AuthenticatedPrincipal,
+	) error
 }
 
 // BootstrapInfo is what the VL1 bootstrap handshake knows about a joining

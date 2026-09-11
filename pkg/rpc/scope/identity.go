@@ -90,6 +90,15 @@ func (a AuthenticatedIdentity) clone() AuthenticatedIdentity {
 	return out
 }
 
+// NewIdentity builds the identity a trusted ingress established: the
+// authenticated subject and the opaque partition its store selectors key on.
+// Callers pass only server-established values, never a request-body field. An
+// empty partition leaves the identity without one, so a partition-keyed read
+// denies.
+func NewIdentity(subject, partition string) AuthenticatedIdentity {
+	return AuthenticatedIdentity{Subject: subject, partition: partition}
+}
+
 // NewCompleteIdentity is the validating constructor for an authoritative identity
 // snapshot: a subject plus zero or more axes, each with a non-empty canonical
 // Name and a non-empty Value, and no duplicate Name. It returns a defensively

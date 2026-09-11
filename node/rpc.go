@@ -655,17 +655,14 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 		ctx = context.WithValue(ctx, rpcHopsKey, int(req.Hops))
 	}
 
-	// 2b. Bind the platform identity to the authenticated transport, then bind
+	// 2b. Stamp the transport partition the session was accepted on, then bind
 	// the optional typed caller principal. RPCRequest.Context is mutable
-	// metadata: its tenant/user/org/scope spellings are compare-only candidates
-	// and never establish authority.
+	// metadata and never establishes authority; only the transport the session
+	// authenticated over, and a principal its admitter accepts, do.
 	transportPartition := handlers.TransportPartitionFromContext(ctx)
 	if transportPartition != "" && transportPartition != "default" {
 		ctx = s.authValidator.WithPartitionID(ctx, transportPartition)
 	}
-	// No req.Context["tenantId"] fallback: RPCRequest.Context is mutable wire
-	// metadata and must never mint platform authority. Only an authenticated
-	// transport ScopeID establishes the platform tenant.
 	typedPrincipal := false
 	if req.Principal != nil {
 		var err error
@@ -786,12 +783,13 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 		return ctx, nil
 	}
 	if transportPartition == "" || transportPartition == "default" {
-		return ctx, fmt.Errorf("customer authority requires a tenant-bound transport")
+		return ctx, fmt.Errorf("a mesh principal requires a partition-bound transport")
 	}
 
 	// Reconstruct the opaque identity generically from the wire axes — aether
 	// named none — dropping any axis with an empty name or value (an absent axis
-	// must stay absent, never a "" presence). The subject travels in Subject.
+	// must stay absent, never a "" presence). The subject travels in Subject and
+	// the partition in Partition.
 	axes := make([]rpcscope.ScopeValue, 0, len(wire.Axes))
 	for _, a := range wire.Axes {
 		if a.GetName() == "" || a.GetValue() == "" {
@@ -799,77 +797,32 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 		}
 		axes = append(axes, rpcscope.ScopeValue{Name: a.GetName(), Value: a.GetValue()})
 	}
-
-	// Cross-tenant forge gate: the consuming project names which axis pins
-	// against the transport-established tenant; that axis's received value must
-	// equal transportPartition, or a peer bound to partition T could present another
-	// partition's identity. A consumer that injects no pin cannot carry customer
-	// authority over the mesh — fail closed rather than accept an un-pinned
-	// principal. Only the pinned (platform-tenant-analog) axis is gated here;
-	// the owner partition is derived receive-side from a within-tenant axis by
-	// the consumer's stamper below, so within-partition multi-owner traffic still
-	// round-trips (pinning that axis too would deny it).
-	pinnedAxis := ""
-	if pinner, ok := s.authValidator.(ports.TransportAxisPin); ok {
-		pinnedAxis = pinner.TransportPinnedAxis()
-	}
-	if pinnedAxis == "" {
-		return ctx, fmt.Errorf("mesh principal requires a consumer transport-axis pin")
-	}
-	pinnedValue := ""
-	for i := range axes {
-		if axes[i].Name == pinnedAxis {
-			pinnedValue = axes[i].Value
-			break
-		}
-	}
-	if pinnedValue != transportPartition {
-		return ctx, fmt.Errorf(
-			"transport/principal pinned-axis mismatch: axis=%q transport=%q principal=%q",
-			pinnedAxis,
-			transportPartition,
-			pinnedValue,
-		)
-	}
-
 	identity, err := rpcscope.NewCompleteIdentity(wire.Subject, axes...)
 	if err != nil {
 		return ctx, err
 	}
+	identity = identity.WithPartition(wire.GetPartition())
 	principal, err := rpcscope.NewAuthenticatedPrincipal(identity, wire.Scopes)
 	if err != nil {
 		return ctx, err
 	}
+
+	// Every field above is the sending peer's assertion. The consumer's
+	// admitter decides whether this transport may carry it; loom applies no
+	// rule of its own. Without an admitter no mesh principal is accepted.
+	admitter, ok := s.authValidator.(ports.PrincipalAdmitter)
+	if !ok {
+		return ctx, fmt.Errorf("a mesh principal requires a consumer principal admitter")
+	}
+	if err := admitter.AdmitPrincipal(ctx, transportPartition, principal); err != nil {
+		return ctx, fmt.Errorf("principal not admitted over transport %q: %w", transportPartition, err)
+	}
+
 	ctx = rpcscope.WithAuthenticatedPrincipal(ctx, principal)
 	if stamper, ok := s.authValidator.(ports.AuthenticatedPrincipalStamper); ok {
 		ctx = stamper.WithAuthenticatedPrincipal(ctx, principal)
 	}
 	return ctx, nil
-}
-
-func mismatchedWireCandidate(
-	values map[string]string,
-	expected string,
-	keys ...string,
-) string {
-	for _, key := range keys {
-		if value := values[key]; value != "" && value != expected {
-			return value
-		}
-	}
-	return ""
-}
-
-func equalWireScopes(a []string, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }
 
 // executeLocal dispatches an RPC to the local HandlerRegistry with active handler tracking.
