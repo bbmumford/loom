@@ -26,7 +26,7 @@ import (
 //
 // ⚠ The delta is zero CONDITIONAL on callers passing the partition the records
 // were stored under. Nine of loom's ten sites pass "" and loom's own appends
-// leave TenantID at the zero value, so "" is the right bucket today — but
+// leave Partition at the zero value, so "" is the right bucket today — but
 // whether any ENDPOINT publishes a non-empty partition is unmeasured and owned by
 // @C/@P. This test pins the equivalence for the partition it is given
 // and deliberately also exercises a non-empty one, so the conditional is
@@ -49,21 +49,21 @@ func TestSeamMatchesDirectCacheReads(t *testing.T) {
 					roles = []string{"billing"}
 				}
 				mb, _ := json.Marshal(lad.MemberRecord{
-					TenantID: partition, NodeID: nodeID, CreatedAt: time.Now(),
+					Partition: partition, NodeID: nodeID, CreatedAt: time.Now(),
 					// Producer key, per node/lad_reach_bridge.go:156 — not the reader's.
 					Attrs: map[string]string{"serviceName": "svc"},
 				})
 				if err := c.Apply(lad.Record{
-					Topic: lad.TopicMember, TenantID: partition, NodeID: nodeID,
+					Topic: lad.TopicMember, Partition: partition, NodeID: nodeID,
 					Body: mb, Timestamp: time.Now(),
 				}); err != nil {
 					t.Fatal(err)
 				}
 				rb, _ := json.Marshal(lad.RoleRecord{
-					TenantID: partition, NodeID: nodeID, Roles: roles, Updated: time.Now(),
+					Partition: partition, NodeID: nodeID, Roles: roles, Updated: time.Now(),
 				})
 				if err := c.Apply(lad.Record{
-					Topic: lad.TopicRole, TenantID: partition, NodeID: nodeID,
+					Topic: lad.TopicRole, Partition: partition, NodeID: nodeID,
 					Body: rb, Timestamp: time.Now(),
 				}); err != nil {
 					t.Fatal(err)

@@ -44,14 +44,14 @@ func newForwarderRuntime(t *testing.T) (*Runtime, *ladcache.DirectoryCache) {
 func publishReach(t *testing.T, c *ladcache.DirectoryCache, nodeID string, addrs []lad.ReachAddress) {
 	t.Helper()
 	body, err := json.Marshal(lad.ReachRecord{
-		TenantID: "", NodeID: nodeID, Addresses: addrs,
+		Partition: "", NodeID: nodeID, Addresses: addrs,
 		UpdatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Apply(lad.Record{
-		Topic: lad.TopicReach, TenantID: "", NodeID: nodeID,
+		Topic: lad.TopicReach, Partition: "", NodeID: nodeID,
 		Body: body, Timestamp: time.Now(),
 	}); err != nil {
 		t.Fatal(err)

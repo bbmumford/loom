@@ -39,7 +39,7 @@ func TestAnchorSnapshotInputCarriesNoOwnerSignature(t *testing.T) {
 	c := ladcache.NewDirectoryCache()
 
 	rr := lad.ReachRecord{
-		TenantID: "hstles", NodeID: "node-1", Seq: 5,
+		Partition: "hstles", NodeID: "node-1", Seq: 5,
 		Addresses: []lad.ReachAddress{{Host: "1.2.3.4", Port: 443, Proto: "ws"}},
 		UpdatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
 	}
@@ -48,7 +48,7 @@ func TestAnchorSnapshotInputCarriesNoOwnerSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := c.Apply(lad.Record{
-		Topic: lad.TopicReach, TenantID: "hstles", NodeID: "node-1", Seq: 5,
+		Topic: lad.TopicReach, Partition: "hstles", NodeID: "node-1", Seq: 5,
 		Body: wire, Timestamp: time.Now(),
 		Signature: []byte("OWNER-SIGNATURE-BYTES"), AuthorPubKey: []byte("OWNER-PUBKEY"),
 	}); err != nil {

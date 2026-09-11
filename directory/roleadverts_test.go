@@ -102,10 +102,10 @@ func TestRoleAdvertsAgreesAcrossBothImplementations(t *testing.T) {
 
 	ld := ladDirWithRecords(t, func(c *ladcache.DirectoryCache) {
 		rb, _ := json.Marshal(lad.RoleRecord{
-			TenantID: string(fixtureTenant), NodeID: string(id), Roles: roles, Updated: time.Now(),
+			Partition: string(fixtureTenant), NodeID: string(id), Roles: roles, Updated: time.Now(),
 		})
 		if err := c.Apply(lad.Record{
-			Topic: lad.TopicRole, TenantID: string(fixtureTenant), NodeID: string(id),
+			Topic: lad.TopicRole, Partition: string(fixtureTenant), NodeID: string(id),
 			Body: rb, Timestamp: time.Now(),
 		}); err != nil {
 			t.Fatal(err)
