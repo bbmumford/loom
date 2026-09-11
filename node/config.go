@@ -145,10 +145,10 @@ type Config struct {
 	RegisterDomains []func(*rpc.Registry) error
 
 	// VerifyBootstrap authorizes a joining node during the VL1 bootstrap
-	// handshake on non-anchor-capable nodes (replaces the hard-coded
-	// hstles.anchor.VerifyBootstrap rpc.Call). nil → allow all. Error →
-	// graceful allow (the Noise handshake is the real boundary);
-	// allowed=false → 403 with reason.
+	// handshake on non-anchor-capable nodes; anchor.Client asks an
+	// anchor-capable node over the mesh. nil → allow all. Error → graceful
+	// allow (the Noise handshake is the real boundary); allowed=false → 403
+	// with reason.
 	VerifyBootstrap ports.VerifyBootstrapFunc
 
 	// Service identity (required)

@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package loom.anchor.v1;
+
+option go_package = "github.com/bbmumford/loom/anchor/pb";
+
+// VerifyBootstrapRequest describes a node asking to join the mesh over VL1, as
+// reported by the node itself to the peer admitting it.
+message VerifyBootstrapRequest {
+  string node_id = 1;        // the joining node's VL1 node id
+  string service_name = 2;   // self-reported service name
+  string region = 3;         // self-reported region
+  repeated string roles = 4; // self-reported roles
+  string private_ip = 5;     // self-reported private address
+  string public_ip = 6;      // STUN-discovered public address
+}
+
+// VerifyBootstrapResponse is the admission decision; reason explains a refusal.
+message VerifyBootstrapResponse {
+  bool allowed = 1;
+  string reason = 2;
+}
