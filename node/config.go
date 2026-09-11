@@ -173,7 +173,7 @@ type Config struct {
 
 	// Network Keys (Shared PSKs for mesh authorization)
 	// First key is used for sending, all are accepted for receiving.
-	// Used as a single-partition fallback when Tenants is empty.
+	// Used as a single-partition fallback when Partitions is empty.
 	NetworkKeys []string
 
 	// Partitions configures a per-partition transport for mesh segmentation.
@@ -372,34 +372,34 @@ func (c *Config) Validate() error {
 	if c.DataDir == "" {
 		return fmt.Errorf("data directory is required")
 	}
-	// Network key validation: either NetworkKeys or Tenants must be provided.
-	// When Tenants is non-empty, each partition carries its own keys.
-	// When Tenants is empty, NetworkKeys is used as single-partition fallback.
+	// Network key validation: either NetworkKeys or Partitions must be provided.
+	// When Partitions is non-empty, each partition carries its own keys.
+	// When Partitions is empty, NetworkKeys is used as single-partition fallback.
 	if len(c.NetworkKeys) == 0 && len(c.Partitions) == 0 {
-		return fmt.Errorf("at least one network key or tenant config is required")
+		return fmt.Errorf("at least one network key or partition config is required")
 	}
 
 	// Validate partition configs
-	seenTenants := make(map[string]bool, len(c.Partitions))
+	seenPartitions := make(map[string]bool, len(c.Partitions))
 	seenPorts := make(map[int]string) // port → partitionID (for collision detection)
 	for i, tc := range c.Partitions {
 		if tc.PartitionID == "" {
-			return fmt.Errorf("tenant[%d]: tenant ID is required", i)
+			return fmt.Errorf("partition[%d]: partition ID is required", i)
 		}
-		if seenTenants[tc.PartitionID] {
-			return fmt.Errorf("tenant[%d]: duplicate tenant ID %q", i, tc.PartitionID)
+		if seenPartitions[tc.PartitionID] {
+			return fmt.Errorf("partition[%d]: duplicate partition ID %q", i, tc.PartitionID)
 		}
-		seenTenants[tc.PartitionID] = true
+		seenPartitions[tc.PartitionID] = true
 
 		if len(tc.NetworkKeys) == 0 {
-			return fmt.Errorf("tenant[%d] (%s): at least one network key is required", i, tc.PartitionID)
+			return fmt.Errorf("partition[%d] (%s): at least one network key is required", i, tc.PartitionID)
 		}
 		if tc.Dedicated {
 			if tc.UDPPort <= 0 {
-				return fmt.Errorf("tenant[%d] (%s): UDP port is required for dedicated transport", i, tc.PartitionID)
+				return fmt.Errorf("partition[%d] (%s): UDP port is required for dedicated transport", i, tc.PartitionID)
 			}
 			if other, exists := seenPorts[tc.UDPPort]; exists {
-				return fmt.Errorf("tenant[%d] (%s): UDP port %d conflicts with tenant %s", i, tc.PartitionID, tc.UDPPort, other)
+				return fmt.Errorf("partition[%d] (%s): UDP port %d conflicts with partition %s", i, tc.PartitionID, tc.UDPPort, other)
 			}
 			seenPorts[tc.UDPPort] = tc.PartitionID
 		}
