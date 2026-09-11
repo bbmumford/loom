@@ -67,7 +67,7 @@ func (s *stubSwarmNode) NodeRecords(swarm.Topic, swarm.NodeID) []swarm.Record { 
 func (s *stubSwarmNode) TopicRecords(swarm.Topic) []swarm.Record              { return nil }
 func (s *stubSwarmNode) Topics() []swarm.Topic                                { return nil }
 func (s *stubSwarmNode) SetObserverQuorum(int, time.Duration)                 {}
-func (s *stubSwarmNode) SetTenant(string) error                               { return nil }
+func (s *stubSwarmNode) SetPartition(string) error                            { return nil }
 func (s *stubSwarmNode) Pause() error                                         { return nil }
 func (s *stubSwarmNode) Resume() error                                        { return nil }
 func (s *stubSwarmNode) PerPeerConfig(swarm.NodeID) swarm.PerPeerConfig {

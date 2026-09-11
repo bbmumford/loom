@@ -100,9 +100,9 @@ func newSwarmTrustGate(mode string) (func(swarm.Record) error, *trustGateCounter
 	// node's own PeerRecord and latency records pass. An unseeded policy rejects
 	// EVERY publish ("topic matches no publish rule"), which is why the gate is
 	// off by default — observe mode with this seed is what shows whether the seed
-	// is complete against live traffic before an enforce cut. Tenant/role
-	// entitlement is not seeded here: a nil-tenant principal skips the tenant
-	// gate, and role-restricted topics (role.secrets.*) are absent from the
+	// is complete against live traffic before an enforce cut. Partition/role
+	// entitlement is not seeded here: a principal with no partition skips the
+	// partition gate, and role-restricted topics (role.secrets.*) are absent from the
 	// baseline, so they count as would-rejects in observe until their writers are
 	// configured — surfacing exactly which topics still need entitlement.
 	policy := directory.NewPolicy(directory.BaselinePolicyConfig())

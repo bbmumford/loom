@@ -191,12 +191,12 @@ type DirectorySnapshot struct {
 // DurableJournal before Ledger/Whisper removal. "Swarm has a record map"
 // is not parity — RecordsByTopic is an escape hatch for KeyOps/Quorum
 // consumers, not a substitute for the typed projections.
-// Tenant scopes a directory query.
+// Partition scopes a directory query.
 //
 // 🛑 IT IS A LITERAL BUCKET KEY, NOT A WILDCARD — measured against ladcache:
-// a record stored with TenantID "hstles" returns 0 from a query for "" and 1
-// from a query for "hstles". The empty tenant selects records stored with an
-// empty tenant, nothing more.
+// a record stored with Partition "hstles" returns 0 from a query for "" and 1
+// from a query for "hstles". The empty partition selects records stored with
+// an empty partition, nothing more.
 //
 // This parameter exists because the substrate requires it and the port used to
 // hide it (#R-1455 ③). Nine of loom's ten partition-scoped cache reads pass "",
