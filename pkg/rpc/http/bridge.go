@@ -17,15 +17,15 @@ import (
 	"github.com/bbmumford/loom/pkg/rpc"
 )
 
-// TenantInjector mutates the parsed request message to stamp partition/org
-// context derived from the HTTP request (typically session cookie or
-// bearer). Bridges that don't need this leave it nil.
-type TenantInjector = func(r *http.Request, msg proto.Message)
+// IdentityInjector mutates the parsed request message to stamp the caller's
+// identity fields from the HTTP request's verified auth context (typically a
+// session cookie or bearer). Bridges that don't need this leave it nil.
+type IdentityInjector = func(r *http.Request, msg proto.Message)
 
 // Bridge provides a single HTTP handler for all RPC operations.
 // Replaces all per-domain generated http_bridge.go files.
 //
-// Concurrency: tenantInjector and directoryAuth are held in
+// Concurrency: identityInjector and directoryAuth are held in
 // atomic.Pointers so callers can rotate them under load without racing
 // in-flight dispatch goroutines.
 //
@@ -35,10 +35,10 @@ type TenantInjector = func(r *http.Request, msg proto.Message)
 // gating per-registry. See finding rev-080 for the process-global race
 // and cross-registry bypass that motivated this design.
 type Bridge struct {
-	registry       *rpc.Registry
-	tenantInjector atomic.Pointer[TenantInjector]
-	directoryAuth  atomic.Pointer[DirectoryAuthCheck]
-	maxBodySize    int64 // max request body size (default 1MB)
+	registry         *rpc.Registry
+	identityInjector atomic.Pointer[IdentityInjector]
+	directoryAuth    atomic.Pointer[DirectoryAuthCheck]
+	maxBodySize      int64 // max request body size (default 1MB)
 }
 
 // defaultMaxBodySize is the default per-request body cap (1 MiB). Tunable
@@ -68,22 +68,22 @@ func NewBridgeWithLimit(registry *rpc.Registry, maxBodySize int64) *Bridge {
 	return b
 }
 
-// SetTenantInjector configures a callback that injects tenant/org context
+// SetIdentityInjector configures a callback that injects the caller's identity
 // from the HTTP request into the proto message before dispatch. Safe to
 // call concurrently with HandleRPC traffic — uses an atomic pointer swap.
 // Pass nil to clear.
-func (b *Bridge) SetTenantInjector(fn TenantInjector) {
+func (b *Bridge) SetIdentityInjector(fn IdentityInjector) {
 	if fn == nil {
-		b.tenantInjector.Store(nil)
+		b.identityInjector.Store(nil)
 		return
 	}
-	b.tenantInjector.Store(&fn)
+	b.identityInjector.Store(&fn)
 }
 
 // loadInjector returns the current injector or nil. Safe under concurrent
-// SetTenantInjector calls.
-func (b *Bridge) loadInjector() TenantInjector {
-	if p := b.tenantInjector.Load(); p != nil {
+// SetIdentityInjector calls.
+func (b *Bridge) loadInjector() IdentityInjector {
+	if p := b.identityInjector.Load(); p != nil {
 		return *p
 	}
 	return nil
@@ -214,9 +214,9 @@ func (b *Bridge) dispatch(w http.ResponseWriter, r *http.Request, h *rpc.Handler
 		}
 	}
 
-	// 3. Tenant injection runs AFTER parse so the injector can overwrite
-	//    any client-supplied tenant/org fields on the typed proto. The
-	//    pointer load is atomic — safe under concurrent SetTenantInjector.
+	// 3. Identity injection runs AFTER parse so the injector can overwrite
+	//    any client-supplied identity fields on the typed proto. The
+	//    pointer load is atomic — safe under concurrent SetIdentityInjector.
 	if inj := b.loadInjector(); inj != nil {
 		inj(r, req)
 	}
@@ -245,11 +245,10 @@ func (b *Bridge) dispatch(w http.ResponseWriter, r *http.Request, h *rpc.Handler
 // rpc/dispatch.go:53-57) so the HTTP bridge enforces the same security
 // surface as the mesh-side dispatcher:
 //
-//  1. EnforceScope fails closed on the handler's declared Scope
-//     tier when the stamped ctx (tenantId/userId/orgId) doesn't
-//     match. Without this the bridge silently bypassed the declared
-//     scope on every handler reached through /rpc/{handler} or per-FQN
-//     routes — see finding rev-081.
+//  1. EnforceScope fails closed on the handler's declared Scope or
+//     Requirement when the authenticated principal on ctx does not
+//     satisfy it, so a handler reached through /rpc/{handler} or a
+//     per-FQN route is judged exactly as it is on the mesh.
 //  2. verifyWebhookSignature runs the webhook-class pre-dispatch hook
 //     before handler.Func sees an unauthenticated event. We run this on
 //     the LOCAL execution path only; the proxy path delegates to the
