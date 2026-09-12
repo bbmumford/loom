@@ -3,21 +3,27 @@ package scope
 import "fmt"
 
 // scopePresencePolicy is the reference PresencePolicy: it derives a tier verdict
-// for a declared ScopeTag from the presence of the opaque identity axes. loom
+// for a declared ScopeTag from the opaque identity's partition and subject. loom
 // ships no policy by default — a registry with a nil policy fails every non-None
 // handler CLOSED — so this is the canonical implementation a consumer installs
 // via Registry.SetPresencePolicy when it wants tier-presence enforcement, in
-// place of writing its own. platformAllow bears solely on ScopeAllowlisted; the
-// other tags turn on axis presence, so a caller with an established
-// transport-pinned axis satisfies ScopePartition regardless of membership.
+// place of writing its own.
+//
+// Every tier turns on the partition the identity carries, so a handler declaring
+// ScopePartition admits exactly a caller that has one, and platformAllow names
+// the partitions ScopeAllowlisted admits. A caller whose partition is empty
+// reaches no handler above ScopeNone, which is the deny a store selector keyed
+// on that partition would otherwise have to make after the handler had already
+// been entered.
 type scopePresencePolicy struct {
 	platformAllow map[string]struct{}
 }
 
 // NewScopePresencePolicy builds the reference PresencePolicy whose
-// ScopeAllowlisted tag admits exactly the supplied values. Empty strings are
+// ScopeAllowlisted tag admits exactly the supplied partitions. Empty strings are
 // dropped, so an empty argument list yields a policy where ScopeAllowlisted is
-// never satisfied (fail-closed) while the other tags still turn on axis presence.
+// never satisfied (fail-closed) while the other tags still turn on the
+// identity's partition.
 func NewScopePresencePolicy(platformPartitions ...string) PresencePolicy {
 	allow := make(map[string]struct{}, len(platformPartitions))
 	for _, p := range platformPartitions {
@@ -42,33 +48,27 @@ func (p scopePresencePolicy) isPlatform(v string) bool {
 // The default arm fails CLOSED so an unrecognised or sentinel tag (ScopeUnknown)
 // never decays to admission.
 func (p scopePresencePolicy) CheckPresence(declared ScopeTag, id AuthenticatedIdentity) (bool, string) {
-	pinned := id.Scope(AxisTransportPinned)
-	within := id.Scope(AxisWithinTransport)
+	partition := id.Partition()
 	subj := id.Subject
 	switch declared {
 	case ScopeNone:
 		return true, ""
 	case ScopeAllowlisted:
-		if p.isPlatform(pinned) {
+		if p.isPlatform(partition) {
 			return true, ""
 		}
-		return false, "requires a transport-pinned axis the policy admits"
-	case ScopePartition:
-		if pinned != "" {
+		return false, "requires a partition the policy admits"
+	case ScopePartition, ScopeWithinPartition:
+		// Both tags ask the one question the identity can answer: does the
+		// caller carry a partition. Which partition a handler may act on is the
+		// handler's own selector, not a tier.
+		if partition != "" {
 			return true, ""
 		}
-		return false, "requires an authenticated transport-pinned axis"
-	case ScopeWithinPartition:
-		if pinned == "" {
-			return false, "requires an authenticated transport-pinned axis"
-		}
-		if within == "" {
-			return false, "requires an authenticated within-transport axis"
-		}
-		return true, ""
+		return false, "requires an authenticated partition"
 	case ScopeSubject:
-		if pinned == "" {
-			return false, "requires an authenticated transport-pinned axis"
+		if partition == "" {
+			return false, "requires an authenticated partition"
 		}
 		if subj == "" {
 			return false, "requires an authenticated subject"
