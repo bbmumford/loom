@@ -25,10 +25,10 @@ func TestNewScopeIdentity_AxesAndPartition(t *testing.T) {
 
 func TestNewScopePresencePolicy_Tiers(t *testing.T) {
 	p := NewScopePresencePolicy("orbtr.ai")
-	platform := NewScopeIdentity("orbtr.ai", "", "")
-	partition := NewScopeIdentity("t1", "", "")
-	full := NewScopeIdentity("t1", "org1", "usr1")
-	none := NewScopeIdentity("", "", "")
+	platform := NewIdentity("", "orbtr.ai")
+	partition := NewIdentity("", "t1")
+	full := NewIdentity("usr1", "t1")
+	none := NewIdentity("", "")
 
 	cases := []struct {
 		name     string
@@ -37,17 +37,16 @@ func TestNewScopePresencePolicy_Tiers(t *testing.T) {
 		want     bool
 	}{
 		{"none admits anyone", ScopeNone, none, true},
-		{"platform needs allowlisted pinned", ScopeAllowlisted, platform, true},
-		{"platform denies non-allowlisted", ScopeAllowlisted, partition, false},
-		{"platform denies empty", ScopeAllowlisted, none, false},
-		{"tenant needs pinned", ScopePartition, partition, true},
-		{"tenant denies empty", ScopePartition, none, false},
-		{"partition (neutral) needs pinned", ScopePartition, partition, true},
-		{"org needs pinned+within", ScopeWithinPartition, full, true},
-		{"org denies pinned-only", ScopeWithinPartition, partition, false},
-		{"user needs pinned+subject", ScopeSubject, full, true},
-		{"user denies no-subject", ScopeSubject, partition, false},
-		{"profile needs pinned", ScopePartition, partition, true},
+		{"allowlisted admits a listed partition", ScopeAllowlisted, platform, true},
+		{"allowlisted denies an unlisted partition", ScopeAllowlisted, partition, false},
+		{"allowlisted denies no partition", ScopeAllowlisted, none, false},
+		{"partition needs a partition", ScopePartition, partition, true},
+		{"partition denies no partition", ScopePartition, none, false},
+		{"within-partition asks the same question as partition", ScopeWithinPartition, partition, true},
+		{"within-partition denies no partition", ScopeWithinPartition, none, false},
+		{"subject needs a partition and a subject", ScopeSubject, full, true},
+		{"subject denies a partition with no subject", ScopeSubject, partition, false},
+		{"subject denies a subject with no partition", ScopeSubject, NewIdentity("usr1", ""), false},
 		{"unknown fails closed", ScopeUnknown, full, false},
 	}
 	for _, c := range cases {
@@ -59,47 +58,61 @@ func TestNewScopePresencePolicy_Tiers(t *testing.T) {
 
 func TestNewScopePresencePolicy_EmptyAllowlistFailsClosedPlatform(t *testing.T) {
 	p := NewScopePresencePolicy() // no platform partitions
-	if ok, _ := p.CheckPresence(ScopeAllowlisted, NewScopeIdentity("anything", "", "")); ok {
+	if ok, _ := p.CheckPresence(ScopeAllowlisted, NewIdentity("", "anything")); ok {
 		t.Fatal("empty allowlist must never satisfy ScopeAllowlisted")
 	}
-	// Non-platform tiers still turn on axis presence.
-	if ok, _ := p.CheckPresence(ScopePartition, NewScopeIdentity("t1", "", "")); !ok {
-		t.Fatal("tenant tier turns on pinned-axis presence, independent of the platform allowlist")
+	// The other tiers still turn on the identity's partition.
+	if ok, _ := p.CheckPresence(ScopePartition, NewIdentity("", "t1")); !ok {
+		t.Fatal("ScopePartition turns on the identity's partition, independent of the platform allowlist")
 	}
 }
 
-// TestScopePresenceTurnsOnAxisPresenceNotOnALevelOrder records what the policy
-// actually keys on, because the tag NAMES read as a hierarchy and the mechanism
-// is not one: each tag names which axes must be PRESENT, and no tag subsumes
-// another. A reader who assumes an order would expect ScopeSubject to satisfy
-// ScopeWithinPartition's requirement, and it does not.
-func TestScopePresenceTurnsOnAxisPresenceNotOnALevelOrder(t *testing.T) {
+// TestScopePresenceTurnsOnThePartitionNotOnALevelOrder records what the policy
+// keys on, because the tag NAMES read as a hierarchy of levels and the mechanism
+// is not one. Every tag asks about the partition the identity carries;
+// ScopeSubject additionally asks for a subject, and ScopeAllowlisted asks which
+// partition it is. A reader who assumes an order would expect a partition alone
+// to satisfy ScopeSubject, or an ordinary partition to satisfy ScopeAllowlisted.
+func TestScopePresenceTurnsOnThePartitionNotOnALevelOrder(t *testing.T) {
 	p := NewScopePresencePolicy("plat")
 
-	pinnedSubject := NewScopeIdentity("t1", "", "usr1")
-	if ok, _ := p.CheckPresence(ScopeSubject, pinnedSubject); !ok {
-		t.Fatal("precondition: pinned+subject satisfies ScopeSubject")
+	// A partition alone does not supply a subject.
+	partitionOnly := NewIdentity("", "t1")
+	if ok, _ := p.CheckPresence(ScopePartition, partitionOnly); !ok {
+		t.Fatal("precondition: a partition satisfies ScopePartition")
 	}
-	if ok, _ := p.CheckPresence(ScopeWithinPartition, pinnedSubject); ok {
-		t.Error("an identity satisfying ScopeSubject also satisfied ScopeWithinPartition — the tags are not ordered, and ScopeWithinPartition turns on the within-transport axis a subject does not supply")
+	if ok, _ := p.CheckPresence(ScopeSubject, partitionOnly); ok {
+		t.Error("an identity satisfying ScopePartition also satisfied ScopeSubject — ScopeSubject asks for a subject the partition does not supply")
 	}
 
-	pinnedWithin := NewScopeIdentity("t1", "org1", "")
-	if ok, _ := p.CheckPresence(ScopeWithinPartition, pinnedWithin); !ok {
-		t.Fatal("precondition: pinned+within satisfies ScopeWithinPartition")
+	// A subject alone does not supply a partition, so it satisfies no tier
+	// above ScopeNone.
+	subjectOnly := NewIdentity("usr1", "")
+	if ok, _ := p.CheckPresence(ScopeSubject, subjectOnly); ok {
+		t.Error("a subject with no partition satisfied ScopeSubject")
 	}
-	if ok, _ := p.CheckPresence(ScopeSubject, pinnedWithin); ok {
-		t.Error("an identity satisfying ScopeWithinPartition also satisfied ScopeSubject — ScopeSubject turns on a subject, which the within-transport axis does not supply")
+	if ok, _ := p.CheckPresence(ScopePartition, subjectOnly); ok {
+		t.Error("a subject with no partition satisfied ScopePartition")
+	}
+
+	// ScopeWithinPartition and ScopePartition ask the one question an identity
+	// can answer — whether it carries a partition. Which partition a handler
+	// may act on is the handler's own selector, not a tier, so the two tags do
+	// not separate.
+	if okP, _ := p.CheckPresence(ScopePartition, partitionOnly); !okP {
+		t.Fatal("precondition: ScopePartition admits a partition")
+	}
+	if okW, _ := p.CheckPresence(ScopeWithinPartition, partitionOnly); !okW {
+		t.Error("ScopeWithinPartition refused an identity ScopePartition admitted — the two tags ask the same question")
 	}
 
 	// The platform allowlist is a membership test, not a tier above the others:
-	// an ordinary pinned identity satisfies ScopePartition and must still be refused
+	// an ordinary partition satisfies ScopePartition and must still be refused
 	// ScopeAllowlisted.
-	ordinary := NewScopeIdentity("t1", "", "")
-	if ok, _ := p.CheckPresence(ScopePartition, ordinary); !ok {
-		t.Fatal("precondition: pinned satisfies ScopePartition")
+	if ok, _ := p.CheckPresence(ScopeAllowlisted, partitionOnly); ok {
+		t.Error("a partition outside the allowlist satisfied ScopeAllowlisted")
 	}
-	if ok, _ := p.CheckPresence(ScopeAllowlisted, ordinary); ok {
-		t.Error("a non-allowlisted pinned identity satisfied ScopeAllowlisted")
+	if ok, _ := p.CheckPresence(ScopeAllowlisted, NewIdentity("", "plat")); !ok {
+		t.Error("the allowlisted partition was refused ScopeAllowlisted")
 	}
 }
