@@ -52,11 +52,13 @@ const (
 	ScopeWithinPartition = scope.ScopeWithinPartition // pinned + within-transport axes
 	ScopeSubject         = scope.ScopeSubject         // pinned axis + authenticated subject
 
-	// ScopeUnknown is the fail-closed sentinel installed by mapProtoScope
-	// when it sees a proto enum it does not recognise (including an explicit
-	// TENANT_SCOPE_UNSPECIFIED in a .proto file). It is not a declarable tag;
-	// EnforceScope fails closed on it. NEVER set this scope manually — it
-	// exists only to make decay-to-ScopeNone fail closed.
+	// ScopeUnknown is the fail-closed sentinel for a scope that arrived as
+	// something the scope package does not recognise. It is not declarable and
+	// EnforceScope denies it, so a tag that decayed to it reaches nothing.
+	//
+	// Nothing produces it today — no caller-supplied value is converted into a
+	// scope tag anywhere — so the only way to hold it is to set it, which the
+	// refusals exist to catch.
 	ScopeUnknown = scope.ScopeUnknown
 )
 

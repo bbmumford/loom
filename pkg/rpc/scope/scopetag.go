@@ -75,11 +75,16 @@ const (
 	// subject, i.e. an individual principal rather than only a partition.
 	ScopeSubject ScopeTag = "subject"
 
-	// ScopeUnknown is the fail-closed sentinel installed by rpc.mapProtoScope
-	// when it sees a proto enum it does not recognise (including an explicit
-	// TENANT_SCOPE_UNSPECIFIED in a .proto file). It is not a declarable tag:
-	// registration rejects it and dispatch fails closed. NEVER set it
-	// manually — it exists only to make decay-to-None fail closed.
+	// ScopeUnknown is the fail-closed sentinel for a scope that arrived as
+	// something this package does not recognise. It is not declarable:
+	// registration refuses it, and the presence default arm denies it, so a tag
+	// that decayed to it reaches nothing.
+	//
+	// Nothing produces it today — no caller-supplied value is converted into a
+	// ScopeTag anywhere, so the only way to hold it is to set it, and that is
+	// what the refusals above exist to catch. It stays because a decay path that
+	// appears later lands on a value that already denies, rather than on one
+	// that has to be noticed first.
 	ScopeUnknown ScopeTag = "unknown"
 )
 
