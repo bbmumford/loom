@@ -71,7 +71,7 @@ func ladTopicsFor(t ports.Topic) []lad.Topic {
 //
 // MEASURED against ladcache v0.0.20, the tree loom builds: the only bulk read,
 // ChangesSinceHLC, SYNTHESISES records from the typed store —
-// `body, _ := json.Marshal(r)` — and constructs lad.Record{Topic, TenantID,
+// `body, _ := json.Marshal(r)` — and constructs lad.Record{Topic, Partition,
 // NodeID, Seq, Body, Timestamp} with NO Signature and NO AuthorPubKey field at
 // all. So through this adapter:
 //
