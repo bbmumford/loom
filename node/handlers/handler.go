@@ -42,10 +42,14 @@ const (
 	ScopeWithinPartition = scope.ScopeWithinPartition // pinned + within-transport axes
 	ScopeSubject         = scope.ScopeSubject         // pinned axis + authenticated subject
 
-	// ScopeUnknown is the fail-closed sentinel a proto scope decays to when it
-	// is unrecognised. validateScope rejects any handler bound to it, so a
-	// decayed value denies instead of reading as "no scope required". Never set
-	// it manually.
+	// ScopeUnknown is the fail-closed sentinel for a scope the scope package does
+	// not recognise. validateScope rejects any handler bound to it, so holding it
+	// denies instead of reading as "no scope required".
+	//
+	// Nothing produces it today — no caller-supplied value is converted into a
+	// scope tag anywhere — so the only way to hold it is to set it, which is what
+	// that refusal catches. It stays so that a decay path added later lands on a
+	// value that already denies.
 	ScopeUnknown = scope.ScopeUnknown
 )
 
