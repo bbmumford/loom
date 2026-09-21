@@ -5,13 +5,19 @@
 
 package compose
 
-// ScopeTracker is iii's begin/end-worker-scope mechanism: registrations made
+// ScopeTracker is the begin/end-worker-scope mechanism: registrations made
 // between Begin and End are attributed to the owner, so teardown can remove
 // exactly the function IDs one role (or worker) registered — nothing more,
-// nothing less. This is the mechanism that gives Phase-1 role takeover a
-// real per-role STOP: today SetEnabledRoles only gates dispatch, it does not
-// unregister, and the mesh has no other way to know which handlers belong
-// to which role.
+// nothing less.
+//
+// IT IS WHERE A PER-ROLE STOP HAS TO COME FROM, because nothing else withholds
+// a handler once it is registered. SetEnabledRoles records a set and
+// HandlerRegistry.IsRoleEnabled is the only thing that reads it; no caller on
+// the dispatch path consults either, so the set is written and never asked.
+// ⇒ A node that activated a role keeps serving it whatever its enabled set says,
+// and a design treating SetEnabledRoles as a runtime stop rests on nothing.
+// Removing the registrations is the only thing that stops a role, and the mesh
+// has no other way to know which handlers belong to which one.
 //
 // Implementations hook the registration path (rpc.Registry.Register and the
 // handler-registry adapter) rather than requiring callers to report IDs
