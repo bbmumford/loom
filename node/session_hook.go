@@ -22,10 +22,9 @@ type sessionHookFunc = func(nodeID string, session aether.Session, joined bool)
 //
 // subs is replaced on every add or remove and never mutated in place, so
 // fire iterates a snapshot taken under a read lock and calls subscribers
-// with no lock held. That is required because subscribers re-enter the
-// manager: the swarm subscriber opens streams on the session, and a
-// removal subscriber may re-admit the peer through registerMeshSession
-// (session_reapers_test drives exactly that re-entry).
+// with no lock held. A subscriber may therefore add or remove
+// subscriptions from inside its callback; with the read lock still held,
+// that call's write lock would wait on it forever.
 type sessionHookSet struct {
 	mu     sync.RWMutex
 	single sessionHookFunc
@@ -46,9 +45,13 @@ type sessionHookSub struct {
 // silences them. Subscribers that must coexist use AddSessionHook.
 //
 // Callbacks fire after the dispatch lock is released and outside any
-// critical path, so they may call back into the manager. They run on the
-// goroutine admitting or tearing down the session, before that session's
-// service loops start, so a callback must not block.
+// critical path, so they may call back into the manager: a removal
+// callback may re-admit the peer through registerMeshSession
+// (session_reapers_test drives exactly that re-entry). A join fires on the
+// goroutine admitting the session (AcceptMeshConnection), before that
+// session's service loops start; a leave fires on the goroutine tearing it
+// down (AcceptMeshConnection's cleanup once its gossip loop exits, or
+// sweepZombieSessions). Either way a callback must not block.
 func (m *ConnectionManager) SetSessionHook(fn func(nodeID string, session aether.Session, joined bool)) {
 	m.sessionHooks.mu.Lock()
 	defer m.sessionHooks.mu.Unlock()
