@@ -7,7 +7,8 @@ package directory
 
 // SelfOwnedPublishPrefixes are the topic prefixes every key-bound node writes
 // about ITSELF: its PeerRecord (FleetPeerTopic — membership, role, reach, RPC
-// handler adverts) and its own latency samples (LatencyTopicPrefix). A Policy
+// handler adverts), its own latency samples (LatencyTopicPrefix) and its mesh
+// database cluster metadata (MeshDBMemberTopic). A Policy
 // must allow these openly, because AuthorizePublish fails closed on any topic
 // matching no rule — so a Policy that omits them rejects a node's own heartbeat,
 // and every node heartbeats. Restricted families (secrets.TopicPrefix,
@@ -16,6 +17,7 @@ package directory
 var SelfOwnedPublishPrefixes = []string{
 	string(FleetPeerTopic),
 	LatencyTopicPrefix,
+	string(MeshDBMemberTopic),
 }
 
 // BaselinePolicyConfig returns a PolicyConfig pre-seeded with

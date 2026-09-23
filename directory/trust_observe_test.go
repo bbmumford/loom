@@ -211,3 +211,22 @@ func TestBaselineSeedLeavesRestrictedTopicsClosed(t *testing.T) {
 		t.Fatalf("baseline seed must authorize the self-owned fleet.peer publish: %v", err)
 	}
 }
+
+// The mesh database transport publishes each node's cluster metadata on
+// "meshdb.member"; an enforcing gate seeded with the baseline must admit it,
+// or no peer ever sees another as a cluster member.
+func TestBaselineSeedAllowsMeshDBMemberPublish(t *testing.T) {
+	pub, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nid, err := aether.NewNodeID(pub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := NewPolicy(BaselinePolicyConfig())
+	pr := ports.Principal{NodeID: ports.NodeID(string(nid)), PubKey: pub}
+	if err := p.AuthorizePublish(context.Background(), pr, ports.Topic("meshdb.member")); err != nil {
+		t.Fatalf("baseline seed must authorize the self-owned meshdb.member publish: %v", err)
+	}
+}
