@@ -274,6 +274,16 @@ func TestMeshDBClusterOnLoopbackVL1(t *testing.T) {
 		}
 	}
 
+	// A member that shuts down withdraws its slot while the swarm still
+	// carries it: Runtime.Shutdown stops the manager before the swarm
+	// transport, so the other members stop seeing it publish under the key.
+	slot := meshDBClusterKey(clusterGroup, clusterDB)
+	gone := string(ms[2].rt.identity.NodeID)
+	shutdownMembers(t, ms[2:])
+	waitMeshDB(t, 10*time.Second, "the stopped member's slot to be withdrawn", func() bool {
+		return !ms[0].rt.meshDBTransport.dir.published(slot, gone) && !ms[1].rt.meshDBTransport.dir.published(slot, gone)
+	})
+
 	// Restart every member on its own directories.
 	shutdownMembers(t, ms)
 	for _, m := range ms {
