@@ -27,6 +27,22 @@ const (
 	// own stream an abandoned G4 read can't poison G1's read path:
 	// each protocol owns its frame queue.
 	StreamReconcile uint64 = 4
+
+	// Application streams bound per peer pair. aether's StreamConfig
+	// contract puts application streams at IDs >= 100. Each is opened by
+	// the lower NodeID and claimed by the higher with AcceptStreamByID, so
+	// both ends must agree on the number: a change here is a wire change.
+
+	// StreamSwarm carries the swarm protocol (node/swarm_transport.go
+	// RegisterPeer and swarmStreamConfig).
+	StreamSwarm uint64 = 100
+	// StreamMeshDB is reserved for the mesh database replication transport,
+	// one stream per peer pair carrying every replicated database's traffic.
+	// TODO: the mesh database transport opens and claims this stream.
+	// pkg/dispatch nextDynamicStreamID has no ceiling above its floor of 10
+	// and returns 101 on a session's 92nd allocation, so that allocator must
+	// stay below 100 before this stream carries traffic.
+	StreamMeshDB uint64 = 101
 )
 
 // MeshStreamLayout returns the Aether StreamLayout for HSTLES mesh connections.
@@ -50,7 +66,7 @@ func DefaultLatencyClass(streamID uint64) aether.LatencyClass {
 		return aether.ClassREALTIME
 	case StreamRPC:
 		return aether.ClassINTERACTIVE
-	case 100, 200, 201, 202, 203, 204, 205, 501:
+	case StreamSwarm, 200, 201, 202, 203, 204, 205, 501:
 		return aether.ClassINTERACTIVE
 	default:
 		return aether.ClassBULK

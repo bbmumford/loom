@@ -664,11 +664,11 @@ type ConnectionManager struct {
 	// serialize their short admission/cleanup transactions.
 	sessionLifecycleStripes [64]sync.Mutex
 
-	// sessionHook fires after a session is installed/removed in meshSessions.
-	// Set via SetSessionHook. Used by the swarm transport adapter to track
+	// sessionHooks fires after a session is installed/removed in meshSessions,
+	// to the SetSessionHook slot and every AddSessionHook subscriber
+	// (session_hook.go). The swarm transport adapter subscribes to track
 	// peer lifecycle without poking into ConnectionManager internals.
-	sessionHookMu sync.RWMutex
-	sessionHook   func(nodeID string, session aether.Session, joined bool)
+	sessionHooks sessionHookSet
 	// meshSessionInitiators tracks whether WE initiated each registered
 	// session (true = our outbound, false = inbound we accepted). The
 	// dispatch tie-break for simultaneous-dial duplicates uses this to

@@ -400,7 +400,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 		// AcceptStreamByID blocks until a stream with EXACTLY the requested
 		// ID arrives, regardless of the order frames hit the wire. The prior
 		// FIFO AcceptStream was wire-ordering-dependent: when an application
-		// stream (e.g. swarm stream 100) opened before the responder reached
+		// stream (e.g. streams.StreamSwarm) opened before the responder reached
 		// the gossip accept, the FIFO returned the wrong stream first and the
 		// gossip-responder loop ended up bound to the swarm stream, killing
 		// the session within milliseconds. AcceptStreamByID closes that race
@@ -455,17 +455,19 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 	// Record successful path for path scoring
 	m.RecordPathSuccess(nodeID, opts.Proto, remoteAddr, opts.Session)
 
-	// Fan out the session-installed event to SetSessionHook consumers
-	// (swarm transport RegisterPeer + future hookers). Must fire AFTER
+	// Fan out the session-installed event to every session-hook subscriber
+	// (swarm transport RegisterPeer, and any other AddSessionHook or
+	// SetSessionHook subscriber). Must fire AFTER
 	// the five well-known streams (gossip, RPC, keepalive, control,
 	// reconcile) have completed OPEN/ACCEPT on both sides — the swarm
-	// transport opens application-stream 100 here, and doing that
+	// transport opens streams.StreamSwarm here, and doing that
 	// before stream 0 has been accepted would steer the responder's
-	// FIFO AcceptStream into delivering stream 100 in gossip's slot,
+	// FIFO AcceptStream into delivering that stream in gossip's slot,
 	// killing the session within milliseconds of register. Symmetric
 	// on the initiator side: by this point all 5 streams have written
-	// their OPEN frames, so an inbound OPEN(100) from the peer hits a
-	// session whose foreground is already past its accept block.
+	// their OPEN frames, so an inbound application-stream OPEN from the
+	// peer hits a session whose foreground is already past its accept
+	// block.
 	m.fireSessionHook(nodeID, opts.Session, true)
 
 	// Start services on the streams
@@ -1603,12 +1605,12 @@ func (m *ConnectionManager) registerMeshSession(ctx context.Context, nodeID stri
 	m.sessionRegisteredAt[nodeID] = time.Now()
 	m.dispatchMu.Unlock()
 	// Session-hook fanout (swarm-transport RegisterPeer + any other
-	// SetSessionHook consumer) is deferred to AcceptMeshConnection
+	// session-hook subscriber) is deferred to AcceptMeshConnection
 	// AFTER the five well-known streams (gossip, RPC, keepalive,
 	// control, reconcile) finish open/accept on both sides. Firing
-	// the hook here lets the swarm transport open application-stream
-	// 100 BEFORE the responder reaches AcceptStream for gossip
-	// (stream 0); the FIFO accept channel then returns stream 100 in
+	// the hook here lets the swarm transport open streams.StreamSwarm
+	// BEFORE the responder reaches AcceptStream for gossip
+	// (stream 0); the FIFO accept channel then returns that stream in
 	// gossip's slot and the foreground gossip loop ends up bound to
 	// the swarm stream — observable as a session that registers and
 	// then dies within milliseconds because gossip's reader gets data

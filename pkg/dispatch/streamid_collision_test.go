@@ -12,6 +12,7 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/health"
+	"github.com/bbmumford/loom/core/streams"
 )
 
 // Characterisation of a reserved-ID collision in the dynamic stream-ID allocator.
@@ -87,13 +88,12 @@ func (s *collisionProbeSession) CongestionWindow() int64           { return 0 }
 func (s *collisionProbeSession) Protocol() aether.Protocol         { return aether.ProtoNoise }
 func (s *collisionProbeSession) Metrics() aether.SessionMetrics    { return aether.SessionMetrics{} }
 
-// swarmStreamID is the swarm transport's dedicated stream, and
-// applicationStreamFloor is the start of aether's documented application band.
-// Both are duplicated here as literals ON PURPOSE: the point of this test is that
-// no shared constant exists for either. If a single source of truth is introduced,
-// these should be replaced by it — and that replacement is the real fix.
+// swarmStreamID is the swarm transport's dedicated stream, read from the shared
+// stream-ID table the transport itself opens. applicationStreamFloor is the start
+// of aether's documented application band; aether exports no constant for it, so
+// it is restated here.
 const (
-	swarmStreamID          uint64 = 100
+	swarmStreamID                 = streams.StreamSwarm
 	applicationStreamFloor uint64 = 100
 )
 
