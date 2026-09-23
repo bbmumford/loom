@@ -96,6 +96,10 @@ type MeshDBTransport struct {
 	// connect asks the connection manager for a session to a peer with none;
 	// nil in tests.
 	connect func(nodeID string)
+	// currentSession returns the session the connection manager dispatches
+	// to a peer on (ConnectionManager.GetMeshSession); rebind reads it once
+	// the bound session is gone. Nil in tests that bind sessions by hand.
+	currentSession func(nodeID string) (aether.Session, bool)
 	// removeHook ends the session-hook subscription; nil in tests.
 	removeHook func()
 
@@ -331,6 +335,7 @@ func (t *MeshDBTransport) unbindSession(nodeID string) {
 	t.mu.Unlock()
 	p.stop()
 	t.notify()
+	t.rebind(nodeID, p.session)
 }
 
 // dropPeer removes p if it is still nodeID's peer, once its session closed.
@@ -343,6 +348,25 @@ func (t *MeshDBTransport) dropPeer(p *meshDBPeer) {
 	delete(t.peers, p.id)
 	t.mu.Unlock()
 	t.notify()
+	t.rebind(p.id, p.session)
+}
+
+// rebind binds nodeID to the session the connection manager still holds for
+// it once the bound session, gone, has closed. A join fires only from
+// AcceptMeshConnection for a session the manager installs; when an upgraded
+// session dies and the manager falls back to the session it replaced
+// (unregisterMeshSessionWithoutHook's proving revert) or to another live
+// multipath path, no join fires for that session, and the peer would stay
+// unbound, absent from Members and undialable, until its next join.
+func (t *MeshDBTransport) rebind(nodeID string, gone aether.Session) {
+	if t.currentSession == nil {
+		return
+	}
+	s, ok := t.currentSession(nodeID)
+	if !ok || s == nil || s == gone || s.IsClosed() {
+		return
+	}
+	t.bindSession(nodeID, s)
 }
 
 // onSession is the ConnectionManager session hook.
