@@ -96,9 +96,10 @@ func waitForSwarmPeers(t *testing.T, tr *MeshSwarmTransport, want int) {
 	}
 }
 
-// Swarm subscribes in InitSwarm; a second subscriber added afterwards must not
-// displace it. Both must see the join (swarm binds its stream) and the leave
-// (swarm unbinds), for either side of the NodeID tie-break.
+// Swarm subscribes in InitSwarm; subscribers added afterwards, through
+// AddSessionHook or the SetSessionHook slot, must not displace it. All must see
+// the join (swarm binds its stream) and the leave (swarm unbinds), for either
+// side of the NodeID tie-break.
 func TestSessionHookFanOutReachesSwarmAndASecondSubscriber(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
@@ -109,9 +110,10 @@ func TestSessionHookFanOutReachesSwarmAndASecondSubscriber(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rt, m := newSwarmHookRuntime(t)
-			second := &hookRecorder{}
+			second, slot := &hookRecorder{}, &hookRecorder{}
 			remove := m.AddSessionHook(second.hook)
 			defer remove()
+			m.SetSessionHook(slot.hook)
 
 			self := string(rt.identity.NodeID)
 			peer := self + "~" // sorts above self
@@ -148,6 +150,9 @@ func TestSessionHookFanOutReachesSwarmAndASecondSubscriber(t *testing.T) {
 			if got := second.snapshot(); !reflect.DeepEqual(got, want) {
 				t.Fatalf("second subscriber saw %+v, want %+v", got, want)
 			}
+			if got := slot.snapshot(); !reflect.DeepEqual(got, want) {
+				t.Fatalf("SetSessionHook slot saw %+v, want %+v", got, want)
+			}
 		})
 	}
 }
@@ -157,7 +162,8 @@ func TestAddSessionHookRemoverStopsOnlyItsOwnSubscription(t *testing.T) {
 	a, b := &hookRecorder{}, &hookRecorder{}
 	removeA := m.AddSessionHook(a.hook)
 	m.AddSessionHook(b.hook)
-	m.AddSessionHook(nil)()
+	m.AddSessionHook(nil)   // left subscribed: a nil fn must never be fired
+	m.AddSessionHook(nil)() // and its remover must not remove anyone else
 
 	m.fireSessionHook("p1", nil, false)
 	removeA()
