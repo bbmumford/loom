@@ -43,21 +43,6 @@ type DatabasesConfig struct {
 	// or an empty current key, fails Initialize. When nil, each group's own
 	// EncryptionKey is used and a group without one is refused.
 	KeyResolver func(group string) (current, prior string, err error)
-
-	// RaftBindAddr is ignored: Raft runs over the endpoint mesh.
-	//
-	// Deprecated: ignored; set by library/endpoint and node.orbtr.io.
-	RaftBindAddr string
-	// SnapshotDir is ignored: Raft snapshots sit under LocalDir.
-	//
-	// Deprecated: ignored; set by library/endpoint and node.orbtr.io.
-	SnapshotDir string
-	// TursoAPIToken and TursoOrgName are ignored: every shared database
-	// opens from its own url and token.
-	//
-	// Deprecated: ignored; set by library/endpoint and node.orbtr.io.
-	TursoAPIToken string
-	TursoOrgName  string
 }
 
 // hasRaft reports whether any group declares a raft block, which is what
