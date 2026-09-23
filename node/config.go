@@ -6,11 +6,11 @@ package node
 
 import (
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/bbmumford/loom/pkg/rpc"
 	"github.com/bbmumford/loom/ports"
-	meshdbcfg "github.com/bbmumford/tursoraft/manager"
 )
 
 // AnchorConfig holds configuration for secure bootstrapping via signed snapshots
@@ -270,48 +270,17 @@ type RelayConfig struct {
 // LADDirectoryConfig configures LAD (Ledger-as-Directory) peer discovery.
 type LADDirectoryConfig struct {
 	// Storage determines where peer discovery records are stored:
-	//   - "local": Persistent embedded libSQL database (survives restarts)
+	//   - "local": a file under LocalDir, encrypted under a key derived from
+	//     the node identity (survives restarts)
 	//   - "memory": In-memory only (lost on restart, for testing/ephemeral)
-	//   - "mesh": Replicated via Tursoraft (requires RaftBindAddr)
 	//   - "": LAD disabled
 	Storage        string
 	SyncInterval   time.Duration // How often to sync LAD state
-	LocalDir       string        // Directory for local LAD storage (required for "local" or "mesh" storage)
+	LocalDir       string        // Absolute directory of the "local" LAD file
 	BootstrapHosts string        // Comma-separated bootstrap hosts for initial discovery and mesh peer list
 
 	// RetentionDays is how many days to keep LAD records (default: 30, optional)
 	RetentionDays int
-
-	// --- Mesh storage options (only used when Storage = "mesh") ---
-
-	// RaftBindAddr for LAD mesh replication. Required when Storage = "mesh".
-	// Should be different from app database Raft port if both are used.
-	RaftBindAddr string
-
-	// CompactionInterval defines how often to run compaction (default: 24h, optional)
-	CompactionInterval time.Duration
-
-	// EnableBloomFilters enables Bloom filters for query optimization (default: true, optional)
-	EnableBloomFilters *bool
-}
-
-// DatabasesConfig configures Tursoraft database replication.
-// This is for APPLICATION DATABASES replicated via Raft consensus.
-type DatabasesConfig struct {
-	Enabled bool
-
-	// Tursoraft consensus settings
-	RaftBindAddr string // Address for Raft consensus communication
-	LocalDir     string // Directory for Raft state/WAL
-	SnapshotDir  string // Directory for Raft snapshots
-	SyncInterval time.Duration
-
-	// Turso cloud settings
-	TursoAPIToken string
-	TursoOrgName  string
-
-	// Database groups to replicate
-	Groups []meshdbcfg.GroupConfig
 }
 
 // HealthConfig configures health monitoring.
@@ -411,30 +380,19 @@ func (c *Config) Validate() error {
 
 	// LAD validation
 	if c.LAD.Storage != "" {
-		validStorage := c.LAD.Storage == "local" || c.LAD.Storage == "memory" || c.LAD.Storage == "mesh"
-		if !validStorage {
-			return fmt.Errorf("LAD storage must be 'local', 'memory', 'mesh', or empty (disabled)")
+		if c.LAD.Storage != "local" && c.LAD.Storage != "memory" {
+			return fmt.Errorf("LAD storage must be 'local', 'memory', or empty (disabled)")
 		}
-		if (c.LAD.Storage == "local" || c.LAD.Storage == "mesh") && c.LAD.LocalDir == "" {
-			return fmt.Errorf("LAD local directory is required when LAD storage is 'local' or 'mesh'")
+		if c.LAD.Storage == "local" && c.LAD.LocalDir == "" {
+			return fmt.Errorf("LAD local directory is required when LAD storage is 'local'")
 		}
-		if c.LAD.Storage == "mesh" && c.LAD.RaftBindAddr == "" {
-			return fmt.Errorf("LAD raft bind address is required when LAD storage is 'mesh'")
+		if c.LAD.Storage == "local" && !filepath.IsAbs(c.LAD.LocalDir) {
+			return fmt.Errorf("LAD local directory %q must be an absolute path", c.LAD.LocalDir)
 		}
 		if c.LAD.BootstrapHosts == "" {
 			return fmt.Errorf("LAD bootstrap hosts required when LAD is enabled")
 		}
 	}
 
-	// Databases validation (optional - applications can initialize Tursoraft directly)
-	if c.Databases != nil && c.Databases.Enabled {
-		if c.Databases.RaftBindAddr == "" {
-			return fmt.Errorf("databases raft bind address is required when databases are enabled")
-		}
-		if c.Databases.LocalDir == "" {
-			return fmt.Errorf("databases local directory is required when databases are enabled")
-		}
-	}
-
-	return nil
+	return c.Databases.validate(c)
 }

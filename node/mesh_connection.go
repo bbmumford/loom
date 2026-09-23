@@ -512,8 +512,9 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 		bidiRPC := NewBidiRPC(rpcStream, aether.NodeID(nodeID), m.rt.rpcServer, bidiTransport, bidiScope)
 		m.registerBidiRPC(opts.Session, bidiRPC)
 
-		// Dynamic stream handler — accepts streams opened by the remote's AetherCaller.
-		// Each dynamic RPC stream (ID 10+) carries one request-response pair.
+		// Dynamic stream handler — accepts every stream no consumer claimed
+		// by ID. Each dynamic RPC stream (IDs 10-99) carries one
+		// request-response pair; serveUnclaimedStream refuses the rest.
 		go func() {
 			for {
 				stream, err := opts.Session.AcceptStream(connCtx)
@@ -522,7 +523,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 					return
 				}
 				dbgAether.Printf("%s: accepted dynamic stream %d", truncID(nodeID), stream.StreamID())
-				go m.rt.rpcServer.ServeMeshStream(connCtx, stream, aether.NodeID(nodeID))
+				go m.rt.rpcServer.serveUnclaimedStream(connCtx, stream, aether.NodeID(nodeID))
 			}
 		}()
 

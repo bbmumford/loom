@@ -23,6 +23,7 @@ func TestStreamIDsAreFixedWireValues(t *testing.T) {
 		{"StreamKeepalive", StreamKeepalive, 2},
 		{"StreamControl", StreamControl, 3},
 		{"StreamReconcile", StreamReconcile, 4},
+		{"ApplicationBand", ApplicationBand, 100},
 		{"StreamSwarm", StreamSwarm, 100},
 		{"StreamMeshDB", StreamMeshDB, 101},
 	} {
@@ -35,7 +36,7 @@ func TestStreamIDsAreFixedWireValues(t *testing.T) {
 // Per-peer application streams sit in aether's application band (>= 100) and
 // never share an ID with each other.
 func TestApplicationStreamsAreDistinctAndInTheApplicationBand(t *testing.T) {
-	const applicationBand = 100
+	const applicationBand = ApplicationBand
 	seen := map[uint64]string{}
 	for name, id := range map[string]uint64{
 		"StreamSwarm":  StreamSwarm,
@@ -51,8 +52,11 @@ func TestApplicationStreamsAreDistinctAndInTheApplicationBand(t *testing.T) {
 	}
 }
 
-func TestDefaultLatencyClassKeepsSwarmInteractive(t *testing.T) {
-	if got := DefaultLatencyClass(StreamSwarm); got != aether.ClassINTERACTIVE {
-		t.Fatalf("DefaultLatencyClass(StreamSwarm) = %v, want ClassINTERACTIVE", got)
+// Swarm gossip and Raft heartbeats must not queue behind bulk transfers.
+func TestDefaultLatencyClassKeepsPeerStreamsInteractive(t *testing.T) {
+	for name, id := range map[string]uint64{"StreamSwarm": StreamSwarm, "StreamMeshDB": StreamMeshDB} {
+		if got := DefaultLatencyClass(id); got != aether.ClassINTERACTIVE {
+			t.Errorf("DefaultLatencyClass(%s) = %v, want ClassINTERACTIVE", name, got)
+		}
 	}
 }

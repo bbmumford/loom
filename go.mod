@@ -18,6 +18,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/hashicorp/go-multierror v1.1.1
 	github.com/hashicorp/raft v1.7.3
+	github.com/hashicorp/yamux v0.1.2
 	github.com/shirou/gopsutil/v3 v3.24.5
 	github.com/soheilhy/cmux v0.1.5
 	golang.org/x/crypto v0.50.0
@@ -69,7 +70,7 @@ require (
 	github.com/tklauser/go-sysconf v0.3.12 // indirect
 	github.com/tklauser/numcpus v0.6.1 // indirect
 	github.com/tursodatabase/libsql-client-go v0.0.0-20240902231107-85af5b9d094d // indirect
-	github.com/tursodatabase/turso-go-platform-libs v0.5.3 // indirect
+	github.com/tursodatabase/turso-go-platform-libs v0.8.0-pre.12 // indirect
 	github.com/wlynxg/anet v0.0.5 // indirect
 	github.com/yusufpapurcu/wmi v1.2.4 // indirect
 	go.etcd.io/bbolt v1.3.5 // indirect
@@ -82,5 +83,5 @@ require (
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
-	turso.tech/database/tursogo v0.5.3 // indirect
+	turso.tech/database/tursogo v0.8.0-pre.12 // indirect
 )

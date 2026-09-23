@@ -31,7 +31,7 @@ An in-memory, queryable view of the current mesh state.
 
 ## Components
 
-*   **`directory/ledger`**: The persistent store. Uses **MeshDB** (local SQLite) to store records on disk.
+*   **Ledger** (`github.com/bbmumford/ledger/storage`): The persistent store. The node runtime keeps it in memory or in a local file encrypted under a key derived from the node identity (`node/lad_store.go`).
 *   **`directory/gossip`**: The synchronization engine. Handles the exchange of records with peers.
 *   **`directory/cache`**: The in-memory query engine.
 
@@ -42,7 +42,7 @@ An in-memory, queryable view of the current mesh state.
 ```go
 // Initialize
 cache := lad.NewDirectoryCache()
-ledger, _ := ledger.NewMeshDBLedger(db) // Local SQLite
+ledger, _ := storage.NewLocalDBLedger(db, storage.LedgerConfig{RetentionDays: 30})
 syncer := gossip.NewSynchronizer(ledger, cache)
 
 // Start Sync

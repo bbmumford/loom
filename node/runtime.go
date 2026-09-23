@@ -39,11 +39,9 @@ import (
 	ladcache "github.com/bbmumford/ledger/cache"
 	"github.com/bbmumford/ledger/storage"
 	"github.com/bbmumford/loom/core/directory/gossip"
-	meshledger "github.com/bbmumford/loom/core/directory/ledger"
 	"github.com/bbmumford/loom/core/transport/manager"
 	"github.com/bbmumford/reach"
 	"github.com/bbmumford/route"
-	"github.com/bbmumford/tursoraft/connectors"
 	meshdb "github.com/bbmumford/tursoraft/manager"
 
 	wstransport "github.com/ORBTR/aether/websocket"
@@ -372,6 +370,11 @@ type Runtime struct {
 	// (dormancy managed inline by ConnectionManager.transports)
 	syncer *gossip.Synchronizer
 	meshDB *meshdb.Manager
+	// meshDBTransport carries meshDB's Raft clusters over the endpoint mesh;
+	// nil unless a database group declares a raft block.
+	meshDBTransport *MeshDBTransport
+	// ladClose closes the "local" LAD ledger and its file; nil otherwise.
+	ladClose func() error
 
 	// Optional components
 	rpcServer            *RPCServer
@@ -730,20 +733,19 @@ func Initialize(cfg Config) (*Runtime, error) {
 		// Initialize ledger based on LAD.Storage config
 		switch cfg.LAD.Storage {
 		case "local":
-			// Create pure local database for LAD (mesh-ephemeral state)
-			// No Turso sync - ephemeral peer discovery records only
-			ladDBPath := filepath.Join(cfg.LAD.LocalDir, "lad.db")
-			if err := os.MkdirAll(cfg.LAD.LocalDir, 0o755); err != nil {
-				cancel()
-				return nil, fmt.Errorf("create LAD directory: %w", err)
-			}
-
-			ladHandle, err := connectors.MakeConnector(ladDBPath, "", "", "") // pure local, no encryption
+			// LAD file under LocalDir, encrypted under a key derived from
+			// the node identity (lad_store.go). No Turso sync: it holds
+			// peer discovery records only.
+			ladKey, err := ladFileKey(rt.identity.PrivateKey)
 			if err != nil {
 				cancel()
-				return nil, fmt.Errorf("create LAD database connector: %w", err)
+				return nil, err
 			}
-			ladDB := ladHandle.Database() // Extract *sql.DB
+			ladDB, err := openLADFile(ctx, cfg.LAD.LocalDir, ladKey)
+			if err != nil {
+				cancel()
+				return nil, err
+			}
 
 			// Configure ledger with retention and compaction
 			ledgerCfg := storage.LedgerConfig{
@@ -753,87 +755,18 @@ func Initialize(cfg Config) (*Runtime, error) {
 
 			meshLedger, err := storage.NewLocalDBLedger(ladDB, ledgerCfg)
 			if err != nil {
+				ladDB.Close()
 				cancel()
 				return nil, fmt.Errorf("create LAD ledger: %w", err)
 			}
 			rt.ledger = newSigningLedger(meshLedger, rt.identity.PrivateKey)
-			log.Printf("[NODE] LAD ledger initialized (storage=local, 30-day retention, signing-wrapper enabled)")
+			rt.ladClose = func() error { return errors.Join(meshLedger.Close(), ladDB.Close()) }
+			log.Printf("[NODE] LAD ledger initialized (storage=local, encrypted, 30-day retention, signing-wrapper enabled)")
 
 		case "memory":
 			// In-memory ledger for ephemeral/testing deployments
 			rt.ledger = newSigningLedger(storage.NewMemoryLedger(storage.DefaultMemoryLedgerConfig()), rt.identity.PrivateKey)
 			log.Printf("[NODE] LAD ledger initialized (storage=memory, 1hr retention, 10k records/topic, signing-wrapper enabled)")
-
-		case "mesh":
-			// Mesh-replicated LAD via Tursoraft for multi-node deployments
-			if cfg.LAD.RaftBindAddr == "" {
-				cancel()
-				return nil, fmt.Errorf("LAD mesh storage requires RaftBindAddr to be configured")
-			}
-			if cfg.LAD.LocalDir == "" {
-				cancel()
-				return nil, fmt.Errorf("LAD mesh storage requires LocalDir to be configured")
-			}
-
-			// Use configured values with sensible defaults
-			retentionDays := cfg.LAD.RetentionDays
-			if retentionDays <= 0 {
-				retentionDays = 30
-			}
-
-			compactionInterval := cfg.LAD.CompactionInterval
-			if compactionInterval <= 0 {
-				compactionInterval = 24 * time.Hour
-			}
-
-			enableBloom := true
-			if cfg.LAD.EnableBloomFilters != nil {
-				enableBloom = *cfg.LAD.EnableBloomFilters
-			}
-
-			// Parse bootstrap hosts into peer list for mesh LAD
-			var peers []string
-			if cfg.LAD.BootstrapHosts != "" {
-				for _, p := range strings.Split(cfg.LAD.BootstrapHosts, ",") {
-					if p = strings.TrimSpace(p); p != "" {
-						peers = append(peers, p)
-					}
-				}
-			}
-
-			// Configure tursoraft for LAD-only mesh replication (pure local, no Turso cloud)
-			meshCfg := meshledger.MeshLedgerConfig{
-				GroupName:          "mesh",
-				DBName:             "lad",
-				Peers:              peers, // Pass peers directly (envreq fallback in MeshLedger)
-				RetentionDays:      retentionDays,
-				CompactionInterval: compactionInterval,
-				EnableBloomFilters: enableBloom,
-				ManagerConfig: meshdb.ManagerConfig{
-					UseEmbedded: true, // Pure local embedded libSQL
-					Groups: []meshdb.GroupConfig{{
-						GroupName: "mesh",
-						DBNames:   []string{"lad"},
-						PureLocal: true, // No Turso sync - local only
-					}},
-					RaftConfig: meshdb.RaftConfig{
-						RaftBindAddr: cfg.LAD.RaftBindAddr,
-						LocalDir:     filepath.Join(cfg.LAD.LocalDir, "raft"),
-						SnapshotDir:  filepath.Join(cfg.LAD.LocalDir, "snapshots"),
-					},
-					SyncInterval: 0, // No Turso sync for LAD
-					SnapMinGap:   time.Minute,
-				},
-			}
-
-			meshLedger, err := meshledger.NewMeshLedger(ctx, meshCfg)
-			if err != nil {
-				cancel()
-				return nil, fmt.Errorf("create mesh LAD ledger: %w", err)
-			}
-			rt.ledger = newSigningLedger(meshLedger, rt.identity.PrivateKey)
-			log.Printf("[NODE] LAD ledger initialized (storage=mesh, raft=%s, retention=%dd, peers=%s, signing-wrapper enabled)",
-				cfg.LAD.RaftBindAddr, retentionDays, cfg.LAD.BootstrapHosts)
 
 		default:
 			// LAD disabled but VL1 enabled - use minimal memory ledger
@@ -1052,6 +985,14 @@ func Initialize(cfg Config) (*Runtime, error) {
 				}
 			}
 
+			// The mesh database transport subscribes to session events
+			// here, before bootstrapPeers and the listener admit any
+			// session, so no peer joins unobserved.
+			if err := rt.startMeshDBTransport(); err != nil {
+				cancel()
+				return nil, err
+			}
+
 			// Start the scaler / AdaptiveController reader goroutines
 			// only AFTER rt.swarm is published by InitSwarm above. Those readers
 			// dereference m.rt.swarm.AddressTable/RoleTable; launching them before
@@ -1132,6 +1073,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 			// Start UDP listener if port is configured
 			if cfg.VL1.UDPPort > 0 {
 				if err := rt.startVL1Listener(ctx); err != nil {
+					_ = rt.shutdownMeshDB()
 					cancel()
 					return nil, fmt.Errorf("start VL1 listener: %w", err)
 				}
@@ -1224,31 +1166,16 @@ func Initialize(cfg Config) (*Runtime, error) {
 	// envelope. Bound to the runtime ctx so it stops with the node.
 	rt.startGossipCadence(ctx)
 
-	// Step 7: Initialize Tursoraft databases if configured
-	// NOTE: Databases are optional - applications can initialize Tursoraft directly
-	// in main.go for role-specific database groups and more control.
+	// Step 7: Initialize Tursoraft databases if configured (meshdb_runtime.go).
+	// A group with a raft block runs its cluster over the transport started
+	// above.
 	if cfg.Databases != nil && cfg.Databases.Enabled {
 		log.Printf("[NODE] Initializing Tursoraft databases...")
-		dbConfig := meshdb.ManagerConfig{
-			TursoConfig: meshdb.TursoConfig{
-				APIToken: cfg.Databases.TursoAPIToken,
-				OrgName:  cfg.Databases.TursoOrgName,
-			},
-			RaftConfig: meshdb.RaftConfig{
-				RaftBindAddr: cfg.Databases.RaftBindAddr,
-				LocalDir:     cfg.Databases.LocalDir,
-				SnapshotDir:  cfg.Databases.SnapshotDir,
-			},
-			Groups:       cfg.Databases.Groups,
-			SyncInterval: cfg.Databases.SyncInterval,
-		}
-		meshDB, err := meshdb.NewManager(ctx, dbConfig)
-		if err != nil {
+		if err := rt.openMeshDB(ctx); err != nil {
+			_ = rt.shutdownMeshDB()
 			cancel()
-			return nil, fmt.Errorf("create Tursoraft database manager: %w", err)
+			return nil, err
 		}
-		rt.meshDB = meshDB
-		log.Printf("[NODE] Tursoraft databases initialized (%d groups)", len(cfg.Databases.Groups))
 	}
 
 	// Step 7b: Initialize QUIC fallback transport if enabled (deprecated)
@@ -1460,6 +1387,15 @@ func (rt *Runtime) Shutdown() error {
 			composeReg.Close()
 		}
 
+		// The mesh database manager stops first, then its transport, while
+		// the swarm and every session are still up: the manager withdraws
+		// this process's cluster metadata and hands off leadership over the
+		// mesh, and a peer that never hears either waits out its absence
+		// timers instead.
+		if err := rt.shutdownMeshDB(); err != nil {
+			shutdownErr = err
+		}
+
 		// Step 0a: release the LiveDirectory seam's own resources. It owns
 		// liveness-override timers (LAD's override has no expiry, so the
 		// adapter enforces the port's ttlMs itself) and those timers hold a
@@ -1549,11 +1485,10 @@ func (rt *Runtime) Shutdown() error {
 			}
 		}
 
-		// Step 6: Close MeshDB if initialized
-		if rt.meshDB != nil {
-			if err := rt.meshDB.Shutdown(); err != nil {
-				log.Printf("[NODE] Error shutting down MeshDB: %v", err)
-				shutdownErr = err
+		// Step 6: Close the LAD ledger and its file once nothing reads them.
+		if rt.ladClose != nil {
+			if err := rt.ladClose(); err != nil {
+				log.Printf("[NODE] Error closing the LAD file: %v", err)
 			}
 		}
 
