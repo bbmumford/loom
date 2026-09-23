@@ -9,81 +9,16 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"net/http"
-	"os"
-	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
 	"github.com/ORBTR/aether"
 	"github.com/bbmumford/swarm"
 	meshdbcfg "github.com/bbmumford/tursoraft/manager"
+	"github.com/bbmumford/tursoraft/sqldtest"
 )
-
-// startTestSQLD starts a local sqld, the libSQL server a shared database's
-// primary runs on, on 127.0.0.1 with its data in the test's directory, and
-// stops only that process when the test ends. The binary is $TURSORAFT_SQLD,
-// else /opt/homebrew/bin/sqld, else sqld on PATH; with none the test skips.
-func startTestSQLD(t *testing.T) string {
-	t.Helper()
-	bin := os.Getenv("TURSORAFT_SQLD")
-	if bin == "" {
-		if _, err := os.Stat("/opt/homebrew/bin/sqld"); err == nil {
-			bin = "/opt/homebrew/bin/sqld"
-		} else if p, err := exec.LookPath("sqld"); err == nil {
-			bin = p
-		}
-	}
-	if bin == "" {
-		t.Skip("no sqld: set TURSORAFT_SQLD")
-	}
-	l, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	addr := l.Addr().String()
-	l.Close()
-	dir := t.TempDir()
-	logf, err := os.Create(filepath.Join(dir, "sqld.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	cmd := exec.Command(bin, "--no-welcome", "--db-path", filepath.Join(dir, "data.sqld"), "--http-listen-addr", addr)
-	cmd.Stdout, cmd.Stderr = logf, logf
-	if err := cmd.Start(); err != nil {
-		t.Fatal(err)
-	}
-	exited := make(chan struct{})
-	go func() { cmd.Wait(); logf.Close(); close(exited) }()
-	t.Cleanup(func() {
-		cmd.Process.Signal(syscall.SIGTERM)
-		select {
-		case <-exited:
-		case <-time.After(5 * time.Second):
-			cmd.Process.Kill()
-			<-exited
-		}
-	})
-	url := "http://" + addr
-	client := http.Client{Timeout: time.Second}
-	deadline := time.Now().Add(20 * time.Second)
-	for {
-		resp, err := client.Get(url + "/version")
-		if err == nil {
-			resp.Body.Close()
-			if resp.StatusCode == http.StatusOK {
-				return url
-			}
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("sqld at %s did not answer: %v", addr, err)
-		}
-		time.Sleep(50 * time.Millisecond)
-	}
-}
 
 func freeUDPPort(t *testing.T) int {
 	t.Helper()
@@ -223,7 +158,7 @@ func TestMeshDBClusterOnLoopbackVL1(t *testing.T) {
 	}
 	t.Setenv(EnvNodeIdentitySeed, "")
 	t.Setenv(EnvFlyMachineID, "")
-	primary := startTestSQLD(t)
+	primary := sqldtest.Start(t).URL()
 	key := testGroupKey(t)
 	ms := []*clusterMember{{dir: t.TempDir()}, {dir: t.TempDir()}, {dir: t.TempDir()}}
 	t.Cleanup(func() { shutdownMembers(t, ms) })
@@ -277,7 +212,7 @@ func TestMeshDBClusterOnLoopbackVL1(t *testing.T) {
 	// A member that shuts down withdraws its slot while the swarm still
 	// carries it: Runtime.Shutdown stops the manager before the swarm
 	// transport, so the other members stop seeing it publish under the key.
-	slot := meshDBClusterKey(clusterGroup, clusterDB)
+	slot := meshdbcfg.MeshKey(clusterGroup, clusterDB)
 	gone := string(ms[2].rt.identity.NodeID)
 	shutdownMembers(t, ms[2:])
 	waitMeshDB(t, 10*time.Second, "the stopped member's slot to be withdrawn", func() bool {

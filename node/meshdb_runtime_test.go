@@ -10,9 +10,11 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"database/sql"
 	"encoding/base64"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -159,8 +161,8 @@ func TestResolvedGroupsTakeTheResolverKeys(t *testing.T) {
 	}
 }
 
-// Each raft block seats its voter services and its job hosts under the
-// cluster key tursoraft runs it on; a group without one has no key.
+// Each raft block seats its voter services and its job hosts under the key
+// tursoraft's MeshKey gives its cluster; a group without one has no key.
 func TestMeshDBSeatsFollowTheRaftBlocks(t *testing.T) {
 	seats := meshDBSeats([]meshdbcfg.GroupConfig{
 		{GroupName: "control", DBNames: []string{"ctl"}, Raft: &meshdbcfg.RaftSpec{
@@ -168,9 +170,13 @@ func TestMeshDBSeatsFollowTheRaftBlocks(t *testing.T) {
 		}},
 		{GroupName: "sessions", DBNames: []string{"s"}},
 	})
-	want := map[string]map[string]bool{"tursoraft/control/ctl": {"node.a": true, "api.a": true}}
-	if len(seats) != 1 || len(seats["tursoraft/control/ctl"]) != 2 || !seats["tursoraft/control/ctl"]["node.a"] || !seats["tursoraft/control/ctl"]["api.a"] {
+	key := meshdbcfg.MeshKey("control", "ctl")
+	want := map[string]map[string]bool{key: {"node.a": true, "api.a": true}}
+	if len(seats) != 1 || len(seats[key]) != 2 || !seats[key]["node.a"] || !seats[key]["api.a"] {
 		t.Fatalf("meshDBSeats = %v, want %v", seats, want)
+	}
+	if _, ok := seats[meshdbcfg.MeshKey("sessions", "s")]; ok {
+		t.Fatalf("meshDBSeats seats a group with no raft block: %v", seats)
 	}
 }
 
@@ -317,7 +323,9 @@ func TestLADFileThisNodeCannotReadIsReplaced(t *testing.T) {
 		write func(t *testing.T, path string)
 	}{
 		{"plaintext", func(t *testing.T, path string) {
-			db, err := localdb.OpenPlaintext(ctx, path)
+			// "turso" is the tursogo driver localdb registers; with no key in
+			// the name it writes a plaintext SQLite file.
+			db, err := sql.Open("turso", path)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -325,6 +333,9 @@ func TestLADFileThisNodeCannotReadIsReplaced(t *testing.T) {
 				t.Fatal(err)
 			}
 			db.Close()
+			if !bytes.HasPrefix(fileHeader(t, path), []byte("SQLite format 3")) {
+				t.Fatal("the plaintext fixture has no plaintext SQLite header")
+			}
 		}},
 		{"another identity's key", func(t *testing.T, path string) {
 			db, err := localdb.Open(ctx, path, testLADKey(t))
@@ -357,5 +368,50 @@ func TestLADFileThisNodeCannotReadIsReplaced(t *testing.T) {
 				t.Fatal("the replacement file is plaintext")
 			}
 		})
+	}
+}
+
+// A LAD file that fails to open for a reason other than what it holds is
+// returned as that error and kept: here this process may not read it, which
+// says nothing about its contents, and a later start with the right
+// permissions reads it again.
+func TestLADFileOpenErrorKeepsTheFile(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a file whatever its mode")
+	}
+	ctx := context.Background()
+	dir := t.TempDir()
+	key := testLADKey(t)
+	db, err := openLADFile(ctx, dir, key)
+	if err != nil {
+		t.Fatalf("openLADFile: %v", err)
+	}
+	if _, err := db.Exec(`CREATE TABLE kept(v TEXT)`); err != nil {
+		t.Fatal(err)
+	}
+	db.Close()
+	path := filepath.Join(dir, ladFileName)
+	if err := os.Chmod(path, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(path, 0o600) })
+
+	if db, err := openLADFile(ctx, dir, key); err == nil {
+		db.Close()
+		t.Fatal("openLADFile over a file it may not read succeeded: the file was replaced")
+	} else if !errors.Is(err, fs.ErrPermission) {
+		t.Fatalf("openLADFile = %v, want the permission error", err)
+	}
+	if err := os.Chmod(path, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	db, err = openLADFile(ctx, dir, key)
+	if err != nil {
+		t.Fatalf("reopen once readable: %v", err)
+	}
+	defer db.Close()
+	var n int
+	if err := db.QueryRow(`SELECT count(*) FROM sqlite_schema WHERE name = 'kept'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("the file was not kept: n=%d err=%v", n, err)
 	}
 }

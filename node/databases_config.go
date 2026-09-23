@@ -135,17 +135,14 @@ func (d *DatabasesConfig) resolvedGroups() ([]meshdbcfg.GroupConfig, error) {
 	return groups, nil
 }
 
-// meshDBClusterKey is the mesh key tursoraft runs a group's cluster under:
-// "tursoraft/<group>/<db>" (tursoraft internal/cluster Key). A drift here
-// fails closed: no inbound stream matches a configured key.
-func meshDBClusterKey(group, db string) string {
-	return "tursoraft/" + group + "/" + db
-}
-
 // meshDBSeats maps each cluster key the groups declare to the services with
 // a seat in it: its voter services and every job's host services. A group
 // with a raft block holds exactly one database (tursoraft refuses any other
 // shape), named first in DBNames, else in Databases.
+//
+// The key is tursoraft's MeshKey, the key the cluster publishes its members
+// and dials its streams under. MeshDBTransport admits an inbound stream only
+// when its key is in this map, so a key formed any other way admits nobody.
 func meshDBSeats(groups []meshdbcfg.GroupConfig) map[string]map[string]bool {
 	out := map[string]map[string]bool{}
 	for _, g := range groups {
@@ -170,7 +167,7 @@ func meshDBSeats(groups []meshdbcfg.GroupConfig) map[string]map[string]bool {
 				seats[s] = true
 			}
 		}
-		out[meshDBClusterKey(g.GroupName, db)] = seats
+		out[meshdbcfg.MeshKey(g.GroupName, db)] = seats
 	}
 	return out
 }
