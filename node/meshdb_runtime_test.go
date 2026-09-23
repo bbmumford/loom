@@ -200,6 +200,34 @@ func TestMeshDBDirectoryWithdrawsALeftoverSelfSlot(t *testing.T) {
 	}
 }
 
+// A leftover slot's withdrawal, which runs on its own goroutine, never
+// reaches the mesh after this process publishes the same key: peers would
+// hold the tombstone while this process believes the slot is published.
+func TestMeshDBDirectoryLeftoverWithdrawalNeverFollowsAPublish(t *testing.T) {
+	const key = "tursoraft/g/db"
+	for i := 0; i < 200; i++ {
+		d := newMeshDBDirectory("vl1_self", nil)
+		var mu sync.Mutex
+		var ops []string
+		record := func(op string) error {
+			mu.Lock()
+			ops = append(ops, op)
+			mu.Unlock()
+			return nil
+		}
+		d.publishFn = func(string, []byte) error { return record("publish") }
+		d.withdrawFn = func(string) error { return record("withdraw") }
+		d.onMemberRecord(swarm.Record{NodeID: "vl1_self", Key: key, Body: []byte(`{"role":"voter"}`)})
+		if err := d.publish(key, map[string]string{"role": "voter"}); err != nil {
+			t.Fatal(err)
+		}
+		d.close()
+		if ops[len(ops)-1] != "publish" {
+			t.Fatalf("iteration %d: the slot's operations %v end in a withdrawal", i, ops)
+		}
+	}
+}
+
 // The service rides the PeerRecord from InitSwarm on, before the endpoint
 // publishes its handlers.
 func TestInitSwarmAdvertisesTheServiceFromBoot(t *testing.T) {
