@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ORBTR/aether"
+	"github.com/bbmumford/loom/core/streams"
 	"github.com/bbmumford/swarm"
 )
 
@@ -27,7 +28,7 @@ import (
 // That is worse than a swallowed error: a caller told it succeeded cannot
 // retry, and the swarm layer's anti-entropy cannot repair what it believes
 // was delivered. The common way to reach this state is the responder side of
-// RegisterPeer, where a failed AcceptStreamByID(100) returns without attaching
+// RegisterPeer, where a failed AcceptStreamByID(streams.StreamSwarm) returns without attaching
 // and without retrying, so the peer stays absent for the life of the session.
 //
 // Callers that legitimately treat an absent peer as a no-op should compare
@@ -212,10 +213,10 @@ func (t *MeshSwarmTransport) OnPeerLeave(fn func(id swarm.NodeID)) {
 }
 
 // RegisterPeer attaches an aether session for a peer and binds the
-// dedicated swarm stream (well-known StreamID 100). Both sides of the
+// dedicated swarm stream (streams.StreamSwarm). Both sides of the
 // session call RegisterPeer; deterministic role assignment by NodeID
 // comparison decides which side calls OpenStream (pushes OPEN onto the
-// wire) and which side calls AcceptStreamByID(100) (claims the stream
+// wire) and which side calls AcceptStreamByID (claims the stream
 // on arrival).
 //
 // Both sides MUST arm the StreamID-specific path: if the responder
@@ -238,29 +239,29 @@ func (t *MeshSwarmTransport) RegisterPeer(ctx context.Context, peerID swarm.Node
 	peerIDStr := string(peerID)
 
 	// Deterministic tie-break: the lower NodeID is the initiator and
-	// calls OpenStream(100), which is what pushes the OPEN frame on
+	// calls OpenStream, which is what pushes the OPEN frame on
 	// the wire. The higher NodeID is the responder and arms
-	// AcceptStreamByID(100) so the OPEN is claimed by the
+	// AcceptStreamByID(streams.StreamSwarm) so the OPEN is claimed by the
 	// StreamID-specific waiter rather than the FIFO dynamic-stream
 	// handler. If both sides ever opened, aether's duplicate-OPEN
 	// handling collapses to a single stream object and attachPeer is
 	// idempotent.
 	if selfID < peerIDStr {
-		// Initiator: OpenStream(100) is fast (it just pushes the OPEN frame),
+		// Initiator: OpenStream is fast (it just pushes the OPEN frame),
 		// so keep it synchronous.
 		stream, err := session.OpenStream(ctx, swarmStreamConfig())
 		if err != nil {
-			log.Printf("[SWARM] RegisterPeer: OpenStream(100) FAILED peer=%s: %v", truncID(peerIDStr), err)
+			log.Printf("[SWARM] RegisterPeer: OpenStream(%d) FAILED peer=%s: %v", streams.StreamSwarm, truncID(peerIDStr), err)
 			return fmt.Errorf("swarm transport: open stream for %s: %w", peerID, err)
 		}
-		log.Printf("[SWARM] RegisterPeer: OpenStream(100) ok peer=%s streamID=%d (initiator)", truncID(peerIDStr), stream.StreamID())
+		log.Printf("[SWARM] RegisterPeer: OpenStream(%d) ok peer=%s streamID=%d (initiator)", streams.StreamSwarm, truncID(peerIDStr), stream.StreamID())
 		t.attachPeer(peerID, session, stream)
 		log.Printf("[SWARM] RegisterPeer: attachPeer returned peer=%s", truncID(peerIDStr))
 		return nil
 	}
 
-	// Responder — AcceptStreamByID(100) blocks up to 30s waiting for
-	// the peer's OPEN(100). RegisterPeer fires from the session hook BEFORE this
+	// Responder — AcceptStreamByID(streams.StreamSwarm) blocks up to 30s
+	// waiting for the peer's OPEN. RegisterPeer fires from the session hook BEFORE this
 	// session's keepalive/gossip/bidi service goroutines start, so blocking here
 	// for a slow or older-binary peer stalled the entire session's startup (up
 	// to 30s of no keepalive/gossip). Arm the accept + attach in a goroutine so
@@ -270,12 +271,12 @@ func (t *MeshSwarmTransport) RegisterPeer(ctx context.Context, peerID swarm.Node
 	go func() {
 		acceptCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		defer cancel()
-		stream, err := session.AcceptStreamByID(acceptCtx, 100)
+		stream, err := session.AcceptStreamByID(acceptCtx, streams.StreamSwarm)
 		if err != nil {
-			log.Printf("[SWARM] RegisterPeer: AcceptStreamByID(100) FAILED peer=%s: %v", truncID(peerIDStr), err)
+			log.Printf("[SWARM] RegisterPeer: AcceptStreamByID(%d) FAILED peer=%s: %v", streams.StreamSwarm, truncID(peerIDStr), err)
 			return
 		}
-		log.Printf("[SWARM] RegisterPeer: AcceptStreamByID(100) ok peer=%s streamID=%d (responder, async)", truncID(peerIDStr), stream.StreamID())
+		log.Printf("[SWARM] RegisterPeer: AcceptStreamByID(%d) ok peer=%s streamID=%d (responder, async)", streams.StreamSwarm, truncID(peerIDStr), stream.StreamID())
 		t.attachPeer(peerID, session, stream)
 		log.Printf("[SWARM] RegisterPeer: attachPeer returned peer=%s (async)", truncID(peerIDStr))
 	}()
@@ -451,13 +452,13 @@ var _ = binary.BigEndian
 var _ = fmt.Sprint
 
 // swarmStreamConfig returns the aether.StreamConfig used for the
-// dedicated swarm protocol stream per peer. Application-stream ID 100
-// (well-known IDs <100 are reserved by aether for gossip/RPC/keepalive/
-// control). Reliable + interactive class so eager push, IHave and
-// graft frames don't queue behind bulk content fetches.
+// dedicated swarm protocol stream per peer: streams.StreamSwarm, in
+// aether's application band (IDs >= 100). Reliable + interactive class
+// so eager push, IHave and graft frames don't queue behind bulk content
+// fetches.
 func swarmStreamConfig() aether.StreamConfig {
 	return aether.StreamConfig{
-		StreamID:     100,
+		StreamID:     streams.StreamSwarm,
 		Reliability:  aether.ReliableOrdered,
 		Priority:     128,
 		LatencyClass: aether.ClassINTERACTIVE,

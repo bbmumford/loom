@@ -389,7 +389,12 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 
 	if rt.connMgr != nil {
 		log.Printf("[SWARM] InitSwarm: installing SessionHook on ConnectionManager")
-		rt.connMgr.SetSessionHook(func(nodeID string, session aether.Session, joined bool) {
+		// AddSessionHook, not the single SetSessionHook slot, so another
+		// per-peer stream binder subscribing later cannot displace swarm.
+		// The subscription is never removed: the rt.swarm guard above runs
+		// this once per Runtime, and the manager and transport share the
+		// Runtime's lifetime.
+		_ = rt.connMgr.AddSessionHook(func(nodeID string, session aether.Session, joined bool) {
 			peerID := swarm.NodeID(nodeID)
 			log.Printf("[SWARM] SessionHook fired peer=%s joined=%v", truncID(nodeID), joined)
 			if joined {
