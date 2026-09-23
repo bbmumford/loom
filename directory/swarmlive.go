@@ -38,6 +38,10 @@ const (
 	// composite-key pattern (one slot per (from,observer) pair without
 	// any swarm schema change).
 	LatencyTopicPrefix = "fleet.latency."
+
+	// MeshDBMemberTopic carries what each node publishes under a mesh
+	// database cluster key, one keyed slot per key (node/meshdb_members.go).
+	MeshDBMemberTopic = ports.Topic("meshdb.member")
 )
 
 // LatencyTopic returns the composite latency topic for an observing node.
