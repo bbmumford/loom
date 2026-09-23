@@ -24,3 +24,11 @@ use ../aether
 use ../ledger
 
 use ../reach
+
+// loom/go.mod pins tursoraft v0.0.6, but node/meshdb_transport.go implements
+// tursoraft's mesh.Mesh contract and node/runtime.go passes it as
+// ManagerConfig.Mesh; both exist only in the unpublished ../tursoraft
+// working tree. tursoraft resolves go-libsql and policypool through its own
+// go.mod replaces. Resolve it locally until it is published and loom bumps
+// its pin.
+use ../tursoraft

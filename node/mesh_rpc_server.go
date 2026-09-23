@@ -11,6 +11,7 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
+	"github.com/bbmumford/loom/core/streams"
 )
 
 // ServeMeshStream serves incoming RPC requests on an Aether stream.
@@ -74,6 +75,24 @@ func (s *RPCServer) ServeMeshStream(ctx context.Context, stream aether.Stream, r
 			return
 		}
 	}
+}
+
+// serveUnclaimedStream serves a stream that reached the session's dynamic
+// accept loop, which receives every stream no consumer claimed by ID.
+//
+// Only IDs below streams.ApplicationBand carry RPC: pkg/dispatch opens
+// dynamic RPC streams there. An application-band stream (StreamSwarm,
+// StreamMeshDB and the like) lands here when its consumer does not run on
+// this node or had not armed AcceptStreamByID within aether's backlog grace;
+// served as RPC, its first frame would be parsed as a request. It is reset
+// instead, so the opener's consumer fails at once and can open again.
+func (s *RPCServer) serveUnclaimedStream(ctx context.Context, stream aether.Stream, remoteID aether.NodeID) {
+	if id := stream.StreamID(); id >= streams.ApplicationBand {
+		log.Printf("[RPC-AETHER] refused unclaimed application stream %d from %s", id, remoteID.Short())
+		_ = stream.Reset(aether.ResetRefused)
+		return
+	}
+	s.ServeMeshStream(ctx, stream, remoteID)
 }
 
 // ServeMeshStreamBidirectional was removed. It had no callers, and as

@@ -28,20 +28,24 @@ const (
 	// each protocol owns its frame queue.
 	StreamReconcile uint64 = 4
 
-	// Application streams bound per peer pair. aether's StreamConfig
-	// contract puts application streams at IDs >= 100. Each is opened by
-	// the lower NodeID and claimed by the higher with AcceptStreamByID, so
-	// both ends must agree on the number: a change here is a wire change.
+	// ApplicationBand is the first ID of aether's application band: its
+	// StreamConfig contract puts application streams at IDs >= 100. Every
+	// ID from here up is claimed by ID; dynamic RPC streams (pkg/dispatch)
+	// stay below it, and the dynamic accept loop refuses an unclaimed stream
+	// at or above it.
+	ApplicationBand uint64 = 100
+
+	// Application streams bound per peer pair. Each is opened by the lower
+	// NodeID and claimed by the higher with AcceptStreamByID, so both ends
+	// must agree on the number: a change here is a wire change.
 
 	// StreamSwarm carries the swarm protocol (node/swarm_transport.go
 	// RegisterPeer and swarmStreamConfig).
 	StreamSwarm uint64 = 100
-	// StreamMeshDB is reserved for the mesh database replication transport,
-	// one stream per peer pair carrying every replicated database's traffic.
-	// TODO: the mesh database transport opens and claims this stream.
-	// pkg/dispatch nextDynamicStreamID has no ceiling above its floor of 10
-	// and returns 101 on a session's 92nd allocation, so that allocator must
-	// stay below 100 before this stream carries traffic.
+	// StreamMeshDB carries the mesh database transport
+	// (node/meshdb_transport.go): one yamux session per peer pair, whose
+	// streams carry every tursoraft Raft cluster the two share. pkg/dispatch
+	// draws dynamic RPC stream IDs from [10, 100), so no RPC opens on it.
 	StreamMeshDB uint64 = 101
 )
 
@@ -66,7 +70,7 @@ func DefaultLatencyClass(streamID uint64) aether.LatencyClass {
 		return aether.ClassREALTIME
 	case StreamRPC:
 		return aether.ClassINTERACTIVE
-	case StreamSwarm, 200, 201, 202, 203, 204, 205, 501:
+	case StreamSwarm, StreamMeshDB, 200, 201, 202, 203, 204, 205, 501:
 		return aether.ClassINTERACTIVE
 	default:
 		return aether.ClassBULK

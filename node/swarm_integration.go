@@ -242,6 +242,13 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	if rt.cfg.Platform != nil {
 		publisher.SetRegion(rt.cfg.Platform.Region())
 	}
+	// The service name rides every PeerRecord from boot for the same
+	// reason: MeshDBTransport reads a peer's service from it to list the
+	// peer as a cluster member and to seat its Raft streams, and a node
+	// that never calls PublishRPCHandlersToLAD would otherwise name none.
+	if rt.cfg.ServiceName != "" {
+		publisher.SetServiceName(rt.cfg.ServiceName)
+	}
 
 	rt.swarm = &SwarmIntegration{
 		Node:         node,

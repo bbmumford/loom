@@ -10,6 +10,7 @@ import (
 	"sync"
 
 	"github.com/ORBTR/aether"
+	"github.com/bbmumford/loom/core/streams"
 )
 
 // Dynamic stream IDs are drawn from [dynamicStreamIDFloor,
@@ -21,7 +22,7 @@ import (
 // createStream hands a duplicate OPEN the stream already open under that ID.
 const (
 	dynamicStreamIDFloor   uint64 = 10
-	dynamicStreamIDCeiling uint64 = 100
+	dynamicStreamIDCeiling        = streams.ApplicationBand
 )
 
 // errDynamicStreamIDsExhausted is returned when every ID in the dynamic range

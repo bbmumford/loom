@@ -1,0 +1,287 @@
+/*
+ * Copyright (c) 2026 HSTLES / ORBTR Pty Ltd. All Rights Reserved.
+ * Queries: licensing@hstles.com
+ */
+
+package node
+
+import (
+	"context"
+	"fmt"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	"github.com/ORBTR/aether"
+	"github.com/bbmumford/swarm"
+	meshdbcfg "github.com/bbmumford/tursoraft/manager"
+)
+
+// startTestSQLD starts a local sqld, the libSQL server a shared database's
+// primary runs on, on 127.0.0.1 with its data in the test's directory, and
+// stops only that process when the test ends. The binary is $TURSORAFT_SQLD,
+// else /opt/homebrew/bin/sqld, else sqld on PATH; with none the test skips.
+func startTestSQLD(t *testing.T) string {
+	t.Helper()
+	bin := os.Getenv("TURSORAFT_SQLD")
+	if bin == "" {
+		if _, err := os.Stat("/opt/homebrew/bin/sqld"); err == nil {
+			bin = "/opt/homebrew/bin/sqld"
+		} else if p, err := exec.LookPath("sqld"); err == nil {
+			bin = p
+		}
+	}
+	if bin == "" {
+		t.Skip("no sqld: set TURSORAFT_SQLD")
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := l.Addr().String()
+	l.Close()
+	dir := t.TempDir()
+	logf, err := os.Create(filepath.Join(dir, "sqld.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(bin, "--no-welcome", "--db-path", filepath.Join(dir, "data.sqld"), "--http-listen-addr", addr)
+	cmd.Stdout, cmd.Stderr = logf, logf
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	exited := make(chan struct{})
+	go func() { cmd.Wait(); logf.Close(); close(exited) }()
+	t.Cleanup(func() {
+		cmd.Process.Signal(syscall.SIGTERM)
+		select {
+		case <-exited:
+		case <-time.After(5 * time.Second):
+			cmd.Process.Kill()
+			<-exited
+		}
+	})
+	url := "http://" + addr
+	client := http.Client{Timeout: time.Second}
+	deadline := time.Now().Add(20 * time.Second)
+	for {
+		resp, err := client.Get(url + "/version")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return url
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("sqld at %s did not answer: %v", addr, err)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+func freeUDPPort(t *testing.T) int {
+	t.Helper()
+	c, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	return c.LocalAddr().(*net.UDPAddr).Port
+}
+
+// clusterMember is one runtime of the three-node test cluster and the
+// directory it keeps its identity, LAD file, replica and Raft state in.
+type clusterMember struct {
+	dir  string
+	port int
+	rt   *Runtime
+}
+
+const clusterGroup, clusterDB = "control", "ctl"
+
+func startClusterMember(t *testing.T, m *clusterMember, primary, key string) {
+	t.Helper()
+	m.port = freeUDPPort(t)
+	cfg := Config{
+		ServiceName: meshDBTestService,
+		DataDir:     m.dir,
+		NetworkKeys: []string{"meshdb-cluster-test-network-key"},
+		VL1:         VL1TransportConfig{Enabled: true, UDPPort: m.port},
+		LAD:         LADDirectoryConfig{Storage: "local", LocalDir: filepath.Join(m.dir, "lad"), BootstrapHosts: "127.0.0.1:9"},
+		Databases: &DatabasesConfig{
+			Enabled:   true,
+			LocalDir:  filepath.Join(m.dir, "db"),
+			VolumeDir: m.dir,
+			Groups: []meshdbcfg.GroupConfig{{
+				GroupName:     clusterGroup,
+				DBNames:       []string{clusterDB},
+				Databases:     []meshdbcfg.DatabaseConfig{{Name: clusterDB, URL: primary, AuthToken: "test"}},
+				EncryptionKey: key,
+				Raft:          &meshdbcfg.RaftSpec{VoterServices: []string{meshDBTestService}, VoterCount: 3, BootstrapExpect: 3},
+			}},
+		},
+	}
+	rt, err := Initialize(cfg)
+	if err != nil {
+		t.Fatalf("Initialize %s: %v", m.dir, err)
+	}
+	m.rt = rt
+}
+
+// connectMembers dials b's VL1 listener from a and runs the mesh session
+// lifecycle on it, as the connection manager does after a dial, then waits
+// for both transports to bind the session.
+func connectMembers(t *testing.T, a, b *clusterMember) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	target := aether.Target{NodeID: b.rt.identity.NodeID, Address: fmt.Sprintf("127.0.0.1:%d", b.port)}
+	conn, err := a.rt.dialNoiseUDP(ctx, target)
+	if err != nil {
+		t.Fatalf("dial %s: %v", b.dir, err)
+	}
+	bs, ok := installableMeshConn(conn)
+	if !ok {
+		t.Fatalf("dial returned %T", conn)
+	}
+	go a.rt.DialAndAcceptMesh(a.rt.ctx, bs.Conn, string(b.rt.identity.NodeID), "", ProtoNoiseUDP, "", "", "", dialBorrowsConnectingState)
+	idA, idB := string(a.rt.identity.NodeID), string(b.rt.identity.NodeID)
+	waitMeshDB(t, 20*time.Second, "both ends to bind the session", func() bool {
+		return a.rt.meshDBTransport.hasLiveSession(idB) && b.rt.meshDBTransport.hasLiveSession(idA)
+	})
+}
+
+func connectAll(t *testing.T, ms []*clusterMember) {
+	t.Helper()
+	for i := range ms {
+		for j := i + 1; j < len(ms); j++ {
+			connectMembers(t, ms[i], ms[j])
+		}
+	}
+}
+
+// agreedCluster waits until every member reports the same leader and cluster
+// ID for the database, and returns them.
+func agreedCluster(t *testing.T, ms []*clusterMember, within time.Duration) (leader, clusterID string) {
+	t.Helper()
+	var last string
+	waitMeshDB(t, within, "one leader and one cluster ID on every member", func() bool {
+		leader, clusterID = "", ""
+		for i, m := range ms {
+			h, err := m.rt.MeshDB().Health(clusterGroup, clusterDB)
+			if err != nil || h.Leader == "" || h.ClusterID == "" {
+				last = fmt.Sprintf("member %d: leader=%q cluster=%q err=%v", i, h.Leader, h.ClusterID, err)
+				return false
+			}
+			if i == 0 {
+				leader, clusterID = h.Leader, h.ClusterID
+			} else if h.Leader != leader || h.ClusterID != clusterID {
+				last = fmt.Sprintf("member %d sees leader=%s cluster=%s, member 0 %s %s", i, h.Leader, h.ClusterID, leader, clusterID)
+				return false
+			}
+		}
+		return true
+	})
+	if leader == "" {
+		t.Fatalf("no agreement: %s", last)
+	}
+	return leader, clusterID
+}
+
+func shutdownMembers(t *testing.T, ms []*clusterMember) {
+	t.Helper()
+	var wg sync.WaitGroup
+	for _, m := range ms {
+		if m.rt == nil {
+			continue
+		}
+		wg.Add(1)
+		go func(m *clusterMember) {
+			defer wg.Done()
+			if err := m.rt.Shutdown(); err != nil {
+				t.Errorf("Shutdown %s: %v", m.dir, err)
+			}
+			m.rt = nil
+		}(m)
+	}
+	wg.Wait()
+}
+
+// Three runtimes on loopback VL1 form one tursoraft cluster over the mesh
+// database transport, while swarm keeps working on its own stream, and a
+// restart on the same directories rejoins the same cluster instead of
+// bootstrapping a second one.
+func TestMeshDBClusterOnLoopbackVL1(t *testing.T) {
+	if testing.Short() {
+		t.Skip("boots three runtimes and a sqld")
+	}
+	t.Setenv(EnvNodeIdentitySeed, "")
+	t.Setenv(EnvFlyMachineID, "")
+	primary := startTestSQLD(t)
+	key := testGroupKey(t)
+	ms := []*clusterMember{{dir: t.TempDir()}, {dir: t.TempDir()}, {dir: t.TempDir()}}
+	t.Cleanup(func() { shutdownMembers(t, ms) })
+	for _, m := range ms {
+		startClusterMember(t, m, primary, key)
+	}
+	connectAll(t, ms)
+	leader, clusterID := agreedCluster(t, ms, 90*time.Second)
+	t.Logf("leader %s, cluster %s", truncID(leader), clusterID)
+
+	// Swarm on its own stream: a record published by one member reaches the
+	// other two alongside the Raft traffic on the mesh database stream.
+	const topic = swarm.Topic("meshdb.clustertest")
+	got := make(chan string, 4)
+	for _, m := range ms[1:] {
+		unsub, err := m.rt.swarm.Node.Subscribe(topic, func(r swarm.Record) error {
+			if !r.Tombstone {
+				got <- string(r.Body)
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer unsub()
+	}
+	if err := ms[0].rt.swarm.Node.Publish(topic, []byte("over stream 100")); err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 2; i++ {
+		select {
+		case body := <-got:
+			if body != "over stream 100" {
+				t.Fatalf("swarm delivered %q", body)
+			}
+		case <-time.After(20 * time.Second):
+			t.Fatalf("swarm delivered the record to %d of 2 peers", i)
+		}
+	}
+	for _, m := range ms {
+		for _, other := range ms {
+			if m == other {
+				continue
+			}
+			if !channelUp(m.rt.meshDBTransport, string(other.rt.identity.NodeID)) {
+				t.Fatalf("no mesh database channel from %s to %s", m.dir, other.dir)
+			}
+		}
+	}
+
+	// Restart every member on its own directories.
+	shutdownMembers(t, ms)
+	for _, m := range ms {
+		startClusterMember(t, m, primary, key)
+	}
+	connectAll(t, ms)
+	_, again := agreedCluster(t, ms, 90*time.Second)
+	if again != clusterID {
+		t.Fatalf("cluster ID after restart = %s, want %s: a restart bootstrapped a second cluster", again, clusterID)
+	}
+}
