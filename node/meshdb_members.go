@@ -48,6 +48,14 @@ type meshDBDirectory struct {
 	// onChange runs after every change, with no lock held.
 	onChange func()
 
+	// slotMu orders every publish and withdrawal of this process's own
+	// slots. onMemberRecord withdraws a leftover slot on a goroutine of its
+	// own; without the order, a withdrawal decided before tursoraft's first
+	// Publish of that key could reach the mesh after it, and every peer
+	// would then hold a tombstone for a slot this process believes is
+	// published and republishes only when its metadata changes.
+	slotMu sync.Mutex
+
 	mu       sync.Mutex
 	meta     map[string]map[string]map[string]string // key -> node -> metadata
 	services map[string]string                       // node -> service
@@ -96,6 +104,8 @@ func (d *meshDBDirectory) close() {
 
 // publish replaces this process's metadata under key; nil withdraws it.
 func (d *meshDBDirectory) publish(key string, meta map[string]string) error {
+	d.slotMu.Lock()
+	defer d.slotMu.Unlock()
 	d.mu.Lock()
 	if meta == nil {
 		delete(d.own, key)
@@ -217,6 +227,14 @@ func (d *meshDBDirectory) onMemberRecord(r swarm.Record) error {
 			d.wg.Add(1)
 			go func(key string) {
 				defer d.wg.Done()
+				d.slotMu.Lock()
+				defer d.slotMu.Unlock()
+				d.mu.Lock()
+				mine := d.own[key]
+				d.mu.Unlock()
+				if mine {
+					return
+				}
 				if err := d.withdrawFn(key); err != nil {
 					log.Printf("[MESHDB] withdraw a previous process's slot %s: %v", key, err)
 				}
