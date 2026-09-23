@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/bbmumford/policypool"
 	"github.com/bbmumford/tursoraft/localdb"
 )
 
@@ -43,10 +44,14 @@ func ladFileKey(priv ed25519.PrivateKey) ([]byte, error) {
 // openLADFile opens dir/lad.db encrypted under key through tursoraft's
 // localdb (tursogo, AES-256-GCM, foreign keys proven on every connection).
 //
-// LAD is a cache of gossip, so a file this node cannot use is deleted and
-// rebuilt rather than kept: a plaintext file, which localdb refuses to open
-// under a key, and a file that does not open under this key (one written
-// under another node identity).
+// LAD is a cache of gossip, so a file whose contents this node cannot read
+// is deleted and rebuilt rather than kept: a plaintext file, which localdb
+// refuses to open under a key (localdb.ErrPlaintext), and a file the engine
+// cannot read under this key (policypool.ErrNotADatabase), such as one
+// written under another node identity. Every other error, for example a
+// permission, I/O or context failure, is returned with the file left in
+// place: it says nothing about what the file holds, and Initialize fails on
+// it rather than discarding records a later start could read.
 func openLADFile(ctx context.Context, dir string, key []byte) (*sql.DB, error) {
 	if !filepath.IsAbs(dir) {
 		return nil, fmt.Errorf("LAD local directory %q must be an absolute path", dir)
@@ -56,7 +61,7 @@ func openLADFile(ctx context.Context, dir string, key []byte) (*sql.DB, error) {
 	if err == nil {
 		return db, nil
 	}
-	if _, statErr := os.Stat(path); statErr != nil {
+	if !errors.Is(err, localdb.ErrPlaintext) && !errors.Is(err, policypool.ErrNotADatabase) {
 		return nil, fmt.Errorf("open LAD file: %w", err)
 	}
 	log.Printf("[NODE] LAD file %s does not open under this node's key (%v); deleting it, LAD is rebuilt from gossip", path, err)

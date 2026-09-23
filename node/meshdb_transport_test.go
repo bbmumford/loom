@@ -16,6 +16,7 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/adapter"
+	meshdbcfg "github.com/bbmumford/tursoraft/manager"
 	"github.com/bbmumford/tursoraft/mesh"
 )
 
@@ -25,7 +26,7 @@ const (
 	meshDBTestService = "node.test"
 )
 
-var meshDBTestKey = meshDBClusterKey("control", "ctl")
+var meshDBTestKey = meshdbcfg.MeshKey("control", "ctl")
 
 // fastMeshDBTiming shortens every bound so the unit tests run in seconds.
 func fastMeshDBTiming() meshDBTiming {

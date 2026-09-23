@@ -30,9 +30,11 @@ type HLC uint64
 type Watermark uint64
 
 // Record is the canonical accepted-record envelope that flows through
-// LiveDirectory subscriptions and DurableJournal append/replay. It carries
-// every field the current mesh_ledger schema omits (plan B.4 correction):
-// HLC + Lamport, tombstone + reason, expiry, author key, and blob CID.
+// LiveDirectory subscriptions and DurableJournal append/replay. Beside the
+// slot identity (Topic, NodeID, Key) and the owner's Body it carries the
+// ordering stamps (HLC and Lamport), the tombstone and its reason, the
+// expiry, the author's public key and signature, any observer attestation,
+// and the CID of a body held out of line.
 //
 // Provenance invariant: Body, AuthorPubKey, Signature, and Observer are the
 // owner's bytes VERBATIM. Replicas and the journal never re-encode or
