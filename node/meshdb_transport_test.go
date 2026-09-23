@@ -340,6 +340,46 @@ func TestMeshDBLeaveForAReplacedSessionKeepsThePeer(t *testing.T) {
 	}
 }
 
+func boundTo(tr *MeshDBTransport, peer string, s aether.Session) bool {
+	tr.mu.Lock()
+	defer tr.mu.Unlock()
+	p := tr.peers[peer]
+	return p != nil && p.session == s
+}
+
+// When the bound session closes while the connection manager still
+// dispatches to an earlier session of the same peer (a failed upgrade it
+// reverted, or a surviving path), no join fires for that session; the peer is
+// bound to it anyway and its channel comes back up there.
+func TestMeshDBRebindsToTheSessionTheManagerKeeps(t *testing.T) {
+	p := newMeshDBPair(t, fastMeshDBTiming(), defaultMeshDBSeats())
+	if err := p.high.Publish(meshDBTestKey, map[string]string{"role": "voter"}); err != nil {
+		t.Fatal(err)
+	}
+	p.low.currentSession = func(string) (aether.Session, bool) { return p.lowSess, true }
+	p.high.currentSession = func(string) (aether.Session, bool) { return p.highSess, true }
+	up := func(lowS, highS aether.Session) func() bool {
+		return func() bool {
+			return boundTo(p.low, meshDBTestHigh, lowS) && channelUp(p.low, meshDBTestHigh) &&
+				boundTo(p.high, meshDBTestLow, highS) && channelUp(p.high, meshDBTestLow)
+		}
+	}
+	waitMeshDB(t, 5*time.Second, "the channel on the first session", up(p.lowSess, p.highSess))
+
+	lowConn, highConn := net.Pipe()
+	opts := aether.DefaultSessionOptions()
+	lowUp := adapter.NewTCPSession(lowConn, meshDBTestLow, meshDBTestHigh, aether.ProtoTCP, opts)
+	highUp := adapter.NewTCPSession(highConn, meshDBTestHigh, meshDBTestLow, aether.ProtoTCP, opts)
+	t.Cleanup(func() { lowUp.Close(); highUp.Close() })
+	p.low.bindSession(meshDBTestHigh, lowUp)
+	p.high.bindSession(meshDBTestLow, highUp)
+	waitMeshDB(t, 5*time.Second, "the channel on the upgraded session", up(lowUp, highUp))
+
+	lowUp.Close()
+	highUp.Close()
+	waitMeshDB(t, 5*time.Second, "the channel back on the first session", up(p.lowSess, p.highSess))
+}
+
 // Stop refuses further use and returns only once every goroutine it started
 // has ended.
 func TestMeshDBTransportStop(t *testing.T) {

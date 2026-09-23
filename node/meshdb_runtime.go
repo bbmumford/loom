@@ -39,6 +39,7 @@ func (rt *Runtime) startMeshDBTransport() error {
 	t.connect = func(nodeID string) {
 		rt.Go("meshdb.connect", func() { cm.ForceConnect(rt.ctx, nodeID) })
 	}
+	t.currentSession = cm.GetMeshSession
 	t.removeHook = cm.AddSessionHook(t.onSession)
 	for nodeID, sess := range cm.liveMeshSessions() {
 		t.bindSession(nodeID, sess)
