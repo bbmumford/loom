@@ -116,8 +116,7 @@ func (p *StreamPool) Fill(sess aether.Session) {
 		if sess.IsClosed() {
 			return
 		}
-		stream, err := sess.OpenStream(context.Background(), aether.StreamConfig{
-			StreamID:    nextDynamicStreamID(sess),
+		stream, err := openDynamicStreamOn(context.Background(), sess, aether.StreamConfig{
 			Reliability: aether.ReliableOrdered,
 			Priority:    128,
 		})
@@ -197,8 +196,7 @@ func (p *StreamPool) Get(ctx context.Context, sess aether.Session) (aether.Strea
 	if p.inCapBackoff() {
 		return nil, aether.ErrStreamCapExhausted
 	}
-	stream, err := sess.OpenStream(ctx, aether.StreamConfig{
-		StreamID:    nextDynamicStreamID(sess),
+	stream, err := openDynamicStreamOn(ctx, sess, aether.StreamConfig{
 		Reliability: aether.ReliableOrdered,
 		Priority:    128,
 	})
@@ -208,16 +206,14 @@ func (p *StreamPool) Get(ctx context.Context, sess aether.Session) (aether.Strea
 	return stream, err
 }
 
-// closeStreamQuiet calls Close + ignores errors. Used to discard pool
-// entries that fail admission — we don't want a stream-leak from a
-// stale entry but we also don't care about the Close error path (the
-// stream is already known-bad).
+// closeStreamQuiet discards a pool entry that failed admission, or one the
+// pool drains, by resetting it through releaseDynamicStream. A reset removes
+// the stream from both sessions' stream tables, so its dynamic ID is free for
+// the next allocation; a FIN would leave it half-closed and holding the ID
+// until aether's idle GC. Errors are ignored: the stream is already known-bad
+// or no longer wanted.
 func closeStreamQuiet(s aether.Stream) {
-	if s == nil {
-		return
-	}
-	defer func() { _ = recover() }()
-	_ = s.Close()
+	releaseDynamicStream(nil, s)
 }
 
 // Len returns the number of pre-opened streams available.
@@ -234,7 +230,7 @@ func (p *StreamPool) Drain() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for _, entry := range p.streams {
-		_ = entry.stream.Close()
+		closeStreamQuiet(entry.stream)
 	}
 	p.streams = p.streams[:0]
 }
