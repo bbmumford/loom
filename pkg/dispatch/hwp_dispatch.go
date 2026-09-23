@@ -110,10 +110,7 @@ type HWPCaller struct {
 	// walked the directory/LAD then raced to overwrite the cache —
 	// each loser leaked its StreamPool fill. M-FindSession-Stampede fix.
 	findGroup singleflight.Group
-	// (removed: per-caller streamID counter — replaced by session-scoped
-	// counter in streamid.go.nextDynamicStreamID to prevent collisions
-	// between HWPCaller and StreamPool allocators sharing the same
-	// session. H-Dispatch-StreamIDCollision fix.)
+
 	stopCh   chan struct{}
 	bmu      sync.RWMutex               // separate lock for breakers (reduces contention)
 	breakers map[string]*CircuitBreaker // nodeID → breaker (per-node, not per-role)
@@ -602,6 +599,7 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 				resultCh <- probeResult{nodeID: r.NodeID, err: err}
 				return
 			}
+			defer releaseDynamicStream(r.Session, stream)
 			if err := stream.Send(probeCtx, reqData); err != nil {
 				resultCh <- probeResult{nodeID: r.NodeID, err: err}
 				return
@@ -784,6 +782,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 		}
 		return nil, nodeID, fmt.Errorf("open stream: %w", err)
 	}
+	defer releaseDynamicStream(session, stream)
 
 	// Build request with grade-aware deadline propagation
 	var remaining time.Duration
@@ -1032,15 +1031,14 @@ type findResult struct {
 //
 // If priority is 0, defaults to 128 (Standard).
 //
-// IDs come from the session-scoped counter in streamid.go — shared
-// with StreamPool to prevent collisions between the two allocators on
-// the same session (was H-Dispatch-StreamIDCollision).
+// IDs come from the session's table in streamid.go, which StreamPool
+// shares, so the two never open the same ID and neither leaves the
+// dynamic range below the application band.
 func (c *HWPCaller) openDynamicStream(ctx context.Context, session aether.Session, priority uint8) (aether.Stream, error) {
 	if priority == 0 {
 		priority = 128
 	}
-	return session.OpenStream(ctx, aether.StreamConfig{
-		StreamID:    nextDynamicStreamID(session),
+	return openDynamicStreamOn(ctx, session, aether.StreamConfig{
 		Reliability: aether.ReliableOrdered,
 		Priority:    priority,
 	})
