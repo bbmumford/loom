@@ -2,6 +2,7 @@ package rpc
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -74,7 +75,16 @@ var _ handlers.RequirementDeclarer = (*registryShim)(nil)
 // leading byte is treated as protobuf binary (the standard mesh RPC path).
 // This lets one shim serve both dispatch surfaces without asking the
 // caller which encoding they used.
+//
+// A handler with no Func is refused with ErrProxyDispatchLocal, the refusal
+// Registry.Dispatch gives, before the payload is read. ExportToHandlerRegistry
+// exports a RegisterProxy entry as well, so the mesh RPC server and the
+// in-process dispatcher (node/rpc_local_dispatch.go) reach this shim for an
+// operation another node executes.
 func (s *registryShim) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
+	if s.handler.Func == nil {
+		return nil, fmt.Errorf("%w: %s", ErrProxyDispatchLocal, s.handler.FQN())
+	}
 	start := time.Now()
 
 	protoReq := NewInstance(s.handler.Request)
