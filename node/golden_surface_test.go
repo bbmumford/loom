@@ -12,14 +12,13 @@ import (
 	"github.com/bbmumford/loom/node/handlers"
 )
 
-// Phase-0 golden surface test (plan Appendix A / §Gates Phase 0(b)).
+// Golden surface test.
 //
-// The baseline lists below were generated from the pre-extraction
-// HSTLES/Library/mesh tree (branch fix/mesh-review-findings, 2026-07-19)
-// by enumerating exported methods on the three load-bearing types. Every
-// baseline symbol MUST remain present on the loom types — a missing symbol
-// is a broken consumer. Additions are permitted (the extraction adds e.g.
-// RPCServer.SetAuthValidator); removals are not.
+// The baseline lists below enumerate exported methods on the three
+// load-bearing types that composition roots call. Every baseline symbol MUST
+// remain present on the loom types — a missing symbol is a broken consumer.
+// Additions are permitted (e.g. RPCServer.SetAuthValidator); removals are
+// not.
 
 var goldenRuntimeMethods = []string{
 	"AcceptIncomingMeshSession", "AddDiscoverer", "AuditLogger",
@@ -93,8 +92,8 @@ func TestGoldenSurfaceHandlerRegistry(t *testing.T) {
 	assertMethods(t, reflect.TypeOf((*handlers.HandlerRegistry)(nil)), goldenHandlerRegistryMethods)
 }
 
-// TestGoldenConfigSeams asserts the Phase-0 injection seams exist with the
-// exact field names Phase-3 consumers wire (plan §0.3 rows 1/4/5/7).
+// TestGoldenConfigSeams asserts the injection seams exist with the exact
+// field names composition roots wire.
 func TestGoldenConfigSeams(t *testing.T) {
 	typ := reflect.TypeOf(Config{})
 	for _, field := range []string{

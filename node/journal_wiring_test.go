@@ -130,8 +130,8 @@ func TestJournalOpenFailsSoftlyOnAnUnusableDir(t *testing.T) {
 	}
 }
 
-// 🔴 THE PROPERTY THE MUTATION DEMANDED, AND IT EXPOSED A GAP OLDER THAN THIS
-// TASK.
+// 🔴 Shutdown must release both port seams: the journal and the
+// LiveDirectory.
 //
 // Close must be both CALLED and idempotent, and idempotence alone is what a
 // suite proves by accident: with nothing constructing a Runtime and shutting it

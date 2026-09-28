@@ -94,11 +94,11 @@ func (e *MetricsExporter) writeMetrics(w io.Writer) {
 }
 
 // writeDegradedSubsystemMetrics emits mesh_subsystem_degraded per
-// currently-degraded subsystem in the platform-wide health Registry.
+// currently-degraded subsystem in the process-wide health Registry.
 // Absence of a label means the subsystem is healthy — Prometheus users
 // alert on `mesh_subsystem_degraded{subsystem=...} > 0`. The
-// mesh_subsystem_degraded_total gauge exposes the aggregate count so
-// meshmon and /heartbeat consumers can trigger on a single integer.
+// mesh_subsystem_degraded_total gauge exposes the aggregate count so a
+// monitoring client or /heartbeat consumer can trigger on a single integer.
 func (e *MetricsExporter) writeDegradedSubsystemMetrics(w io.Writer) {
 	fmt.Fprintf(w, "# HELP mesh_subsystem_degraded_total Count of degraded subsystems in the platform-wide health registry.\n")
 	fmt.Fprintf(w, "# TYPE mesh_subsystem_degraded_total gauge\n")
@@ -247,8 +247,8 @@ func (e *MetricsExporter) writeSelfHealthMetrics(w io.Writer) {
 // "second HELP line for metric name ..." and drops THE WHOLE BODY, not just
 // the offending line, taking every other metric on the node with it.
 //
-// The all-time series holds mesh_connection_events_total because
-// io/tools/go/meshmon reads that name. This windowed series carries no _total
+// The all-time series holds mesh_connection_events_total because a
+// monitoring client reads that name. This windowed series carries no _total
 // suffix, which is also the correct Prometheus convention: a 5-minute window
 // is a gauge, not a monotonic counter.
 func (e *MetricsExporter) writeConnectionEventMetrics(w io.Writer) {

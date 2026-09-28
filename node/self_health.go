@@ -72,10 +72,10 @@ type SelfHealthMonitor struct {
 	stopCh       chan struct{}
 	stopOnce     sync.Once // Stop is exported; a second close would panic
 	wg           sync.WaitGroup
-	// registry is the optional platform-wide subsystem health sink. When
+	// registry is the optional process-wide subsystem health sink. When
 	// non-nil, the monitor reflects "lagging"/"stalled" states into
-	// SubsystemHealthEvaluator and SubsystemConnectionReporter — so
-	// meshmon and the /api/monitoring/subsystems surface see the
+	// SubsystemHealthEvaluator and SubsystemConnectionReporter — so a
+	// monitoring client reading /api/monitoring/subsystems sees the
 	// specific stalled component instead of just a single connection bit.
 	// Nil is legal and disables the reflection entirely.
 	registry *health.Registry
@@ -158,8 +158,8 @@ func (m *SelfHealthMonitor) Start() {
 }
 
 // reflectToRegistry mirrors the composite observability status into the
-// platform-wide Registry so downstream consumers (meshmon, notifier,
-// /api/monitoring/subsystems) see per-subsystem degradation instead of a
+// process-wide Registry so downstream consumers (monitoring clients, alert
+// notifiers, /api/monitoring/subsystems) see per-subsystem degradation instead of a
 // single connected/disconnected bit.
 //
 // Encoding:
@@ -202,8 +202,8 @@ func (m *SelfHealthMonitor) reflectToRegistry(h ObservabilityHealth) {
 //
 // 🔴 THE sync.Once IS LOAD-BEARING. A bare close(m.stopCh) panics with "close
 // of closed channel" on a second call. Runtime calls Stop only from shutdown
-// (runtime.go:1426), but Stop is exported, so "no current caller does it twice"
-// is a property of today's callers rather than of the method.
+// (Runtime.Shutdown), but Stop is exported, so "no current caller does it twice"
+// is a property of the callers rather than of the method.
 //
 // SessionHealthMonitor.Stop and LADSnapshotCache.Stop guard the same way.
 func (m *SelfHealthMonitor) Stop() {

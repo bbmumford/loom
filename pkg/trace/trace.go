@@ -3,7 +3,7 @@
  * Queries: licensing@hstles.com
  */
 
-// Package trace carries a per-request trace ID across the HSTLES platform.
+// Package trace carries a per-request trace ID across the loom mesh.
 //
 // The trace ID is sourced from the inbound HTTP `X-E2E-Trace-ID` header
 // (set by the e2e test framework) and lives on the request context so

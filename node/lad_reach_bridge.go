@@ -83,10 +83,10 @@ func bridgeReachFromSwarm(rt *Runtime, node swarm.Node, cache *ladcache.Director
 				HLCTimestamp:    r.HLC,
 			})
 			// Also tombstone TopicRole. The live branch below writes
-			// all three of Reach/Member/Role, but this departure path only
-			// drained Reach+Member — so a departed node's role record lingered
+			// all three of Reach/Member/Role, so this departure path drains
+			// all three: a departed node's role record left in place lingers
 			// until TTL/rebuild, and consumers (isAnchorNode, BestGradeToHandler)
-			// kept treating the dead node as an anchor.
+			// keep treating the dead node as an anchor.
 			cache.ApplyLocal(lad.Record{
 				Topic:           lad.TopicRole,
 				NodeID:          nodeID,
@@ -256,28 +256,28 @@ func bridgeReachFromSwarm(rt *Runtime, node swarm.Node, cache *ladcache.Director
 //
 // NOISE_UDP MUST map to "udp" (not "noise-udp"). Every downstream
 // consumer that filters reach addresses by transport — forwarder.go
-// cross-org noise-UDP hairpin filter, peer_connections.go cross-origin
+// noise-UDP hairpin filter, peer_connections.go cross-origin
 // classification, bestAddress public-UDP filter — keys on a.Proto == "udp".
-// Emitting "noise-udp" silently breaks all three filters; cross-org
-// UDP-direct dial stops working and traffic falls back to WS-relay.
+// Emitting "noise-udp" silently breaks all three filters; UDP-direct dial
+// to peers of another origin stops working and traffic falls back to
+// WS-relay.
 // reachAddrsFromPB converts a PeerRecord's addresses into reach addresses,
 // SKIPPING any whose transport does not map to a dialable proto.
 //
-// 🛑 THE SKIP IS THE POINT, AND IT WAS MISSING. Address_UNKNOWN is
+// 🛑 THE SKIP IS THE POINT. Address_UNKNOWN is
 // the ZERO VALUE of Address_Transport (= 0), so any Address whose Transport
 // field is simply unset — a partially-populated message, an older or newer
 // producer, a hand-built record — reaches addressProtoToReach's default and
 // yields "".
 //
-// Appending that produced a reach address with an EMPTY Proto: undialable by
-// every path (each keys on "udp"/"wss"/…), yet stored in the signed reach
+// Appending it would produce a reach address with an EMPTY Proto: undialable
+// by every path (each keys on "udp"/"wss"/…), yet stored in the signed reach
 // record, counted among the peer's addresses, and reported as reach data.
-// Nothing errors. A peer can therefore appear to have addresses while having
-// no usable one.
+// Nothing would error, and the peer would appear to have addresses while
+// having no usable one.
 //
-// The sibling doing this correctly already existed: resyncStalePeerAddresses
-// skips on `proto == ""`. This path did not, so the two disagreed about the
-// same malformed input.
+// The sibling resyncStalePeerAddresses skips on `proto == ""` as well, so
+// both paths treat the same malformed input the same way.
 //
 // The skip is LOGGED rather than silent, because "the record had entries we
 // discarded" is exactly the fact an operator needs when a peer is unreachable

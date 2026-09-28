@@ -58,23 +58,23 @@ const (
 	// the AUTHORITATIVE source of node identity when set. It exists because
 	// DataDir persistence is not reliably available: the platform config
 	// defaults DataDir to "./data" (a RELATIVE path on the container's
-	// ephemeral layer), and only some deployments mount a volume at all. Every
-	// deploy therefore minted a fresh NodeID and orphaned the previous one; the
-	// dead identity lingered in the mesh roster as a ghost that peers kept
-	// dialing forever. Those dials do not fail fast — a ghost ID usually
+	// ephemeral layer), and only some deployments mount a volume at all. A
+	// deploy without a volume mints a fresh NodeID and orphans the previous
+	// one; the dead identity lingers in the mesh roster as a ghost that peers
+	// keep dialing. Those dials do not fail fast — a ghost ID usually
 	// resolves to a LIVE machine, which correctly answers "not me": noise-UDP
 	// gets msg2 timeout, WebSocket gets 401/404, and the peer falls back to TLS
-	// and churns. One ephemeral seed produced fleet-wide transport churn.
+	// and churns. One ephemeral seed produces fleet-wide transport churn.
 	//
 	// A seed is strictly better than a volume: it survives deploys AND machine
 	// replacement (a volume does not), needs no mount, and is identical to
 	// provision on every endpoint.
 	//
-	// SECURITY — this is deliberately NOT the rev-073 mistake. That code
-	// derived the keypair from os.Hostname() via sha256, so anyone who knew the
-	// hostname (DNS, TLS SNI, Fly metadata) could reconstruct the PRIVATE key.
-	// This seed is operator-provisioned high-entropy material delivered as a
-	// platform secret, never derived from public inputs:
+	// SECURITY — the keypair is never derived from a public input such as
+	// os.Hostname(): anyone who knows the hostname (DNS, TLS SNI, Fly
+	// metadata) could then reconstruct the PRIVATE key. This seed is
+	// operator-provisioned high-entropy material delivered as a platform
+	// secret, never derived from public inputs:
 	//
 	//	fly secrets set MESH_IDENTITY_SEED=$(openssl rand -base64 32) -a <app>
 	EnvNodeIdentitySeed = "MESH_IDENTITY_SEED"
@@ -84,20 +84,17 @@ const (
 	// the SAME app (which necessarily share the app-level MESH_IDENTITY_SEED
 	// secret) get DISTINCT node identities instead of colliding on one.
 	//
-	// The collision it fixes: app/relay/devices run 2 machines in different
-	// regions (syd + iad), each with its own 6PN address, but one shared
-	// MESH_IDENTITY_SEED minted ONE NodeID for BOTH. The PeerRecord for that
-	// single identity therefore flapped between the two machines' 6PN
-	// addresses as each gossiped itself, and every noise-UDP session to the
-	// identity broke and re-handshook multiple times per second (observed in
-	// connection-history: A→F→A on vl1_fjll7snh/5hu565gy/6klfupzs every
-	// 0.2-3s while single-machine nodes stayed stable). Distinct per-machine
+	// The collision it prevents: an app running 2 machines in different
+	// regions, each with its own 6PN address, shares one MESH_IDENTITY_SEED,
+	// and the raw seed mints ONE NodeID for BOTH. The PeerRecord for that
+	// single identity then flaps between the two machines' 6PN addresses as
+	// each gossips itself, and every noise-UDP session to the identity breaks
+	// and re-handshakes multiple times per second. Distinct per-machine
 	// identities give each machine a stable identity↔address↔session mapping.
 	//
-	// FLY_MACHINE_ID is stable across in-place (rolling) deploys — verified
-	// live: app/relay/devices machines keep the same IDs across deploys
-	// months apart — so mixing it in does NOT re-introduce
-	// the per-deploy ghost-minting that MESH_IDENTITY_SEED exists to prevent.
+	// FLY_MACHINE_ID is stable across in-place (rolling) deploys, so mixing
+	// it in does NOT cause the per-deploy ghost-minting that
+	// MESH_IDENTITY_SEED exists to prevent.
 	// It changes only on genuine machine replacement, where a new identity is
 	// the correct outcome. When empty (local/non-Fly), the raw seed is used
 	// unchanged: a single-machine context has no collision to break.
@@ -106,7 +103,7 @@ const (
 	// perMachineSeedInfo domain-separates the HMAC that derives a
 	// per-machine seed from the root MESH_IDENTITY_SEED. Versioned so a
 	// future change to the derivation can co-exist without silently
-	// rotating every node's identity a second time.
+	// rotating every node's identity.
 	perMachineSeedInfo = "mesh-node-identity/per-machine:v1|"
 
 	// nodeIdentityFileName is the on-disk filename inside DataDir that
@@ -144,13 +141,12 @@ var ErrNodeIdentityCorrupt = errors.New("mesh: node identity file corrupt")
 // <dataDir>/node-key.json or, on first run, generates a fresh random
 // keypair via ed25519.GenerateKey(rand.Reader) and persists it.
 //
-// Finding rev-073: earlier versions derived the ed25519 keypair
-// deterministically from os.Hostname() via sha256("mesh-node-identity:"
-// + hostname). Same hostname always produced the same private key,
-// which meant an attacker who knew the hostname (readable in DNS,
-// TLS SNI, Fly machine metadata, ...) plus this open-source function
-// could reconstruct the private key and forge mesh identity. That
-// derivation is removed entirely — the seed now comes from crypto/rand.
+// The keypair is never derived from the hostname: a key computed from a
+// public string under a public hash (e.g. sha256 of os.Hostname()) lets
+// anyone who knows the hostname (readable in DNS, TLS SNI, Fly machine
+// metadata, ...) plus this open-source function reconstruct the private
+// key and forge mesh identity. The seed comes from MESH_IDENTITY_SEED or
+// crypto/rand.
 //
 // Callers must pass a non-empty dataDir. ctx is propagated to slog so
 // error observability attributes to the correct request scope; the
@@ -263,25 +259,22 @@ func GenerateIdentity(ctx context.Context, dataDir string) (*NodeIdentity, error
 	return id, nil
 }
 
-// identityFromSeed derives the ed25519 keypair and NodeID from a 32-byte seed.
-// Shared by the seed-env and DataDir-file paths so both produce a byte-identical
-// identity for the same seed — the property the whole ghost fix rests on.
 // derivePerMachineSeed folds the per-machine FLY_MACHINE_ID into the
 // shared root seed so co-located machines of one app derive distinct
-// identities. See EnvFlyMachineID for the collision this fixes.
+// identities. See EnvFlyMachineID for the collision this prevents.
 //
 // The derivation is HMAC-SHA256(key=rootSeed, msg=info||machineID). HMAC
 // with the secret rootSeed as the KEY is a PRF: the output is
 // indistinguishable from random without knowledge of rootSeed, so the
 // private key remains gated on the secret even though machineID is a
-// low-entropy, semi-public value (Fly metadata). This is deliberately
-// NOT the rev-073 mistake, which derived the whole key from a PURELY
-// public input (os.Hostname) under a public hash — there the attacker
-// needed no secret. Here machineID is only a salt; rootSeed is the secret.
+// low-entropy, semi-public value (Fly metadata). A key derived from a
+// PURELY public input (such as os.Hostname) under a public hash would need
+// no secret to reconstruct; here machineID is only a salt and rootSeed is
+// the secret.
 //
 // Output is exactly sha256.Size (32) = ed25519.SeedSize, so no expansion
-// is required. When machineID is empty the raw seed is returned unchanged
-// to preserve the pre-existing single-machine identity.
+// is required. When machineID is empty the raw seed is returned unchanged,
+// so a single-machine node's identity is the one its raw seed derives.
 func derivePerMachineSeed(rootSeed []byte, machineID string) []byte {
 	if machineID == "" {
 		return rootSeed
@@ -292,6 +285,10 @@ func derivePerMachineSeed(rootSeed []byte, machineID string) []byte {
 	return mac.Sum(nil) // 32 bytes == ed25519.SeedSize
 }
 
+// identityFromSeed derives the ed25519 keypair and NodeID from a 32-byte seed.
+// Shared by the seed-env and DataDir-file paths so both produce a
+// byte-identical identity for the same seed; a node therefore keeps one
+// NodeID whichever path supplies its seed.
 func identityFromSeed(seed []byte) (*NodeIdentity, error) {
 	privKey := ed25519.NewKeyFromSeed(seed)
 	pubKey := privKey.Public().(ed25519.PublicKey)

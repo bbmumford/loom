@@ -56,9 +56,10 @@ type ExecutorConfig struct {
 
 	// AuthValidator gates handler execution (RequiresAuth / auth types /
 	// scopes) before a task runs. nil → loom-local fail-closed validator,
-	// which denies every RequiresAuth handler because nothing writes its
-	// context keys. Platform builds (HSTLES) must inject a validator
-	// delegating to their real security helpers.
+	// which denies every RequiresAuth handler: only loom's tests write the
+	// private authentication keys it reads. A composition root that
+	// authenticates callers must inject a validator that reads the context
+	// keys its authentication writes.
 	AuthValidator ports.AuthValidator
 }
 
@@ -290,7 +291,7 @@ func (e *Executor) runAssignmentLoop(ctx context.Context) {
 
 // executeAssignment executes an assigned task and sends the result
 func (e *Executor) executeAssignment(ctx context.Context, assignment meshtask.Assignment) {
-	// MESH-H07: reject a nil Task before spawning execution. A malformed/remote
+	// Reject a nil Task before spawning execution. A malformed/remote
 	// assignment with Task==nil would deref task.Tags/task.Role in getHandlerName
 	// and panic in this goroutine with no recover, crashing the whole process.
 	if assignment.Task == nil {
@@ -315,7 +316,7 @@ func (e *Executor) executeAssignment(ctx context.Context, assignment meshtask.As
 			if !established || principal == nil || !principal.PartitionKey().Valid() {
 				authorityErr = fmt.Errorf("authorized context has no execution principal")
 			} else if principal.PartitionKey() != expectedPartition {
-				authorityErr = fmt.Errorf("authorized context owner does not match gateway admission")
+				authorityErr = fmt.Errorf("authorized context partition does not match gateway admission")
 			}
 		}
 	}
@@ -324,11 +325,11 @@ func (e *Executor) executeAssignment(ctx context.Context, assignment meshtask.As
 	execCtx, cancel := context.WithTimeout(execBase, assignment.LeaseDuration)
 	defer cancel()
 
-	// Track execution. MESH-H01: capture startedAt in a local so the Stats
-	// build below reads it WITHOUT touching e.active — reading the map there
-	// unlocked, while other executeAssignment goroutines insert/delete under
-	// e.mu, triggered Go's `concurrent map read and map write` fatal throw
-	// (MaxConcurrent defaults to 10, so two in-flight tasks are enough).
+	// Track execution. Capture startedAt in a local so the Stats build below
+	// reads it WITHOUT touching e.active — reading the map there unlocked,
+	// while other executeAssignment goroutines insert/delete under e.mu, is
+	// Go's `concurrent map read and map write` fatal throw (MaxConcurrent
+	// defaults to 10, so two in-flight tasks are enough).
 	startedAt := time.Now()
 	e.mu.Lock()
 	e.active[assignment.TaskID] = &executionState{
@@ -362,7 +363,7 @@ func (e *Executor) executeAssignment(ctx context.Context, assignment meshtask.As
 		Result: result,
 		Stats: map[string]any{
 			"executor_id": e.nodeID,
-			"duration_ms": time.Since(startedAt).Milliseconds(), // MESH-H01: local, not the shared map
+			"duration_ms": time.Since(startedAt).Milliseconds(), // local, not the shared map
 		},
 	}
 
@@ -384,16 +385,16 @@ func (e *Executor) executeTask(ctx context.Context, task *meshtask.Task, fence s
 
 	// Require the opaque product principal established by the gateway's
 	// execution-time authorization. Task fields are mutable body claims and
-	// never mint or select this owner.
+	// never mint or select this partition principal.
 	partitionReader, ok := e.auth.(ports.ExecutionPrincipalReader)
 	if !ok {
 		return e.rejectedTaskResult(task.ID, fence,
-			"task owner rejected: auth validator cannot read an execution principal")
+			"task partition rejected: auth validator cannot read an execution principal")
 	}
 	principal, ok := partitionReader.ExecutionPrincipal(ctx)
 	if !ok || principal == nil || !principal.PartitionKey().Valid() {
 		return e.rejectedTaskResult(task.ID, fence,
-			"task owner rejected: established execution principal is missing")
+			"task partition rejected: established execution principal is missing")
 	}
 
 	// Convert mesh task to node task

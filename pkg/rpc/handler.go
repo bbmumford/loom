@@ -74,20 +74,20 @@ type HandlerFunc func(ctx context.Context, req proto.Message) (proto.Message, er
 //
 //	rpc.Handler{
 //	    Middleware: []rpc.Middleware{
-//	        hstles.RequireAuth("session", "bearer"),
-//	        hstles.RequireScopes("identity.write"),
+//	        authmw.RequireAuth("session", "bearer"), // a composition root's middleware
+//	        authmw.RequireScopes("identity.write"),
 //	    },
 //	}
 type Handler struct {
-	Namespace        string                  // "platform", "app", "custom"
+	Namespace        string                  // FQN prefix before Domain (one or more dot-separated segments), e.g. "orbtr"
 	Domain           string                  // "identity", "device", "policy"
-	Operation        string                  // "CreateUser", "ListDevices"
+	Operation        string                  // "GetStatus", "ListDevices"
 	Func             HandlerFunc             // The handler function (nil for proxy — dispatched over mesh)
-	Request          proto.Message           // Nil pointer type hint: (*pb.CreateUserRequest)(nil)
-	Response         proto.Message           // Nil pointer type hint: (*pb.CreateUserResponse)(nil)
+	Request          proto.Message           // Nil pointer type hint: (*pb.GetStatusRequest)(nil)
+	Response         proto.Message           // Nil pointer type hint: (*pb.GetStatusResponse)(nil)
 	Middleware       []Middleware            // HTTP middleware chain applied before handler (auth, rate limit, etc.)
 	Scope            ScopeTag                // opaque scope label a PresencePolicy evaluates at mesh dispatch
-	Requirement      *scope.Requirement      // §R two-arm authorization; when set it supersedes Scope at the enforcement seam. nil = fall back to Scope/PresencePolicy.
+	Requirement      *scope.Requirement      // two-arm authorization; when set it supersedes Scope at the enforcement seam. nil = fall back to Scope/PresencePolicy.
 	Tags             []string                // Classification: "users", "write", "feature:policy.full"
 	OpClass          OperationClass          // minimum grade requirement for mesh forwarding (default: OpStandard)
 	WebhookSignature *WebhookSignatureConfig // optional: declare this handler is a webhook-class receiver; the registry runs signature verification pre-dispatch
@@ -115,11 +115,11 @@ func (h *Handler) IsPublic() bool {
 // Usage:
 //
 //	rpc.Handler{
-//	    Func: rpc.Wrap(func(ctx context.Context, req *pb.CreateUserRequest) (*pb.CreateUserResponse, error) {
-//	        return handlers.CreateUser(ctx, req)
+//	    Func: rpc.Wrap(func(ctx context.Context, req *pb.GetStatusRequest) (*pb.GetStatusResponse, error) {
+//	        return handlers.GetStatus(ctx, req)
 //	    }),
-//	    Request:  (*pb.CreateUserRequest)(nil),
-//	    Response: (*pb.CreateUserResponse)(nil),
+//	    Request:  (*pb.GetStatusRequest)(nil),
+//	    Response: (*pb.GetStatusResponse)(nil),
 //	}
 func Wrap[Req, Resp proto.Message](fn func(ctx context.Context, req Req) (Resp, error)) HandlerFunc {
 	return func(ctx context.Context, req proto.Message) (proto.Message, error) {

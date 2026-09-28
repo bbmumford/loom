@@ -20,7 +20,7 @@ type RoleRequirement struct {
 }
 
 // RoleConfig defines the complete role configuration for a project.
-// Each project (HSTLES, ORBTR) builds one of these and passes it to
+// Each composition root builds one of these and passes it to
 // SelectRoles() and DetectCapabilities().
 type RoleConfig struct {
 	// Roles maps role name → requirement. Defines which roles this project

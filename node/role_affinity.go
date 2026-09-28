@@ -13,7 +13,7 @@ import (
 // Role affinity is the proactive counterpart to TrafficWeight's reactive
 // per-peer scaling. TrafficWeight only bumps the target connection count
 // AFTER RPCs have flowed; that leaves a freshly-deployed peer with a
-// critical role (e.g. orbtr.signal on the only same-region devices node)
+// critical role (e.g. orbtr.signal on the only same-region node serving it)
 // at the K=2 floor until traffic first arrives. The first dispatch then
 // pays the cold-start cost: the registry maps the FQN to that peer, the
 // connection manager sees no session, the dial loop spins, and the

@@ -17,7 +17,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Split handler interfaces (preferred — use these for new code)
+// Handler interfaces: HandlerMeta plus one interface per dispatch mode
 // ---------------------------------------------------------------------------
 
 // Scope is the opaque scope label a handler declares at registration. It is the
@@ -46,17 +46,18 @@ const (
 	// not recognise. validateScope rejects any handler bound to it, so holding it
 	// denies instead of reading as "no scope required".
 	//
-	// Nothing produces it today — no caller-supplied value is converted into a
-	// scope tag anywhere — so the only way to hold it is to set it, which is what
-	// that refusal catches. It stays so that a decay path added later lands on a
-	// value that already denies.
+	// No code converts a caller-supplied value into a scope tag, so a handler
+	// holds it only by declaring it, and registerMeta refuses that declaration
+	// (scope.IsDeclared). It is the value a conversion must return for an input
+	// it does not recognise, because that value already denies.
 	ScopeUnknown = scope.ScopeUnknown
 )
 
 // HandlerMeta contains metadata common to all handler types.
 // Both RPCHandler and TaskHandler embed this interface.
 type HandlerMeta interface {
-	// Name returns the operation name (e.g., "auth.login", "identity.getUser")
+	// Name returns the operation name the registry keys on (e.g.
+	// "orbtr.<domain>.<Op>")
 	Name() string
 
 	// Role returns the domain role (e.g., "auth", "identity", "notify")
@@ -65,22 +66,26 @@ type HandlerMeta interface {
 	// RequiresAuth returns true if operation needs authentication
 	RequiresAuth() bool
 
-	// AllowedAuthTypes returns acceptable authentication methods.
-	// Values should be the security/core.AuthType* constants — "session",
-	// "mtls", "api-key", "bearer", "dev". Empty slice = any auth type
-	// accepted (if RequiresAuth is true).
+	// AllowedAuthTypes returns acceptable authentication methods. The
+	// ports.AuthValidator compares each value, as a string, with the
+	// authentication type it reads from the context, so values use that
+	// validator's spelling (e.g. "session", "mtls", "api-key", "bearer",
+	// "dev"). Empty slice = any auth type accepted (if RequiresAuth is true).
 	AllowedAuthTypes() []string
 
 	// Scopes returns required JWT scopes (e.g., ["auth.login"])
 	Scopes() []string
 
-	// Scope returns the required tenant isolation level.
+	// Scope returns the opaque presence tier the handler requires.
 	// Returns ScopeNone for deliberately unrestricted handlers. The zero
 	// value is invalid and registration rejects it.
 	Scope() Scope
 
-	// AllowedPartitions returns an optional tenant whitelist.
-	// Empty slice = all tenants allowed (subject to Scope).
+	// AllowedPartitions returns the partition values the handler was declared
+	// with (the wrappers' WithScope allowed argument). validateScope does not
+	// read it, and neither does the loom-local AuthValidator
+	// (securityctx.Default): it reaches a composition root's AuthValidator
+	// through ports.SecureHandler, and only that validator can act on it.
 	AllowedPartitions() []string
 }
 
@@ -107,8 +112,7 @@ type TaskHandler interface {
 }
 
 // StreamHandler handles long-lived bidirectional, server-stream, or client-stream
-// operations. Used for: RemoteNegotiate, JobExecute (bidi), PolicyWatch (server-stream),
-// DeviceControl (bidi).
+// operations, opened through HandlerRegistry.DispatchStream.
 //
 // StreamHandler does NOT use GenericWrapper — streams have no single request/response
 // cycle. Middleware fires Before() on stream open and After() on stream close, but
@@ -147,7 +151,7 @@ type DualHandler interface {
 // RPCRequest represents a direct RPC call
 type RPCRequest struct {
 	ID        string                 `json:"id"`        // Request ID (idempotency)
-	Handler   string                 `json:"handler"`   // "auth.login", "identity.getUser"
+	Handler   string                 `json:"handler"`   // "orbtr.<domain>.<Op>"
 	Payload   []byte                 `json:"payload"`   // Proto-encoded operation data
 	Context   map[string]interface{} `json:"context"`   // Session, trace IDs
 	Timeout   time.Duration          `json:"timeout"`   // Max execution time
@@ -219,7 +223,7 @@ const (
 // ExecutionContext contains routing information for handler execution
 type ExecutionContext struct {
 	Role       string        // "auth", "identity", "notify"
-	Operation  string        // "login", "verify2fa", "createUser", etc.
+	Operation  string        // operation within the role, e.g. "login", "verify2fa"
 	Priority   int           // 1-10, higher = more urgent
 	Timeout    time.Duration // Max execution time
 	Idempotent bool          // Can safely retry
@@ -238,13 +242,13 @@ var (
 // ---------------------------------------------------------------------------
 
 // HandlerRegistry manages all registered handlers and middleware.
-// Accepts RPCHandler, TaskHandler, DualHandler, and the legacy Handler interface.
+// It accepts any HandlerMeta; each dispatch method type-asserts the entry to
+// RPCHandler, TaskHandler or StreamHandler (a DualHandler serves both RPC and
+// task dispatch).
 //
-// Concurrency: guarded by mu. Historically the maps were unguarded under a
-// "register everything before serving" convention; Phase-1 runtime role
-// activation registers and UNREGISTERS handlers while dispatch is live, so
-// the registry is now properly synchronized (reads take RLock — negligible
-// against the network cost of any dispatch).
+// Concurrency: guarded by mu. Runtime role activation (node/role_activation.go)
+// registers and unregisters handlers through registration scopes while
+// dispatch is live, so every map access takes mu; reads take RLock.
 type HandlerRegistry struct {
 	mu                 sync.RWMutex
 	handlers           map[string]*registrationEntry
@@ -548,9 +552,10 @@ func (r *HandlerRegistry) registerMeta(
 	return handle, nil
 }
 
-// Unregister removes a handler by name, returning whether it existed. The
-// Phase-1 role-teardown path: SetEnabledRoles only gates dispatch — this
-// actually removes the registration so a re-activation starts clean.
+// Unregister removes the published handler registered under name, whichever
+// registration that is, and reports whether one existed; a pending
+// registration is untouched. Role teardown (node/role_activation.go) calls
+// UnregisterExact instead, which cannot remove a same-name replacement.
 func (r *HandlerRegistry) Unregister(name string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -848,8 +853,7 @@ func (r *HandlerRegistry) Count() int {
 // validateScope checks that the trusted typed context satisfies the
 // handler's declared Requirement or, when it declares none, its scope tag.
 // RPCRequest.Context and task Metadata are deliberately ignored here: both are
-// mutable request data and cannot establish platform, organisation, or user
-// identity.
+// mutable request data and cannot establish any identity axis or the subject.
 func (r *HandlerRegistry) validateScope(ctx context.Context, h HandlerMeta) error {
 	identity := scope.AuthenticatedIdentityFromContext(ctx)
 
@@ -924,8 +928,8 @@ func extractContextMap(ctx context.Context) map[string]interface{} {
 }
 
 // injectRPCContext merges mutable request hints into the Go context for
-// middleware and application handlers. The tenant-scope gate deliberately
-// ignores this map and consumes only scope.AuthenticatedIdentity.
+// middleware and application handlers. validateScope deliberately ignores
+// this map and consumes only scope.AuthenticatedIdentity.
 // If reqCtx is nil or empty, returns ctx unchanged.
 func injectRPCContext(ctx context.Context, reqCtx map[string]interface{}) context.Context {
 	if len(reqCtx) == 0 {
@@ -948,9 +952,13 @@ func injectRPCContext(ctx context.Context, reqCtx map[string]interface{}) contex
 // Returns ErrHandlerNotFound if no handler is registered for the name.
 // Returns ErrUnsupportedMode if the handler doesn't implement RPCHandler.
 //
-// This legacy surface preserves its existing internal-call semantics and
-// does not add a second authorization decision. Product runtimes and other
-// authority-bearing entry points must use [HandlerRegistry.DispatchRPCWithAuth].
+// Dispatch runs validateScope, the middleware and the handler, but not the
+// AuthValidator's ValidateExecutionAuth check. Its callers are
+// RPCServer.executeLocal (reached from RPCServer.handleRequest), the node's
+// local dispatch adapter (node/rpc_local_dispatch.go) and
+// dispatch.LocalCaller. An entry point that
+// must judge the caller's authentication type and required scopes calls
+// [HandlerRegistry.DispatchRPCWithAuth], which runs that check first.
 func (r *HandlerRegistry) Dispatch(ctx context.Context, req *RPCRequest) (*RPCResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("RPC request is nil")
@@ -967,10 +975,10 @@ func (r *HandlerRegistry) Dispatch(ctx context.Context, req *RPCRequest) (*RPCRe
 //
 //	auth → partition scope → middleware Before → RPCHandler → middleware After
 //
-// A nil validator uses the fail-closed Loom-local validator. Product runtimes
-// must pass the validator injected at composition so private product context
-// keys, allowed authentication types, and required scopes are interpreted by
-// the owning product rather than by Loom.
+// A nil validator uses the fail-closed loom-local validator. A composition
+// root passes the validator it injects, so its private context keys, allowed
+// authentication types and required scopes are interpreted by that validator
+// rather than by loom.
 func (r *HandlerRegistry) DispatchRPCWithAuth(
 	ctx context.Context,
 	req *RPCRequest,
@@ -1037,8 +1045,8 @@ func (h ResolvedHandler) dispatchRPC(
 
 	// Propagate e2e trace ID — the LocalCaller (in-process dispatch) and
 	// any other caller that stamps req.TraceID expect the handler chain
-	// to expose it via trace.FromContext. The HWP-mesh receiving path
-	// does the same lift in mesh/node/rpc.go.
+	// to expose it via trace.FromContext. RPCServer.handleRequest in
+	// node/rpc.go does the same lift for a request received over the mesh.
 	if req.TraceID != "" {
 		ctx = trace.WithID(ctx, req.TraceID)
 	}
@@ -1055,7 +1063,8 @@ func (h ResolvedHandler) dispatchRPC(
 		}
 	}
 
-	// 🔒 TENANT SCOPE ENFORCEMENT
+	// Partition scope enforcement: validateScope judges the declared
+	// Requirement or presence tier against the authenticated identity.
 	if err := h.registry.validateScope(ctx, h.meta); err != nil {
 		return &RPCResponse{
 			Success: false,
@@ -1072,7 +1081,7 @@ func (h ResolvedHandler) dispatchRPC(
 			// A later Before rejected the request. Run After (reverse
 			// order) for the middlewares whose Before already completed so any
 			// resource they acquired in Before (span, semaphore, tx, counter) is
-			// released — the previous code returned immediately and leaked them.
+			// released; returning straight away would leak them.
 			rejection := &RPCResponse{Success: false, Error: err.Error()}
 			rr, re := rejection, err
 			for i := idx - 1; i >= 0; i-- {
@@ -1097,9 +1106,10 @@ func (h ResolvedHandler) dispatchRPC(
 }
 
 // DispatchTask looks up a handler by name and executes it through the complete
-// task pipeline. Pure-Loom callers use the fail-closed local auth validator;
-// platform runtimes should call [HandlerRegistry.DispatchTaskWithAuth] with
-// their injected validator so it reads the platform's private context keys.
+// task pipeline with the fail-closed loom-local auth validator
+// (securityctx.Default). A composition root that injects its own validator
+// calls [HandlerRegistry.DispatchTaskWithAuth] with it, so the check reads that
+// validator's private context keys.
 func (r *HandlerRegistry) DispatchTask(ctx context.Context, task *Task) (*TaskResult, error) {
 	return r.DispatchTaskWithAuth(ctx, task, securityctx.Default())
 }
@@ -1107,7 +1117,7 @@ func (r *HandlerRegistry) DispatchTask(ctx context.Context, task *Task) (*TaskRe
 // DispatchTaskWithAuth is the canonical task execution pipeline shared by
 // compose dispatch and the asynchronous task executor:
 //
-//	auth → tenant scope → middleware Before → TaskHandler → middleware After
+//	auth → partition scope → middleware Before → TaskHandler → middleware After
 //
 // After hooks always unwind in reverse order for every Before hook that
 // completed, including handler errors and later-Before rejection. A nil auth
@@ -1179,7 +1189,8 @@ func (h ResolvedHandler) DispatchTaskWithAuth(
 		}, nil
 	}
 
-	// 🔒 TENANT SCOPE ENFORCEMENT
+	// Partition scope enforcement: validateScope judges the declared
+	// Requirement or presence tier against the authenticated identity.
 	if err := h.registry.validateScope(ctx, h.meta); err != nil {
 		return &TaskResult{
 			TaskID: task.ID,
@@ -1286,7 +1297,8 @@ func (r *HandlerRegistry) DispatchStream(ctx context.Context, handlerName string
 	}
 	defer releaseAdmission()
 
-	// 🔒 TENANT SCOPE ENFORCEMENT
+	// Partition scope enforcement: validateScope judges the declared
+	// Requirement or presence tier against the authenticated identity.
 	if err := r.validateScope(ctx, h); err != nil {
 		return fmt.Errorf("tenant restriction: %w", err)
 	}
@@ -1365,15 +1377,25 @@ type transportPartitionCtxKey struct{}
 
 // WithTransportPartition binds the transport-resolved partition onto ctx and sets
 // the pinned-axis component of the canonical typed scope identity
-// (scope.AxisTransportPinned). The RPC server calls it after accepting a session
-// from a partition-bound listener.
+// (scope.AxisTransportPinned). RPCServer.HandleIncomingSessionsForPartition
+// (node/rpc.go) and the runtime's listener accept loop (node/runtime.go) call it
+// for every accepted session, with the partition the session carries or, when
+// it carries none, the listener's fallback: a dedicated listener's own
+// partition, "default" on the unpartitioned listener, "" on a shared preamble
+// listener.
 func WithTransportPartition(ctx context.Context, partition string) context.Context {
 	ctx = context.WithValue(ctx, transportPartitionCtxKey{}, partition)
 	return scope.WithAuthenticatedScope(ctx, scope.AxisTransportPinned, partition)
 }
 
-// TransportPartitionFromContext returns the transport-bound partition, or "" when
-// no partition-bound listener established one (a single-partition transport).
+// TransportPartitionFromContext returns the partition WithTransportPartition
+// bound onto ctx, or "" when nothing bound one (an in-process dispatch) or the
+// bound value was "". For a session accepted on the unpartitioned listener it
+// returns "default", and loom's readers treat that value as unbound, exactly as
+// they treat "": reconcileTransportPartition skips its comparison,
+// RPCServer.handleRequest skips WithPartitionID and
+// RPCServer.bindAuthenticatedPrincipal refuses a mesh principal. A configured
+// partition whose ID is "default" is read the same way.
 func TransportPartitionFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(transportPartitionCtxKey{}).(string); ok {
 		return v

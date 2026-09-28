@@ -104,10 +104,9 @@ func (n *Node) Publish(ctx context.Context, r io.Reader, opts PublishOptions) (*
 
 		nRead, readErr := io.ReadFull(r, chunkBuf)
 		// errors.Is so a wrapped EOF / ErrUnexpectedEOF from any reader in
-		// the chain still terminates the loop cleanly. See
-		// tools/sentinelequalcheck (audit-r2 D3) for the lint that enforces
-		// this — the previous == comparison broke silently the moment any
-		// intermediate reader returned `fmt.Errorf("...: %w", io.EOF)`.
+		// the chain still terminates the loop cleanly: an intermediate
+		// reader that returns `fmt.Errorf("...: %w", io.EOF)` fails an ==
+		// comparison, and the loop would report it as a read error.
 		if errors.Is(readErr, io.EOF) {
 			break
 		}

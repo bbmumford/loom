@@ -17,11 +17,11 @@ import (
 // Key includes Seq and LamportClock alongside Timestamp.UnixNano. Two
 // records with the same (topic, partition, node) emitted in the same
 // nanosecond — which happens during burst updates (latency flood,
-// multipath flap, reach update cascade) — previously collapsed onto
-// the same key and silently lost the later writes. The cache is
-// last-writer-wins per logical key + IBLT reconcile self-heals so
-// permanent loss was avoided, but rumor apply latency increased.
-// Was the H11 finding. No wire change — key is local-only.
+// multipath flap, reach update cascade) — would otherwise collapse onto
+// the same key and the later writes would be dropped as duplicates. The
+// cache is last-writer-wins per logical key and IBLT reconcile self-heals,
+// so the loss is not permanent, but rumor apply latency rises. The key is
+// local-only, so its shape is not a wire contract.
 func LADRumorID(rec lad.Record) string {
 	return fmt.Sprintf("%s:%s:%s:%d:%d:%d",
 		rec.Topic, rec.Partition, rec.NodeID,

@@ -12,7 +12,7 @@ import (
 
 // ActivationEnv is what the runtime hands a RoleActivator. It exists so role
 // service code never captures a request-scoped context or spawns bare
-// goroutines (the H7 closure-capture hazard): everything long-running binds
+// goroutines that outlive the runtime's tracking: everything long-running binds
 // Context() and launches through Go, so Shutdown's wg.Wait drains it and a
 // hot role teardown cannot corrupt the next activation.
 type ActivationEnv interface {
@@ -56,24 +56,23 @@ func (s RegistrationScope) Token() any {
 	return s.token
 }
 
-// RoleActivator is the Phase-1 runtime role-init path — the single largest
-// net-new build (plan §1.4): today roles are fixed at boot; Runtime.SetRoles
-// only re-advertises the label. Consumers lift their per-role
-// roleinit.Initialize<Role> bodies behind this interface and register them
-// with the runtime, which invokes Activate AFTER boot when a takeover claim
-// is won.
+// RoleActivator is the runtime role-init path: Runtime.SetRoles only
+// re-advertises a role label, and an activator is what brings the role's
+// services up. Consumers lift their per-role roleinit.Initialize<Role> bodies
+// behind this interface and register them with Runtime.RegisterRoleActivator;
+// the runtime invokes Activate AFTER boot when a takeover claim is won or an
+// operator activates the role.
 //
 // The runtime — not the activator — owns the post-activation sequence, in
-// order: handlerRegistry.SetEnabledRoles(+role) → rpcRegistry.
-// ExportToHandlerRegistry → PublishRPCHandlersToLAD → PeerPublisher.SetRoles
-// re-advertise. ActivationEnv supplies a causal RegistrationScope; successful
+// order (node/role_activation.go): publish the activation's staged
+// registrations → SetEnabledRoles(+role) → PublishRPCHandlersToLAD →
+// SetRoles re-advertise. ActivationEnv supplies a causal RegistrationScope; successful
 // scoped registrations receive immutable registry identities so Deactivate
 // can remove precisely that generation without deleting a same-name
 // replacement (SetEnabledRoles alone only gates dispatch — it does not
 // unregister).
 //
-// Prototype RoleActivator on "auth" end-to-end before generalizing
-// (plan §Risks 6).
+// TODO: prototype a RoleActivator on "auth" end-to-end before generalizing.
 type RoleActivator interface {
 	// Role is the service role this activator can bring up ("auth", …).
 	Role() string

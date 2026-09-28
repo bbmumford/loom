@@ -61,7 +61,9 @@ func (w *GenericRPCWrapper[Req, Resp]) WithAuth(required bool, authTypes []strin
 }
 
 // WithScope declares the handler's opaque scope label and the partition
-// allow-list enforcement consults. Returns self for chaining.
+// values AllowedPartitions returns. validateScope enforces only the label; the
+// partition values reach a composition root's AuthValidator (see
+// HandlerMeta.AllowedPartitions). Returns self for chaining.
 func (w *GenericRPCWrapper[Req, Resp]) WithScope(scope Scope, allowed []string) *GenericRPCWrapper[Req, Resp] {
 	w.scope = scope
 	w.allowedPartitions = allowed
@@ -159,7 +161,9 @@ func (w *GenericTaskWrapper[Req, Resp]) WithAuth(required bool, authTypes []stri
 }
 
 // WithScope declares the handler's opaque scope label and the partition
-// allow-list enforcement consults. Returns self for chaining.
+// values AllowedPartitions returns. validateScope enforces only the label; the
+// partition values reach a composition root's AuthValidator (see
+// HandlerMeta.AllowedPartitions). Returns self for chaining.
 func (w *GenericTaskWrapper[Req, Resp]) WithScope(scope Scope, allowed []string) *GenericTaskWrapper[Req, Resp] {
 	w.scope = scope
 	w.allowedPartitions = allowed

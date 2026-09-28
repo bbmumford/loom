@@ -4,8 +4,8 @@
  */
 
 // Package scope holds the single canonical ScopeTag label shared by the rpc
-// package (rpc.ScopeTag, rpc.Scope*) and the legacy handlers package
-// (mesh/node/handlers.Scope, handlers.Scope*). Both surfaces
+// package (rpc.ScopeTag, rpc.Scope*) and the node/handlers package
+// (handlers.Scope, handlers.Scope*). Both surfaces
 // re-export the symbols declared here via Go type aliases and constant
 // forwards, so a value round-trips between the two packages without any
 // possibility of drift.

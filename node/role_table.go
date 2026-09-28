@@ -182,12 +182,13 @@ func (t *RoleTable) PruneStale(cutoff time.Time) int {
 // session with. A machine replaced by a deploy falls in exactly that gap:
 // unreachable by every removal path.
 //
-// Measured on the live fleet: the LAD directory (which does have a TTL and a
-// liveness sweep) reported a clean 8 records while this table held 40 against 11
-// real machines — node-orbtr-io alone carried 3 anchor identities for 1 machine.
-// mesh-topology merges both sources, so the corpses rendered as healthy peers
-// and were dialled forever: noise-UDP hung to msg2 timeout, WebSocket took
-// 401/404 and fell back to TLS.
+// Without a sweep here, the LAD directory (which does have a TTL and a
+// liveness sweep) can report a clean set of records while this table holds
+// several times as many identities as there are real machines — one machine
+// can carry several stale anchor identities. mesh-topology merges both
+// sources, so those corpses render as healthy peers and are dialled forever:
+// noise-UDP hangs to msg2 timeout, WebSocket takes 401/404 and falls back to
+// TLS.
 //
 // Staleness is judged on PeerInfo.Updated, which carries the record's own
 // IssuedAt — the publisher's claim, not our receipt — so it is immune to local

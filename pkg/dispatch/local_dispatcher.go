@@ -19,9 +19,7 @@ import (
 // The HTTP `/rpc/` bridge already does this via `h.Func != nil`.
 // Putting the interface here (vs. in the higher-level rpc package)
 // closes the same loop for EVERY caller — every per-domain dispatch
-// shim, every background job, every scheduler — not just the rpc.Call
-// slice that the original Cascade C implementation reached.
-// Audit critical fix #2.
+// shim, every background job, every scheduler — not just rpc.Call.
 //
 // Implementations should:
 //   - HasHandler: cheap lookup, no execution. MUST filter to handlers

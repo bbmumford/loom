@@ -9,8 +9,8 @@ import (
 	"fmt"
 )
 
-// BaseHandler provides a base implementation for the Handler interface
-// Embed this in concrete handlers to reduce boilerplate
+// BaseHandler implements HandlerMeta, RPCHandler and TaskHandler from a
+// BaseHandlerConfig. Embed it in a concrete handler to reduce boilerplate.
 type BaseHandler struct {
 	name            string
 	role            string
@@ -89,8 +89,9 @@ func (h *BaseHandler) Scope() Scope {
 	return h.scope
 }
 
-// AllowedPartitions returns an optional partition allow-list. Empty means the
-// scope label alone governs, without narrowing to named partitions.
+// AllowedPartitions returns nil: BaseHandlerConfig carries no partition
+// values. validateScope and the loom-local AuthValidator do not read the list
+// (see HandlerMeta.AllowedPartitions).
 func (h *BaseHandler) AllowedPartitions() []string {
 	return nil
 }

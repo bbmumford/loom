@@ -78,13 +78,14 @@ func RecordRoleSelection(result minimalRoleSelectionResult) {
 	logMetrics()
 }
 
-// logMetrics logs current metrics in a structured format
-// In production, this would be replaced with Prometheus metric exports:
+// logMetrics logs current metrics in a structured format.
+//
+// TODO: export these as Prometheus metrics:
 //   - role_selection_method{method="override|auto"} gauge
 //   - role_override_active{} gauge (1 if override, 0 otherwise)
-//   - role_requested{role="auth|identity|notify|gateway|maintenance"} gauge
-//   - role_selected{role="auth|identity|notify|gateway|maintenance"} gauge
-//   - role_capable{role="auth|identity|notify|gateway|maintenance"} gauge
+//   - role_requested{role="<role>"} gauge
+//   - role_selected{role="<role>"} gauge
+//   - role_capable{role="<role>"} gauge
 //   - role_selection_warnings_total counter
 func logMetrics() {
 	dbgNodeMetrics.Printf("role_selection_method=%s", GlobalMetrics.SelectionMethod)

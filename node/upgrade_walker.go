@@ -14,16 +14,14 @@ import (
 )
 
 // upgradeWalkInterval is how often the proactive transport-grade upgrade
-// walker runs. Mirrors the deleted upgradeIntervalGradeC from the
-// pre-c7ef4bb tryUpgrades cadence: fast enough that a peer stuck on a
+// walker runs: fast enough that a peer stuck on a
 // suboptimal transport recovers within ~one tick of the underlying
 // condition clearing, slow enough not to thrash dial bookkeeping or
 // burn probe slots.
 const upgradeWalkInterval = 30 * time.Second
 
 // upgradeStabilityWindow is the minimum time a connection must have been
-// live before a proactive upgrade probe is allowed. Mirrors the 60s
-// stability gate the deleted tryUpgrades enforced. Prevents probes from
+// live before a proactive upgrade probe is allowed. Prevents probes from
 // firing on flapping connections that are about to be torn down anyway —
 // the gate clears once a connection has proven stable.
 const upgradeStabilityWindow = 60 * time.Second
@@ -31,8 +29,8 @@ const upgradeStabilityWindow = 60 * time.Second
 // upgradeStallEscalationThreshold caps how many consecutive stall-cooldown
 // failures the walker tolerates on a given (peer, target-proto) before
 // escalating to recordDialFailure's long quality-tracker cooldown.
-// Without this gate a truly-unreachable transport (e.g. cross-org
-// noise-UDP today, before the anycast UDP gap clears) would burn one
+// Without this gate a truly-unreachable transport (e.g. cross-origin
+// noise-UDP while the anycast UDP delivery gap persists) would burn one
 // tryDial probe slot every walker tick forever.
 //
 // 3 attempts × 30s interval = 90s of fast retry before escalation —
@@ -46,7 +44,6 @@ const upgradeStallEscalationThreshold = 3
 // aggressively because every successful upgrade has high payoff; peers
 // already at GradeA or GradeB get throttled so the walker doesn't burn
 // probe slots on peers whose remaining upgrade headroom is small.
-// Mirrors the cadence the deleted tryUpgrades enforced before c7ef4bb.
 //
 // The walker still ticks every upgradeWalkInterval (30s); this gate is
 // a per-(peer, current-best-grade) rate limit applied during snapshot.
@@ -98,11 +95,12 @@ type upgradeCandidate struct {
 //
 // The walker is intentionally:
 //
-//   - Origin-agnostic. Same-Fly-org AND cross-org peers are walked. When
-//     the cross-org anycast-UDP delivery gap clears (Fly fix OR per-machine
-//     IP workaround), cross-org peers auto-upgrade to noise-UDP with no
-//     code change — bestAddress already includes the noise-UDP candidate
-//     for cross-org via Tier-1 (public IPv4) or Tier-3 (peerServiceHostname);
+//   - Origin-agnostic. Same-origin AND cross-origin peers are walked. When
+//     the cross-origin anycast-UDP delivery gap clears (Fly fix OR
+//     per-machine IP workaround), cross-origin peers auto-upgrade to
+//     noise-UDP with no code change — bestAddress already includes the
+//     noise-UDP candidate for cross-origin peers via Tier-1 (public IPv4)
+//     or Tier-3 (peerServiceHostname);
 //     the walker's only requirement is that bestAddress returns non-empty.
 //
 //   - Grade-fan-out, not single-best. A peer on WS (Grade C) gets a probe
@@ -185,14 +183,13 @@ func (m *ConnectionManager) snapshotUpgradeCandidates(now time.Time) []upgradeCa
 	//
 	// Filter only — stamping happens AFTER the per-protocol gates
 	// below, once a candidate has actually been produced. Stamping
-	// at the filter step burned the rate-limit budget on no-op
-	// snapshots whenever every protocol was gated out downstream —
-	// most commonly when bestAddress() returned "" for a same-org
-	// peer whose swarm AddressTable merge hadn't landed yet. The
-	// peer was rate-limited for the full upgradeIntervalGradeC even
-	// though no probe was ever queued; by the time the limiter
-	// released the address had merged, but the walker still wouldn't
-	// re-check until the limiter clock expired.
+	// at the filter step would burn the rate-limit budget on no-op
+	// snapshots whenever every protocol is gated out downstream —
+	// most commonly when bestAddress() returns "" for a same-origin
+	// peer whose swarm AddressTable merge hasn't landed yet. The
+	// peer would be rate-limited for the full upgradeIntervalGradeC
+	// even though no probe was ever queued, and the walker would not
+	// re-check the merged address until the limiter clock expired.
 	m.walkerProbeMu.Lock()
 	if m.walkerProbeAt == nil {
 		m.walkerProbeAt = make(map[string]time.Time)
@@ -274,9 +271,9 @@ func (m *ConnectionManager) snapshotUpgradeCandidates(now time.Time) []upgradeCa
 			// probe, because noise-UDP at Grade A is the preferred
 			// transport per protocolOrder and the only path that
 			// unlocks the per-frame UDP advantages (no head-of-line,
-			// native NAT traversal). The previous <= gate locked
-			// every same-org WS-A pair into WebSocket forever because
-			// the equal-grade noise-UDP probe was suppressed.
+			// native NAT traversal). A <= gate would lock every
+			// same-origin WS-A pair into WebSocket forever by
+			// suppressing the equal-grade noise-UDP probe.
 			if GradeForProtocol(proto) < s.bestGrade {
 				continue
 			}
@@ -304,9 +301,9 @@ func (m *ConnectionManager) snapshotUpgradeCandidates(now time.Time) []upgradeCa
 				continue
 			}
 			// Honour a peer's saturation back-off: stop opening fresh upgrade
-			// paths to it. peerWantsBackoff's same-org guard means same-org
+			// paths to it. peerWantsBackoff's same-origin guard means same-origin
 			// probes (the noise-UDP 6PN path the walker exists to find) are
-			// never suppressed — only cross-org extra-path probes back off.
+			// never suppressed — only cross-origin extra-path probes back off.
 			if wantsBackoff {
 				continue
 			}
@@ -363,8 +360,8 @@ func (m *ConnectionManager) snapshotUpgradeCandidates(now time.Time) []upgradeCa
 // momentary packet loss) clears in seconds. After
 // upgradeStallEscalationThreshold consecutive stall failures the probe
 // is demoted to recordDialFailure's long quality cooldown so a truly-
-// unreachable transport (cross-org noise-UDP before the anycast UDP
-// gap clears, etc.) stops burning probe slots every tick. Success
+// unreachable transport (cross-origin noise-UDP while the anycast UDP
+// delivery gap persists, etc.) stops burning probe slots every tick. Success
 // clears the consecutive-stall counter so a recovered path is given
 // the same short-retry treatment again.
 func (m *ConnectionManager) probeUpgrade(ctx context.Context, c upgradeCandidate) {
@@ -592,8 +589,8 @@ func (m *ConnectionManager) clearConsecutiveStalls(peerID string, proto Protocol
 }
 
 // WalkerStats returns the walker's telemetry counters as a snapshot
-// tuple. Mirrors CrossPartitionPreambleStats / CrossPartitionGateStats style so
-// runtime.MeshMetrics can surface them as snake_case keys without
+// tuple, in the same shape as the ConnectionManager's cross-origin dial
+// telemetry accessors, so runtime.MeshMetrics can surface them as snake_case keys without
 // touching the underlying atomics from outside this package.
 //
 // Returned fields (in order):

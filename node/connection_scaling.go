@@ -142,8 +142,7 @@ func (s *ConnectionScaler) pruneCountersFor(shouldPrune func(peerNodeID string) 
 	}
 }
 
-// TargetConnections computes the ideal number of connections for a peer
-// using the formula from the redesign doc:
+// TargetConnections computes the ideal number of connections for a peer:
 //
 //	TargetConns = clamp(
 //	    ceil(BaseConns * LatencyFactor * GradePenalty * FailureFactor * TrafficWeight),
@@ -256,10 +255,10 @@ func (s *ConnectionScaler) TargetConnections(peer *peerConn, peerRegion string) 
 	// OnPrimaryFailure instead of triggering a full reconnect. The
 	// dispatch registry swap + bidiRPC eviction in the mesh_connection
 	// cleanup path means the logical session survives transport
-	// instance death whenever a standby exists. Previously this floor
-	// was gated on (bestActiveGrade < GradeA && peerHasBetterGradeAddress)
-	// which only fired for low-grade peers with a known upgrade
-	// candidate — leaving same-grade-only peers and already-Grade-A
+	// instance death whenever a standby exists. The floor is not gated
+	// on (bestActiveGrade < GradeA && peerHasBetterGradeAddress): that
+	// gate fires only for low-grade peers with a known upgrade
+	// candidate, leaving same-grade-only peers and already-Grade-A
 	// peers at K=1, no standby, and a single transient packet-loss
 	// burst away from a teardown. Bounded by maxPerPeer so a strict
 	// budget still wins.
@@ -470,18 +469,16 @@ func (s *ConnectionScaler) Rebalance() []DrainCandidate {
 			dbgScaler.Printf("%s: scaling down %d drainable -> %d connections (connCount=%d)",
 				truncID(peer.nodeID), drainable, target, current)
 
-			// Build one ConnectionInfo per active transport. The
-			// original code synthesised N copies of a single
-			// peer-level ConnectionInfo carrying peer.protocol — the
-			// last-accepted transport — which collapsed all multipath
-			// drain decisions to the most recent upgrade. With a fresh
-			// noise-UDP path that ALWAYS won the "newest" tiebreak in
-			// shouldDrainFirst, the scaler ended up draining the very
-			// path the upgrade walker had just installed. Sourcing per-
-			// transport ConnectionInfo from peer.transports lets
-			// shouldDrainFirst sort by real per-class grade and age,
-			// so the lower-grade WS gets drained and the noise-UDP path
-			// is preserved.
+			// Build one ConnectionInfo per active transport, sourced
+			// from peer.transports. N copies of a single peer-level
+			// ConnectionInfo carrying peer.protocol (the last-accepted
+			// transport) would collapse every multipath drain decision
+			// onto the most recent upgrade: a fresh noise-UDP path
+			// always wins the "newest" tiebreak in shouldDrainFirst, so
+			// the scaler would drain the very path the upgrade walker
+			// just installed. Per-transport entries let shouldDrainFirst
+			// sort by real per-class grade and age, so the lower-grade
+			// WS gets drained and the noise-UDP path is preserved.
 			if drainable == 0 {
 				continue
 			}

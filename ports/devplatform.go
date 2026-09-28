@@ -14,9 +14,9 @@ import (
 // Platform is nil. It is deliberately minimal: no cloud detection, no
 // special bind semantics. Cloud deployments (Fly in particular) MUST inject
 // their real platform implementation — this default cannot provide
-// fly-global-services UDP bind, 6PN origin detection, or region codes, and
-// "zero-value = current behaviour" does NOT hold for the Platform field
-// (plan §0.4).
+// fly-global-services UDP bind, 6PN origin detection, or region codes, so a
+// nil Platform field does NOT keep host behaviour the way the other nil seams
+// do.
 func DevPlatform() PlatformInfo { return devPlatform{} }
 
 type devPlatform struct{}

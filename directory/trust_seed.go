@@ -26,7 +26,7 @@ var SelfOwnedPublishPrefixes = []string{
 // restricted PublishPrefixes for the caller to fill from configured
 // identity/partition/role roots — those cannot be derived from the topic namespace.
 //
-// This is the seed that resolves the fail-closed cutover: building a Policy from
+// This seed is what makes the fail-closed gate safe to enforce: building a Policy from
 // the ZERO PolicyConfig instead denies every publish (each topic "matches no
 // publish rule, fail closed"), which is why enabling an unseeded gate rejects the
 // whole fleet. Pair it with NewSwarmDirectoryObserving first to confirm the seed

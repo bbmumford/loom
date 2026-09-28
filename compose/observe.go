@@ -14,9 +14,9 @@ import (
 // through one worker over provider SEAMS the node implements, never importing the node packages
 // directly, so compose stays a leaf (the /mesh/status DTO is decoupled the same way, to avoid an
 // import cycle). The surface RELAYS what the providers give, VERBATIM: the Prometheus metric names +
-// label sets and the /mesh/status JSON shape are an external wire contract (help.orbtr.io
-// dashboards), so this layer carries opaque bytes and provider-named values rather than re-deriving
-// or renaming anything.
+// label sets and the /mesh/status JSON shape are an external wire contract (monitoring clients'
+// dashboards read them), so this layer carries opaque bytes and provider-named values rather than
+// re-deriving or renaming anything.
 
 // HealthSnapshot is one reading of the 4-layer HealthEvaluator, relayed as the provider reports it.
 // Score follows the mesh_service_health scale (1.0/0.5/0.25/0.0); this layer does not reinterpret it.

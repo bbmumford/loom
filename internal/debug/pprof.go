@@ -54,11 +54,11 @@ func init() {
 //
 // Usage from a developer machine when an endpoint is wedged:
 //
-//	flyctl proxy 6060:6060 -a bootstrap-hstles-com
+//	flyctl proxy 6060:6060 -a <fly-app-name>
 //	curl http://localhost:6060/debug/pprof/goroutine?debug=2 > goroutines.txt
 //
 // The proxy only opens for the duration of the flyctl process, so the
-// endpoint isn't exposed even within the Fly org while pprof is enabled.
+// endpoint isn't exposed even within the Fly.io organisation while pprof is enabled.
 func startPprof() {
 	go func() {
 		log.Printf("[PPROF] starting on %s (Fly-internal only — flyctl proxy %s:6060 to access)",

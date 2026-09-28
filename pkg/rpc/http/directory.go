@@ -60,8 +60,7 @@ type DirectoryResponse struct {
 // cases a nil predicate fail-closes to the summary — the safer default
 // for a fresh registry whose auth wiring isn't yet decided.
 //
-// Related: Bridge.HandleDirectory (per-registry auth wiring),
-// finding rev-080 (why we killed the package-global var).
+// Related: Bridge.HandleDirectory (per-registry auth wiring).
 type DirectoryAuthCheck = func(r *http.Request) bool
 
 // HandleDirectory returns a JSON listing of registered handlers.
@@ -78,13 +77,11 @@ type DirectoryAuthCheck = func(r *http.Request) bool
 // predicate at runtime should use Bridge.SetDirectoryAuth +
 // Bridge.HandleDirectory instead, which uses an atomic.Pointer.
 //
-// Per-registry auth (finding rev-080): the previous package-level
-// var + SetDirectoryAuthCheck design meant a single process-wide
-// auth predicate applied to every rpc.Registry mounted in the process.
-// Two registries mounted in the same binary (e.g. a user-tier proxy
-// registry alongside a control-plane registry) inherited the same
-// bypass. The new signature takes the predicate as an argument, so
-// each mount decides its own gating.
+// Per-registry auth: the predicate is an argument, so each mount decides
+// its own gating. A single process-wide predicate would apply to every
+// rpc.Registry mounted in the process, so two registries mounted in the
+// same binary (e.g. a public-facing proxy registry alongside a
+// control-plane registry) would share one bypass.
 //
 // The summary intentionally exposes no FQN, Scope, or proxy markers —
 // anonymous callers see the SHAPE of the API surface (which roles exist,
@@ -94,8 +91,9 @@ type DirectoryAuthCheck = func(r *http.Request) bool
 //
 // The endpoint is read-only and exposes only metadata (no payloads). It's
 // safe to mount under wildcard /rpc/_directory once an auth check is
-// wired; the legacy "safe to mount publicly" advice in older versions of
-// this comment was incorrect for the verbose response.
+// wired. It is not safe to mount publicly with a predicate that admits
+// anonymous callers: the verbose response is the recon map the summary
+// withholds.
 func HandleDirectory(reg *rpc.Registry, auth DirectoryAuthCheck) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		writeDirectory(w, r, reg, auth)

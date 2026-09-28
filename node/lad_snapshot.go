@@ -6,10 +6,10 @@
 // Package node — LAD snapshot cache.
 //
 // Observability handlers (HealthEvaluator, /mesh-debug, /mesh-topology,
-// /reach-state, /domain-health) historically called directly into the LAD
-// directory (Members, Reach, Roles, Latency, GossipLiveness) on each
-// request. On cold-boot, when the directory's gossip cache hasn't yet
-// settled, every one of those calls can block for hundreds of
+// /reach-state, /domain-health) need the LAD directory's Members, Reach,
+// Roles, Latency and GossipLiveness on each request. Calling the directory
+// directly per request is unsafe: on cold-boot, when the directory's gossip
+// cache hasn't yet settled, every one of those calls can block for hundreds of
 // milliseconds to seconds while waiting for the gossip-bloom full-sync to
 // fill. Multiple handlers stack behind the same slow directory mutex,
 // goroutines starve, and remote peers — which time response latency on
@@ -18,7 +18,7 @@
 // noise-UDP getting torn down before it stabilises, and a feedback loop
 // where the slow node poisons the wider mesh's transport mix.
 //
-// LADSnapshotCache breaks the cycle. A single background goroutine
+// LADSnapshotCache breaks that cycle. A single background goroutine
 // refreshes a typed snapshot of all directory state on a short interval
 // (default 10s), with per-call timeouts so one slow method can't stall
 // the others. Readers swap-in the latest snapshot via atomic.Pointer —
@@ -103,8 +103,9 @@ type LADSnapshotCacheConfig struct {
 
 // DefaultLADSnapshotCacheConfig returns sensible defaults: refresh every
 // 10s with a 3s per-method timeout. Tuning rationale:
-// - 10s refresh is faster than the previous 30s evaluator tick — gives
-// observability handlers fresher data without hammering the directory.
+// - 10s refresh is faster than the 30s default evaluator tick
+// (HealthEvaluatorConfig.EvalInterval) — gives observability handlers
+// fresher data without hammering the directory.
 // - 3s per-method timeout is well above the typical p99 of these calls
 // when the directory is warm (~50–200ms), but short enough that a
 // stuck call doesn't delay the next refresh past one tick.

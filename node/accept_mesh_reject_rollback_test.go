@@ -36,8 +36,8 @@ func acceptTestManager() *ConnectionManager {
 	}
 }
 
-// AUDIT H5: a same-grade rejection against an UNKNOWN peer must not leave a
-// stub entry behind.
+// A same-grade rejection against an UNKNOWN peer must not leave a stub entry
+// behind.
 //
 // The prologue creates the peerConn before it knows whether the session will
 // be accepted. On rejection the rollback deletes it — otherwise the table
@@ -155,11 +155,11 @@ func TestRejectedAcceptRestoresAnExistingPeersProtocolAndCounters(t *testing.T) 
 	}
 }
 
-// MESH-C07: Release must be gated on whether Acquire actually succeeded.
+// Release must be gated on whether Acquire actually succeeded.
 //
-// The old code ignored Acquire's return yet every teardown path still called
-// Release, decrementing a slot that was never acquired. currentTotal drifted
-// below the true count until MaxTotal stopped being enforced at all.
+// A teardown path that ignores Acquire's return and still calls Release
+// decrements a slot that was never acquired; currentTotal drifts below the
+// true count until MaxTotal stops being enforced at all.
 //
 // 🛑 THE FIXTURE IS LOAD-BEARING AND AN EMPTY BUDGET WOULD MAKE THIS TEST
 // VACUOUS. Release() is itself guarded by `if b.currentTotal > 0`, so with a

@@ -13,7 +13,7 @@ import (
 )
 
 // CallJSON sends an RPC over the mesh using JSON serialization.
-// Used by ORBTR domains whose handlers accept native Go types.
+// Used by domains whose handlers accept native Go types.
 //
 // Usage:
 //
@@ -34,7 +34,7 @@ func CallJSON[Req any, Resp any](
 	// Local-handler short-circuit — same logic the rpc package uses,
 	// reaching every per-domain dispatch shim that goes through this
 	// helper. Without this hook, a same-process caller still
-	// round-trips over the mesh. Audit critical fix #2.
+	// round-trips over the mesh.
 	var respPayload []byte
 	if out, handled, lerr := TryLocalDispatch(ctx, method, payload); handled {
 		if lerr != nil {
@@ -56,7 +56,7 @@ func CallJSON[Req any, Resp any](
 }
 
 // CallProto sends an RPC over the mesh using protobuf serialization.
-// Used by HSTLES domains whose handlers accept proto-generated types.
+// Used by domains whose handlers accept proto-generated types.
 //
 // Usage:
 //

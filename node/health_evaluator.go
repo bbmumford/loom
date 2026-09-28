@@ -89,7 +89,7 @@ type meshHealthEvaluator struct {
 	mu         sync.RWMutex
 	reporter   ConnectionReporter
 	httpSource HTTPStatusSource
-	directory  *ladcache.DirectoryCache // retained only for legacy callers that supplied it; eval reads via snapshot
+	directory  *ladcache.DirectoryCache // NewHealthEvaluator's argument; evaluate never reads it and reads LAD state via snapshot
 	snapshot   snapshotSource           // source of LAD state — snapshot cache fronting the directory
 	nodeToSvc  func() map[string]string
 	cache      map[string]*ServiceHealthReport
@@ -131,9 +131,10 @@ func NewHealthEvaluator(
 		// evaluate() calls this on its first line with no guard, and it runs
 		// in the goroutine Start() spawns — so a nil resolver is not a
 		// degraded evaluation, it is an unrecovered panic that takes the
-		// endpoint process down. Every other input here is already defaulted;
-		// this one was the exception. An empty mapping is what a caller
-		// supplying nil is asking for.
+		// endpoint process down. The other inputs are safe when nil: reporter
+		// is defaulted above, a nil directory selects an empty snapshot below,
+		// and evaluate nil-checks httpSource where it reads it. An empty
+		// mapping is what a caller supplying nil is asking for.
 		nodeToSvc = func() map[string]string { return nil }
 	}
 	if cfg.CacheTTL == 0 {
@@ -354,7 +355,7 @@ func (e *meshHealthEvaluator) evaluate() {
 			// GradeForProtocol scores GradeA — the best grade — so an
 			// unrecognised label outranks every correctly-labelled transport in
 			// the max-selection below. This node publishes "unknown" itself for
-			// a transport it could not name (runtime.go:4656), so the label that
+			// a transport it could not name (publishPeerLatencies), so the label that
 			// grades best is one that carries no information at all.
 			//
 			// Strict parse, fail closed: an unrecognised label grades F and
@@ -419,7 +420,7 @@ func (e *meshHealthEvaluator) evaluate() {
 		//   Nothing                        → "unreachable"
 		//
 		// Grade C (WebSocket/TLS) is healthy because RPCs work reliably over it.
-		// Cross-org nodes can ONLY use Grade C — marking them degraded is misleading.
+		// Nodes of another origin can ONLY use Grade C — marking them degraded is misleading.
 
 		meshSt := "unreachable"
 		gradeLabel := "F"

@@ -23,7 +23,7 @@ func parseHostPort(raw string, defaultUDPPort uint16) (string, uint16) {
 		return "", 0
 	}
 	// SplitHostPort accepts IPv6 ("[fdaa::]:41641"), IPv4
-	// ("1.2.3.4:41641"), and FQDN ("node.hstles.com:41641") variants
+	// ("1.2.3.4:41641"), and FQDN ("node.example.com:41641") variants
 	// uniformly. When it errors there's no embedded port.
 	if h, p, err := net.SplitHostPort(raw); err == nil {
 		if n, perr := strconv.ParseUint(p, 10, 16); perr == nil && n > 0 {
@@ -43,7 +43,7 @@ func parseHostPort(raw string, defaultUDPPort uint16) (string, uint16) {
 
 // scopeForHost infers the swarm/LAD Scope tag from the host shape so
 // the address lands in the right bestAddress tier — Tier 0 expects
-// Scope="private" for same-org direct dials, Tier 1/2 expect
+// Scope="private" for same-origin direct dials, Tier 1/2 expect
 // Scope="public" for anycast / FQDN entries. Rules:
 //
 //   - Non-IP host (FQDN, parse failure) → "public" — the dial path

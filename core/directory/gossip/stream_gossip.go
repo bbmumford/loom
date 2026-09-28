@@ -14,8 +14,30 @@ import (
 	"github.com/bbmumford/ledger/cache"
 )
 
-// RunGossipLoop runs gossip exchanges natively over an Aether stream.
-// Replaces the legacy RunGossipLoop which required a net.Conn + PingableConn.
+// sharedDeltaTracker is the process-wide DeltaTracker that
+// RunGossipLoopWithPeer and RunGossipResponder use whenever the peer's NodeID
+// is known. It keeps per-peer watermarks so delta sync continues across
+// connection restarts within one process.
+//
+// No DeltaPersistence is attached to it, so the watermarks live only in
+// memory: after a process restart every peer's first exchange is a full
+// snapshot (80-150 KB, against 1-40 KB for a delta), and each one needs
+// creditFullSyncFloor of stream credit before deltaExchange will send it.
+// TODO: attach a DeltaPersistence (node.NewJSONDeltaPersistence under the
+// runtime's data directory) through AttachPersistence with a declared save
+// interval and maximum age, and give each runtime generation its own tracker
+// so two runtimes in one process do not share watermarks.
+var sharedDeltaTracker = NewDeltaTracker()
+
+// SharedDeltaTracker returns the package-level tracker so a runtime can
+// attach persistence to the same tracker the gossip loops read. It returns the
+// pointer rather than a copy because RunGossipLoopWithPeer and
+// RunGossipResponder read sharedDeltaTracker directly.
+func SharedDeltaTracker() *DeltaTracker { return sharedDeltaTracker }
+
+// RunGossipLoopWithPeer runs gossip exchanges natively over an Aether stream,
+// with delta sync enabled for the given peer; it needs no net.Conn or
+// PingableConn.
 //
 // The Aether stream handles reliability, ordering, and keepalive independently.
 // No SetDeadline, no PingableConn, no gossip-level pings. Transient errors
@@ -23,29 +45,12 @@ import (
 //
 // onExchange is called after each successful exchange with RTT and sync results.
 // metaProvider, if non-nil, returns ExchangeMeta for connection signaling.
-// sharedDeltaTracker is a process-wide DeltaTracker for Aether gossip.
-// Tracks per-peer watermarks so delta sync works across connection restarts.
-//
-// The Runtime wires a DeltaPersistence backend onto this tracker via
-// AttachPersistence so watermarks survive fly redeploys — without
-// persistence, every restart converts every peer's first exchange
-// into a full-snapshot, the convergence-burst pattern that historically
-// drained stream credit windows.
-var sharedDeltaTracker = NewDeltaTracker()
-
-// SharedDeltaTracker exposes the package-level tracker so the Runtime
-// can attach persistence on Start. Returning the pointer rather than
-// hiding it keeps the existing direct-use call sites working without
-// going through the Runtime.
-func SharedDeltaTracker() *DeltaTracker { return sharedDeltaTracker }
-
-// RunGossipLoopWithPeer runs gossip with delta sync enabled for the given peer.
 //
 // stream carries G1/G2/G3 (record exchange, digest probe, rumor push).
 // reconcileStream carries G4 IBLT reconciliation + G5 snapshot frames on a
 // dedicated aether stream — separating these traffic classes eliminates the
-// abandoned-read race where a timed-out G4 round's residual bytes poisoned
-// G1's read path on the same stream (surfaced as "invalid magic 0x4734").
+// abandoned-read race where a timed-out G4 round's residual bytes poison G1's
+// read path on a shared stream (surfacing as "invalid magic 0x4734").
 // Both streams are required.
 func RunGossipLoopWithPeer(ctx context.Context, stream aether.Stream, reconcileStream aether.Stream, c *cache.DirectoryCache,
 	interval time.Duration, peerNodeID string, onExchange func(GossipResult), metaProvider ...func() *ExchangeMeta) {

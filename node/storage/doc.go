@@ -3,7 +3,7 @@
  * Queries: licensing@hstles.com
  */
 // Package storage implements a content-addressed chunk storage layer with
-// pluggable store, fetch, and chain backends for the Orbtr mesh SDK. The
+// pluggable store, fetch, and chain backends for the loom mesh. The
 // package provides helpers to chunk and publish data (`Node`), hydrate content
 // on demand (`Leech`), and compose reusable infrastructure via `Manager` and
 // `Config`. A disk-backed StoreBackend ships out of the box; additional

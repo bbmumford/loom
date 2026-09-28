@@ -13,8 +13,8 @@ import (
 
 // ---------------------------------------------------------------------------
 // NativeRPCWrapper — implements RPCHandler with JSON marshal/unmarshal
-// Used by ORBTR domain handlers that accept native Go types (not proto).
-// Transitional: will be replaced by GenericRPCWrapper once handlers migrate to proto.
+// Used by domain handlers that accept native Go types (not proto messages).
+// TODO: fold into GenericRPCWrapper once every such handler takes proto types.
 // ---------------------------------------------------------------------------
 
 // NativeRPCWrapper implements RPCHandler using JSON serialization and Go generics.
@@ -62,7 +62,9 @@ func (w *NativeRPCWrapper[Req, Resp]) WithAuth(required bool, authTypes []string
 }
 
 // WithScope declares the handler's opaque scope label and the partition
-// allow-list enforcement consults. Returns self for chaining.
+// values AllowedPartitions returns. validateScope enforces only the label; the
+// partition values reach a composition root's AuthValidator (see
+// HandlerMeta.AllowedPartitions). Returns self for chaining.
 func (w *NativeRPCWrapper[Req, Resp]) WithScope(scope Scope, allowed []string) *NativeRPCWrapper[Req, Resp] {
 	w.scope = scope
 	w.allowedPartitions = allowed
@@ -160,7 +162,9 @@ func (w *NativeTaskWrapper[Req, Resp]) WithAuth(required bool, authTypes []strin
 }
 
 // WithScope declares the handler's opaque scope label and the partition
-// allow-list enforcement consults. Returns self for chaining.
+// values AllowedPartitions returns. validateScope enforces only the label; the
+// partition values reach a composition root's AuthValidator (see
+// HandlerMeta.AllowedPartitions). Returns self for chaining.
 func (w *NativeTaskWrapper[Req, Resp]) WithScope(scope Scope, allowed []string) *NativeTaskWrapper[Req, Resp] {
 	w.scope = scope
 	w.allowedPartitions = allowed

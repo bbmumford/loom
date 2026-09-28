@@ -47,16 +47,16 @@ type Config struct {
 	Platform ports.PlatformInfo
 
 	// MeshFallbackStats supplies session-validate fallback-cache counters
-	// for the metrics map (replaces the platform/session import). nil →
-	// both counters emitted as 0 (schema unchanged).
+	// for the metrics map. nil → both counters emitted as 0, so the metric
+	// keys are present either way.
 	MeshFallbackStats ports.MeshFallbackStatsFunc
 
 	// AuthValidator gates task-executor handler execution and stamps
-	// partition IDs onto nested-call contexts (replaces the
-	// platform/security/helpers import). nil → loom-local fail-closed
-	// validator. HSTLES builds MUST inject a validator that delegates to
-	// the real helpers package so its unexported context keys — the ones
-	// domain handlers read — are the ones written.
+	// partition IDs onto nested-call contexts. nil → loom-local fail-closed
+	// validator. A composition root whose domain handlers read identity
+	// through their own helpers package MUST inject a validator that
+	// delegates to that package, so its unexported context keys — the ones
+	// those handlers read — are the ones written.
 	AuthValidator ports.AuthValidator
 
 	// SwarmTrustMode selects the inbound trust gate on the swarm
@@ -123,25 +123,24 @@ type Config struct {
 	// ComposeTaskMaxInFlight bounds task invocations accepted by
 	// ComposeInvoke but not yet terminal. Values <= 0 use the safe runtime
 	// default; there is no configuration that restores unbounded admission.
-	// Admission also requires a nonempty opaque owner from the injected
-	// AuthValidator's ports.ExecutionPrincipalReader extension.
+	// Admission also requires a nonempty opaque execution partition key from
+	// the injected AuthValidator's ports.ExecutionPrincipalReader extension.
 	ComposeTaskMaxInFlight int
 
 	// ComposeTaskMaxInFlightPerPartition bounds live task invocations for one
-	// opaque execution owner. Values <= 0 use the safe default. The global and
-	// owner reservations are acquired atomically, so neither ceiling can be
-	// oversubscribed by concurrent admissions.
+	// opaque execution partition key. Values <= 0 use the safe default. The
+	// global and per-partition reservations are acquired atomically, so
+	// neither ceiling can be oversubscribed by concurrent admissions.
 	ComposeTaskMaxInFlightPerPartition int
 
 	// ComposeTaskCompletionRetentionPerPartition bounds terminal records retained
-	// for one opaque owner inside the global 1024-record history. Values <= 0
-	// use the safe default.
+	// for one opaque execution partition key inside the global 1024-record
+	// history. Values <= 0 use the safe default.
 	ComposeTaskCompletionRetentionPerPartition int
 
-	// RegisterDomains registers external RPC domains (e.g. the HSTLES
-	// anchor domain) on anchor-capable nodes. Each entry runs against a
-	// fresh rpc.Registry which is then exported to the handler registry
-	// (replaces the domain/anchor import).
+	// RegisterDomains registers external RPC domains (e.g. an anchor
+	// domain) on anchor-capable nodes. Each entry runs against a fresh
+	// rpc.Registry which is then exported to the handler registry.
 	RegisterDomains []func(*rpc.Registry) error
 
 	// VerifyBootstrap authorizes a joining node during the VL1 bootstrap
@@ -154,7 +153,7 @@ type Config struct {
 	// Service identity (required)
 	ServiceName string
 
-	// Public domain for this endpoint (e.g., "devices.orbtr.io").
+	// Public domain for this endpoint (e.g., "node.example.com").
 	// Used for DNS self-resolution to discover inbound public IPs.
 	// Falls back to STUN if empty or DNS lookup fails.
 	PublicDomain string
@@ -226,6 +225,15 @@ type Config struct {
 
 	// Audit logging
 	Audit AuditConfig
+
+	// SubsystemsAllowedOrigins lists the browser origins SubsystemsHandler
+	// echoes in Access-Control-Allow-Origin. nil keeps the built-in pair in
+	// subsystemsOriginAllowed; a non-nil slice replaces that pair exactly,
+	// so an empty non-nil slice admits no cross-origin caller. Each entry is
+	// compared byte-for-byte with the request's Origin header
+	// (scheme://host[:port]); empty entries never match. SubsystemsHandler
+	// copies the slice when it builds the handler.
+	SubsystemsAllowedOrigins []string
 
 	// Custom RPC handlers (use handlers.RPCHandler with RegisterRPC)
 }

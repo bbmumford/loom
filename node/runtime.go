@@ -387,7 +387,7 @@ type Runtime struct {
 	healthEvaluator      HealthEvaluator     // unified mesh+HTTP health evaluator
 	ladSnapshot          *LADSnapshotCache   // refreshing snapshot of LAD directory state — readers never block on directory I/O
 	selfHealth           *SelfHealthMonitor  // observability self-health monitor (watches for staleness)
-	healthRegistry       *obshealth.Registry // platform-wide degradedSubsystem sink — mesh/node/monitoring/billing/etc register here
+	healthRegistry       *obshealth.Registry // process-wide degraded-subsystem sink — every subsystem on the obshealth allow-list Marks/Clears here
 	lamportClock         LamportClock        // causal ordering for LAD records
 	partitionDetector    *PartitionDetector  // split-brain detection via clock divergence across peers
 
@@ -458,7 +458,7 @@ type Runtime struct {
 	goClosed     bool       // guarded by lifecycleMu; true once Shutdown begins
 	wg           sync.WaitGroup
 
-	// Phase-1 runtime role activation (role_activation.go) + takeover
+	// Runtime role activation (role_activation.go) + takeover
 	// engine (role_takeover.go). roleActivation is always non-nil after
 	// Initialize; rpcRegistry is captured by InitSwarm so activation can
 	// re-publish handler advertisements.
@@ -525,10 +525,10 @@ func Initialize(cfg Config) (*Runtime, error) {
 		ctx:         ctx,
 		cancel:      cancel,
 		sessionOpts: aether.DefaultSessionOptions(),
-		// healthRegistry is initialized eagerly with the platform-wide
+		// healthRegistry is initialized eagerly with the obshealth
 		// allow-list so any subsystem that starts up during Initialize
-		// (HealthCheck, SelfHealthMonitor, billing webhooks bound
-		// via SetWebhookDeps, uptime runner, etc.) can Mark/Clear from
+		// (HealthCheck, SelfHealthMonitor, a composition root's own
+		// subsystems, etc.) can Mark/Clear from
 		// the moment it comes online. Fail-closed on unknown IDs so
 		// per-event compound keys cannot leak into the map.
 		healthRegistry: obshealth.New(obshealth.AllowedSubsystems()),
@@ -552,9 +552,9 @@ func Initialize(cfg Config) (*Runtime, error) {
 	// Step 1: Load or generate node identity
 	log.Printf("[NODE] Initializing mesh node runtime (service: %s, gossip: %s)", cfg.ServiceName, cfg.GossipInterval)
 
-	// rev-073: identity is now random-generated on first run and persisted
-	// under cfg.DataDir, replacing the hostname-derived scheme (which
-	// made the private key equivalent to a publicly-documented value).
+	// Identity comes from MESH_IDENTITY_SEED or is random-generated on first
+	// run and persisted under cfg.DataDir; it is never derived from a public
+	// value such as the hostname (see GenerateIdentity).
 	identity, err := GenerateIdentity(ctx, cfg.DataDir)
 	if err != nil {
 		cancel()
@@ -636,9 +636,9 @@ func Initialize(cfg Config) (*Runtime, error) {
 		rt.cache = ladcache.NewDirectoryCache()
 		// Identify which NodeID this cache is "self" for so eviction
 		// never creates a self-referential tombstone that would block
-		// the node's own future re-announcements. Root cause of the
-		// observed 94-tombstones-vs-2-live-members convergence stall
-		// on help.orbtr.io after fleet-wide deploys.
+		// the node's own future re-announcements. Without it, fleet-wide
+		// deploys pile up self tombstones (dozens of tombstones against a
+		// handful of live members) and directory convergence stalls.
 		rt.cache.SetLocalNodeID(string(rt.identity.NodeID))
 
 		// The LiveDirectory seam over the same
@@ -675,8 +675,8 @@ func Initialize(cfg Config) (*Runtime, error) {
 		rt.cache.SetDumpSigningKey(rt.identity.PrivateKey)
 		rt.cache.StartEviction(ladcache.DefaultEvictionInterval)
 
-		// Register HSTLES topic configurations with the Ledger cache.
-		// All HSTLES topics use OverwriteMerge and NodeIDKey. OverwriteMerge
+		// Register the mesh's topic configurations with the Ledger cache.
+		// All of them use OverwriteMerge and NodeIDKey. OverwriteMerge
 		// takes the highest HLC when both records carry one and the latest
 		// Timestamp otherwise — so Reach, which is bridged
 		// with an HLC from the swarm envelope, is HLC-ordered, while the
@@ -694,7 +694,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 
 		// Signed-topic enforcement: every identity-mutating topic must
 		// carry a valid ed25519 signature over the full LADRecord
-		// content (ledger v0.0.11 signatureContent covers every wire
+		// content (ledger's signatureContent covers every wire
 		// field) signed by the AuthorPubKey on the record. Without
 		// these ACL hooks any gossip peer could forge a member /
 		// role / reach / key-ops record by minting one without a
@@ -782,9 +782,9 @@ func Initialize(cfg Config) (*Runtime, error) {
 		// which is assigned just above.
 		//
 		// 🔴 WITHOUT THIS THE FIELD IS NEVER ASSIGNED, AND THREE READERS SILENTLY
-		// REPORT HEALTH. IsHealthy (:1353) returns true on a nil healthCheck, so
+		// REPORT HEALTH. IsHealthy returns true on a nil healthCheck, so
 		// every caller of Runtime.IsHealthy reads "healthy" regardless of state;
-		// HealthCheck (:1348) hands out nil; and performHealthCheck is the only
+		// HealthCheck hands out nil; and performHealthCheck is the only
 		// writer of the mesh.raft and mesh.ledger entries in healthRegistry, which
 		// the mesh_subsystem_degraded gauge and /api/monitoring/subsystems both
 		// read — so an unreachable ledger renders as healthy on every mounted
@@ -919,18 +919,18 @@ func Initialize(cfg Config) (*Runtime, error) {
 			// SYNCHRONOUSLY allocate ConnectionManager BEFORE bootstrap
 			// or listener startup. Listener accepts (started below at
 			// startVL1Listener) call AcceptIncomingMeshSession, which
-			// guards on `if rt.connMgr != nil`. Previously connMgr was
-			// allocated inside a goroutine spawned during bootstrapPeers,
-			// racing the listener — sessions arriving before the goroutine
-			// completed silently became orphans (SetupMeshSession had
-			// already created the NoiseSession + started its goroutines;
-			// gossip flowed; but the dispatch registry never saw them).
+			// guards on `if rt.connMgr != nil`. Allocating connMgr inside
+			// a goroutine spawned during bootstrapPeers would race the
+			// listener — sessions arriving before the goroutine completed
+			// would silently become orphans (SetupMeshSession has already
+			// created the NoiseSession + started its goroutines; gossip
+			// flows; but the dispatch registry never sees them).
 			//
 			// Allocating here guarantees rt.connMgr is non-nil from the
 			// moment any session-accept path can fire. The QUIC packet
 			// conn from the noise listener isn't available yet — QUIC
-			// gracefully falls back to its own socket (see
-			// peer_connections.go:426). StartMeshServices spawns its own
+			// gracefully falls back to its own socket (see the QUIC setup
+			// in NewConnectionManager). StartMeshServices spawns its own
 			// background goroutines (StreamGC, AdaptiveController) so
 			// it's safe to call synchronously.
 			//
@@ -943,10 +943,8 @@ func Initialize(cfg Config) (*Runtime, error) {
 
 			// Wire the swarm fabric + route engine here as Runtime
 			// invariants — not deferred to PublishRPCHandlersToLAD.
-			// Endpoints that never call PublishRPCHandlersToLAD
-			// (api.hstles, login.hstles, monitoring.hstles,
-			// failover.hstles, support.hstles, orbtr.io, …) would otherwise
-			// leave rt.swarm and rt.route nil and emit zero route
+			// Endpoints that never call PublishRPCHandlersToLAD would
+			// otherwise leave rt.swarm and rt.route nil and emit zero route
 			// advertisements, forcing every dispatch from those nodes to
 			// fall back to LAD-latency lookups. Wiring here guarantees
 			// the route engine is live the moment any session can be
@@ -1529,7 +1527,7 @@ func (rt *Runtime) Config() Config {
 //
 //  2. Panic recovery. Each goroutine runs under a deferred recover that
 //     logs the spawn site name + stack trace and returns. A panic in one
-//     walker no longer kills the whole process — the mesh keeps running
+//     walker does not kill the whole process — the mesh keeps running
 //     and the operator sees `[runtime.Go] panic in <name>: ...` in logs
 //     with full forensic context. This complements BidiRPC's per-request
 //     recovery and the existing safeGo() helper in concurrency_helpers.go;
@@ -1546,12 +1544,13 @@ func (rt *Runtime) Config() Config {
 // variant is for goroutines that capture their own context (e.g. a
 // per-session ctx derived from a stream).
 //
-// Migration is incremental. ~50 spawn sites exist across mesh/node +
-// dispatch + domain; the audit-r2 plan migrates the highest-blast-radius
-// sites first (accept loops, publishers, walkers). Bare `go fn()` calls
-// remain valid for short-lived spawns that complete before Shutdown is
-// reachable (Init-time discovery, one-shot helpers) — see RUNTIME_README
-// for the exclusion list.
+// Bare `go fn()` calls remain valid for short-lived spawns that complete
+// before Shutdown is reachable (Init-time discovery, one-shot helpers):
+// Shutdown's wait does not need to cover a goroutine that has already
+// returned.
+//
+// TODO: move the remaining long-lived bare `go` spawns onto Go/GoCtx,
+// highest blast radius first (accept loops, publishers, walkers).
 func (rt *Runtime) Go(name string, fn func()) {
 	_ = rt.tryGo(name, fn)
 }
@@ -1756,8 +1755,8 @@ func (rt *Runtime) SetHealthEvaluator(he HealthEvaluator) {
 // is constructed at Runtime birth so early-boot subsystems can register
 // synchronously.
 //
-// Callers that own a subsystem (billing webhooks, uptime runner,
-// vulnerability scanner, etc.) should call rt.HealthRegistry().Mark on
+// Callers that run a subsystem beside the mesh (anything a composition
+// root starts and wants surfaced) should call rt.HealthRegistry().Mark on
 // a failure and Clear on recovery, using an identifier from
 // health.AllowedSubsystems() so the fail-closed gate accepts it.
 func (rt *Runtime) HealthRegistry() *obshealth.Registry {
@@ -1950,7 +1949,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		m["dedup_hits"] = hits
 		m["dedup_misses"] = misses
 
-		// OBS-6 dispatch_handler_latency_ms — surface the top-N busiest
+		// dispatch_handler_latency_ms — surface the top-N busiest
 		// handlers (by sample count). Keeping this bounded at 20 caps the
 		// MeshMetrics map growth even when the registry holds 100+ FQNs;
 		// operators wanting a specific handler's distribution can hit a
@@ -1964,13 +1963,15 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 			m[base+"count_"+snap.Handler] = snap.Count
 		}
 
-		// OBS-7 bidirpc_call_latency_ms — full BidiRPC.Call client-side
+		// bidirpc_call_latency_ms — full BidiRPC.Call client-side
 		// round-trip (marshal → send → wait → correlate) tagged by
-		// (transport, scope). Pairs with OBS-6: OBS-6 is the responder's
-		// handler-only latency, OBS-7 adds the wire + queue time, and
-		// the gap between them is network/scheduler-bound time. The
-		// (transport, scope) tag set is small (~6 buckets) so every
-		// active bucket gets its own key pair — no top-N filter needed.
+		// (transport, scope). Pairs with dispatch_handler_latency_ms:
+		// that one is the responder's handler-only latency, this one
+		// adds the wire + queue time, and the gap between them is
+		// network/scheduler-bound time. The (transport, scope) tag set
+		// is small (the normalised transport labels × the 3 scope values
+		// described on BidiRPC.scope) so every active bucket gets its
+		// own key pair — no top-N filter needed.
 		// Microseconds → milliseconds at publish time so the key name
 		// (_ms) matches the unit served.
 		for _, snap := range rt.rpcServer.BidiLatencySnapshots() {
@@ -1992,7 +1993,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 			m[base+"count_"+snap.Transport+"_"+snap.Scope] = snap.Count
 		}
 
-		// OBS-7b phase decomposition — marshal / send / wait sub-phases
+		// Phase decomposition — marshal / send / wait sub-phases
 		// of the aggregate above. Sum approximation: bidirpc_latency_ms
 		// ≈ marshal + send + wait (modulo sub-µs pending-map mutex).
 		// Attributes a 5ms p50 same-origin bidirpc to codec cost vs
@@ -2020,9 +2021,9 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		}
 	}
 
-	// IntraOrgForwarder drop counters, aggregated across every
+	// The aether noise forwarder's drop counters, aggregated across every
 	// NoiseTransport that has a forwarder attached. Per-reason buckets
-	// surface why cross-org anycast hairpins are failing (target
+	// surface why cross-origin anycast hairpins are failing (target
 	// unknown in the directory, malformed preamble, stale relay-side
 	// flow, etc.) so observability can distinguish "forwarder is silent
 	// because no traffic" from "forwarder is firing and dropping for
@@ -2030,20 +2031,19 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	var preambleMalformed, targetUnknown, innerRelayMalformed,
 		opForwardNoSrc, opReplyStaleFlow, opUnknown uint64
 	var crossOrgMsg1Received uint64
-	// forwarderAttached/Absent disambiguate a zero cross_org_msg1_received.
+	// forwarderAttached/Absent disambiguate a zero msg1-received counter
+	// (the forwarder's count of preambled msg1 datagrams, emitted below).
 	//
 	// Named "attached" (not "installed") to match the code's own
-	// vocabulary: the constructor is attachIntraOrgForwarder and it logs "VL1
-	// cross-org forwarder attached to %s transport", so one grep now finds the
-	// log line AND the metric. Renamed while the gauge is still unpublished —
-	// loom has no tag carrying it, so there is no consumer to break. Renaming a
-	// metric key AFTER it ships is a different and much worse operation.
+	// vocabulary: forwarder.go's attach function logs "... forwarder
+	// attached to %s transport", so one grep finds the log line AND the
+	// metric.
 	// The msg1 counter lives INSIDE the forwarder, and the ingress hook returns
 	// early when a transport has none — so msg1==0 means either "no preamble ever
 	// arrived" (the delivery-gap reading) or "nothing was listening for one".
 	// Without these two counters those are indistinguishable, and the decision
-	// tree below silently assumes the former. attachIntraOrgForwarder is called
-	// unconditionally after every transport build (default/shared/partition), so
+	// tree below silently assumes the former. forwarder.go's attach function is
+	// called unconditionally after every transport build (default/shared/partition), so
 	// forwarder_absent SHOULD be 0 — but that is a source reading, and this makes
 	// it a runtime fact.
 	var forwarderAttached, forwarderAbsent uint64
@@ -2073,7 +2073,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		opUnknown += f
 		crossOrgMsg1Received += fwd.CrossOrgMsg1Received()
 	}
-	// Read these BEFORE interpreting cross_org_msg1_received: if
+	// Read these BEFORE interpreting the msg1-received counter below: if
 	// forwarder_absent > 0, a zero msg1 count proves nothing about delivery.
 	m["forwarder_attached"] = forwarderAttached
 	m["forwarder_absent"] = forwarderAbsent
@@ -2083,15 +2083,16 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	m["forwarder_drops_op_forward_no_src"] = opForwardNoSrc
 	m["forwarder_drops_op_reply_stale_flow"] = opReplyStaleFlow
 	m["forwarder_drops_op_unknown"] = opUnknown
-	// M_r anycast ingress receipt counter (aether v0.0.91+). Paired with
-	// the dialer's cross_org_preamble_dials_attempted, it disambiguates
+	// M_r anycast ingress receipt counter. Paired with the dialer's
+	// preamble-dials-attempted counter (emitted with the dial-funnel keys
+	// below), it disambiguates
 	// "packet never arrived" (counter==0 with attempts>0 → fly anycast
 	// or UDP/6PN delivery gap) from "arrived and downstream-dropped"
 	// (counter>0 with attempts>0 and forwarder_drops_* climbing → look
 	// at the per-reason drop bucket).
 	//
 	// ⚠ TWO PRECONDITIONS before reading counter==0 as a delivery gap —
-	// both were implicit here and cost three lanes a retracted verdict:
+	// both must hold:
 	//  1. forwarder_absent MUST be 0. The counter lives inside the
 	//     forwarder and the ingress hook returns early when a transport
 	//     has none, so "nothing was listening" reads identically to
@@ -2106,11 +2107,10 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 
 	// ── Mesh session resumption: capability census + establishment volume ──
 	//
-	// ⚠ READ THE NOTE AT DialAndAcceptMesh BEFORE INTERPRETING THESE. An earlier
-	// version of this comment claimed the mesh bypasses resumption entirely and
-	// that we mint tickets no peer can redeem. That was WRONG for the ordinary
-	// noise-UDP path, which reaches tryResumeDial via dialNoiseUDP -> tr.Dial ->
-	// NoiseTransport.Dial. Do not resurrect that reading.
+	// ⚠ READ THE NOTE AT DialAndAcceptMesh BEFORE INTERPRETING THESE. The
+	// ordinary noise-UDP path does reach resumption — dialNoiseUDP -> tr.Dial ->
+	// NoiseTransport.Dial -> tryResumeDial — so the mesh neither bypasses
+	// resumption nor mints tickets no peer can redeem.
 	//
 	// What these four actually support:
 	//
@@ -2147,9 +2147,9 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	m["mesh_initiator_sessions"] = atomic.LoadUint64(&meshInitiatorSessions)
 	m["mesh_responder_sessions"] = atomic.LoadUint64(&meshResponderSessions)
 
-	// Send-side cross-org noise-UDP forwarder dial telemetry. Pairs with
+	// Send-side cross-origin noise-UDP forwarder dial telemetry. Pairs with
 	// the receive-side forwarder_drops_* counters above to triangulate
-	// why cross-Fly-org peers stay pinned on WebSocket: zero attempts =
+	// why peers in different Fly.io organisations stay pinned on WebSocket: zero attempts =
 	// dial selection skipping the path; attempts > 0 with succeeded ~0
 	// AND drops ~0 = packets vanish in transit; attempts > 0 with drops
 	// growing = packets arrive but classifier or hairpin lookup drops
@@ -2161,10 +2161,10 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		m["cross_org_preamble_dials_succeeded"] = succeeded
 		m["cross_org_preamble_dials_failed"] = failed
 
-		// Cross-org dial funnel gates (v0.0.352). Narrow which stage drops
-		// noise-UDP dials before they reach the preamble code, per the
-		// Batch 5 instrumentation plan. See ConnectionManager field
-		// documentation for the diagnostic decision tree.
+		// Cross-origin dial funnel gates. Narrow which stage drops
+		// noise-UDP dials before they reach the preamble code. See
+		// ConnectionManager field documentation for the diagnostic
+		// decision tree.
 		pickIncl, pubUDP, candEmpty, allDead, nonAny, noSuit := rt.connMgr.CrossPartitionGateStats()
 		m["cross_org_pickpath_noise_udp_included"] = pickIncl
 		m["cross_org_bestaddr_public_udp_count"] = pubUDP
@@ -2203,9 +2203,8 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		// Big drop succeeded → proving means handoffs are bypassing the
 		// upgrade-promote branch (same-grade reject, dedup race). Big drop
 		// proving → proving_succeeded means new sessions die under load
-		// before the proving window completes — the v0.0.395-class
-		// noise-UDP regression where probes_succeeded grew into the
-		// thousands while bestEverGrade stayed at C.
+		// before the proving window completes — probes_succeeded can
+		// grow into the thousands while bestEverGrade stays at C.
 		//
 		// Failure-class counters:
 		//   probes_stall_cooled  = transient dial failure, retry next tick
@@ -2284,16 +2283,14 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		rt.connMgr.multipathMu.Unlock()
 	}
 
-	// ValidateSession fallback-cache hit/miss on this endpoint's
-	// session meshClient (injected via Config.MeshFallbackStats). On a
-	// thin gateway every cookie-bearing HTTP request calls Get(); a miss
-	// pays one full BidiRPC to the auth node (~94 ms cross-org). Surfacing
-	// hits + misses here lets us see whether the 30 s TTL is matching the
-	// gateway's traffic pattern without scraping per-request debug logs.
-	// Anchor / auth-node endpoints register a Turso-backed
-	// LocalSessionStore instead of meshClient, so both counters stay at 0
-	// there — and both keys are ALWAYS emitted (0 when no provider) so the
-	// metrics schema is stable.
+	// Session-validation fallback-cache hit/miss counters, read from
+	// Config.MeshFallbackStats. A composition root that validates sessions
+	// over the mesh reports how often its local cache answers (hit) versus
+	// how often it pays one full BidiRPC to the validating node (miss;
+	// ~94 ms cross-origin), which shows whether its cache TTL matches its
+	// traffic without scraping per-request debug logs. A node that
+	// validates sessions itself reports 0 for both — and both keys are
+	// ALWAYS emitted (0 when no provider) so the metrics schema is stable.
 	var hits, misses uint64
 	if rt.cfg.MeshFallbackStats != nil {
 		hits, misses = rt.cfg.MeshFallbackStats()
@@ -2642,12 +2639,11 @@ func (rt *Runtime) bootstrapFromAnchor(ctx context.Context, cfg Config) (bool, e
 // wiring goroutine (peer-store load, discovery layers, scan-loop Start).
 //
 // The dial-out phase is gated on cfg.LAD.BootstrapHosts because nodes that
-// are bootstrap anchors themselves (auth core, etc.) have no outbound
-// targets to seed. The scan loop is NOT gated — it is the sole driver of
-// outbound mesh connection establishment, and it must run on every node so
-// that incoming sessions,
-// persistent peer-store entries, discovery-layer results, and future swarm
-// RoleTable lookups can all flow through it.
+// are bootstrap anchors themselves have no outbound targets to seed. The
+// scan loop is NOT gated — it is the sole driver of outbound mesh
+// connection establishment, and it must run on every node so that incoming
+// sessions, persistent peer-store entries, discovery-layer results, and
+// swarm RoleTable lookups can all flow through it.
 //
 // Callers: Initialize (first init) and the LAD re-bootstrap goroutine
 // (no active sessions). Re-bootstrap reuses the already-running scan loop
@@ -2727,7 +2723,7 @@ func (rt *Runtime) bootstrapPeers(ctx context.Context, cfg Config) error {
 	// Spawn the long-running ConnectionManager scan loop UNCONDITIONALLY.
 	// It is the sole driver of peer discovery, dial seeding and outbound mesh
 	// connection establishment. Gating it on bootstrap success would
-	// leave nodes that do not dial out (auth core, anchors, isolated partitions)
+	// leave nodes that do not dial out (anchors, isolated partitions)
 	// without an active connection manager — no outbound dialing, no mesh
 	// convergence, no RPC dispatch.
 	rt.Go("connmgr.scan_loop", func() {
@@ -3011,7 +3007,7 @@ func (rt *Runtime) serveRawRPC(ctx context.Context, sess aether.Connection) {
 	}
 }
 
-// runIncomingGossip was removed — AcceptMeshConnection owns gossip lifecycle for all paths.
+// AcceptMeshConnection owns the gossip lifecycle for all paths, inbound included.
 
 // runQUICListener runs the QUIC listener for fallback transport
 func (rt *Runtime) runQUICListener(ctx context.Context, quicTr *quictransport.QuicTransport) error {
@@ -3115,8 +3111,10 @@ func (rt *Runtime) PublishHandlersToLAD(ctx context.Context, roles []string, reg
 		return fmt.Errorf("marshal role record: %w", err)
 	}
 
-	// Publish to ledger. lad.Record.Partition is left unset, which publishes this
-	// advert to every reader rather than to one partition's readers.
+	// Publish to ledger. lad.Record.Partition is left unset, so this advert
+	// lands in the empty-partition bucket: a reader that queries partition ""
+	// sees it and a reader that queries a named partition does not ("" is a
+	// literal bucket key, not a wildcard — see BestGradeToHandler's read).
 	rec := lad.Record{
 		Topic:        lad.TopicRole,
 		NodeID:       string(rt.identity.NodeID),
@@ -3199,8 +3197,7 @@ func (rt *Runtime) PublishRPCHandlersToLAD(ctx context.Context, reg *rpc.Registr
 	// Populate the swarm PeerRecord's address list so peers can hole-
 	// punch from Grade-C WS up to Grade-A noise-UDP. Without this, the
 	// AddressTable subscribers see addrs=0 in every PeerRecord and the
-	// dial path falls back to the LAD reach table — which is being
-	// retired. Listener wiring + grade-upgrade subscriber are installed
+	// dial path falls back to the LAD reach table. Listener wiring + grade-upgrade subscriber are installed
 	// here so both fire on every subsequent state change, not just the
 	// first publish.
 	rt.advertiseSwarmListeners(si)
@@ -3208,11 +3205,9 @@ func (rt *Runtime) PublishRPCHandlersToLAD(ctx context.Context, reg *rpc.Registr
 
 	dbgNode.Printf("Published peer record via swarm (roles %v, grade %v)", roles, bestGrade)
 
-	// Route engine is no longer wired here — Runtime.Initialize made
-	// it an invariant so every node (including api.hstles, login.hstles,
-	// monitoring.hstles, failover.hstles, support.hstles, orbtr.io) has
-	// a live route.Router from boot, not only the subset that calls
-	// PublishRPCHandlersToLAD. Anchor-vs-other transit mode is decided
+	// The route engine is wired in Runtime.Initialize, not here, so
+	// every node has a live route.Router from boot, not only the subset
+	// that calls PublishRPCHandlersToLAD. Anchor-vs-other transit mode is decided
 	// at Initialize from cfg.Roles + isAnchorCapable(); endpoints that
 	// dynamically gain the anchor role after boot can call
 	// rt.Route().Router.SetTransitMode to promote. ctx is retained on
@@ -3345,8 +3340,8 @@ func (rt *Runtime) checkSnapshotRateLimit(ip string) bool {
 }
 
 // BootstrapHandler returns an http.HandlerFunc for VL1 upgrade requests.
-// Consuming applications (login.hstles.com, api.hstles.com) should register this
-// on their existing HTTPS server at /mesh/aether.
+// A composition root registers this on its existing HTTPS server at
+// /mesh/vl1, the path peers dial for the VL1 bootstrap.
 //
 // Example usage:
 //
@@ -3516,8 +3511,6 @@ func (rt *Runtime) WebSocketHandler() http.HandlerFunc {
 		// — which starves gossip, so no 6PN UDP addresses propagate and the
 		// ws→noise-UDP upgrade never fires. AcceptHeaders is aether's own emit,
 		// shared so this custom handler stays byte-for-byte compatible with it.
-		// (Forward-port of the library v0.0.440 fix into the loom-extracted
-		// mesh/node, which was extracted before that change.)
 		respHdr := rt.connMgr.wsTr.AcceptHeaders(r)
 		rawConn, _, _, err := ws.HTTPUpgrader{Header: respHdr}.Upgrade(r, w)
 		if err != nil {
@@ -4039,9 +4032,9 @@ func (rt *Runtime) handleVL1Upgrade(w http.ResponseWriter, r *http.Request) {
 		// NOTE: Reach records are NOT created here for the remote node.
 		// Each node is the sole authority on its own reach record — it publishes
 		// via publishSelfReachability() with correct addresses (WSS, dedicated IPs,
-		// private fdaa:). Bootstrap-created records had incomplete addresses
-		// (connection source IP only, no WSS/hostname) that overwrote the
-		// correct self-published records and prevented cross-org WS connections.
+		// private fdaa:). A bootstrap-created record would carry incomplete
+		// addresses (connection source IP only, no WSS/hostname), overwrite the
+		// correct self-published record, and prevent cross-origin WS connections.
 		_ = clientPrivateIP // used by member record below
 		_ = clientPort
 	}
@@ -4221,7 +4214,7 @@ func (rt *Runtime) discoverPrivateIP() string {
 
 	// Tier 0: Platform-authoritative source. Synchronous, provider-
 	// agnostic via the PlatformInfo interface — no per-platform env
-	// reads here. Determines ourOrigin for the cross-org forwarder without
+	// reads here. Determines ourOrigin for the cross-origin forwarder without
 	// polling.
 	if rt.cfg.Platform != nil {
 		if ip := rt.cfg.Platform.PrivateIP(); ip != "" {
@@ -4377,8 +4370,7 @@ func (rt *Runtime) discoverPublicIP(ctx context.Context) {
 // platform supplies our public IP.
 //
 // Idempotent — "first success wins". Once natStrategy is populated a
-// subsequent call short-circuits, mirroring the ORBTR agent's
-// DiscoverNAT guard. Safe to invoke concurrently and off the startup
+// subsequent call short-circuits. Safe to invoke concurrently and off the startup
 // critical path (STUN round-trips take seconds).
 //
 // Classification skips silently when fewer than 2 STUN servers are
@@ -4675,7 +4667,7 @@ func (rt *Runtime) DialByProtocol(ctx context.Context, proto string, nodeID stri
 
 	case "wss":
 		if rt.connMgr != nil && rt.connMgr.wsTr != nil {
-			target.Address = address // e.g., "wss://node.hstles.com/mesh/ws"
+			target.Address = address // e.g., "wss://node.example.com/mesh/ws"
 			return rt.connMgr.wsTr.Dial(ctx, target)
 		}
 		return nil, fmt.Errorf("WebSocket transport not available (peerMgr initializing)")

@@ -11,9 +11,9 @@ import (
 	"sync/atomic"
 )
 
-// forceAllEnabled is set by SetEnabled(true) / Configure(true, …) so
-// the legacy "turn every namespace on at runtime" toggle keeps working
-// after the tag-list rewrite. Logically equivalent to setting DEBUG=*.
+// forceAllEnabled is set by SetEnabled(true) / Configure(true, …): the
+// "turn every namespace on at runtime" toggle, which works alongside the
+// tag list. Logically equivalent to setting DEBUG=*.
 var forceAllEnabled atomic.Bool
 
 // overrideTags holds a runtime-supplied tag list that takes precedence
@@ -63,7 +63,7 @@ const wildcardTag = "*"
 // enable "pprof"; only exact or prefix-wildcard matches count.
 //
 // SetEnabled(true) makes TagEnabled return true for everything; useful
-// for tests and the legacy "global on" toggle.
+// for tests and the "global on" toggle.
 func TagEnabled(tag string) bool {
 	if tag == "" {
 		return false

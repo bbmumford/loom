@@ -16,9 +16,9 @@ import (
 	"testing"
 )
 
-// TestNodeIdentityJSONHidesSecrets is a fail-closed gate against regressions
-// of finding rev-073: NodeIdentity must never serialise its ed25519 private
-// key (or raw public key) through encoding/json. Any future struct-tag
+// TestNodeIdentityJSONHidesSecrets is a fail-closed gate: NodeIdentity must
+// never serialise its ed25519 private key (or raw public key) through
+// encoding/json. Any future struct-tag
 // change that re-exposes a key field will fail this test.
 func TestNodeIdentityJSONHidesSecrets(t *testing.T) {
 	id, err := GenerateIdentity(context.Background(), t.TempDir())

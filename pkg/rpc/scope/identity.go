@@ -28,14 +28,14 @@ type ScopeValue struct {
 //
 // Request bodies, RPCRequest.Context maps, task Metadata and other mutable
 // caller fields MUST NOT be copied into this value. A consuming project that
-// needs an axis (e.g. a customer organisation) resolves it from its own store
-// first, then supplies the resulting presence to the dispatch adapter.
+// needs a further axis resolves it from its own store first, then supplies the
+// resulting presence to the dispatch adapter.
 type AuthenticatedIdentity struct {
 	Scopes  []ScopeValue
 	Subject string
 	// partition is the opaque server-established partition scope ("whose data") a
 	// store selector keys on. loom stores and returns it without interpreting it:
-	// it carries no notion of owner, customer, org, or partition — it is an opaque
+	// it carries no notion of any identity class or level — it is an opaque
 	// string the consuming project's injected identity policy (the trusted ingress
 	// that resolved it) sets via WithPartition. A store selects on this value with
 	// exact-match, deny-before-read.
@@ -60,9 +60,9 @@ func (a AuthenticatedIdentity) Has(name string) bool {
 // Partition returns the server-established partition scope: the opaque "whose
 // data" binding a store selector keys on. The consuming project's injected
 // policy resolved which of the identity's data is the partition and set it via
-// WithPartition; loom returns it without naming or interpreting any axis — no
-// owner, customer, org, or tenant vocabulary. "" when unset — fail-closed at the
-// read (an absent partition denies, never grants).
+// WithPartition; loom returns it without naming or interpreting any axis or
+// identity class. "" when unset — fail-closed at the read (an absent partition
+// denies, never grants).
 func (a AuthenticatedIdentity) Partition() string { return a.partition }
 
 // WithPartition returns a copy of the identity with the opaque partition scope
@@ -103,9 +103,10 @@ func NewIdentity(subject, partition string) AuthenticatedIdentity {
 // snapshot: a subject plus zero or more axes, each with a non-empty canonical
 // Name and a non-empty Value, and no duplicate Name. It returns a defensively
 // cloned identity so a slice the caller retains cannot mutate stamped authority.
-// A trusted ingress resolves each axis (platform tenant from transport/config,
-// customer org from session/store, …) and assembles ONE complete identity here,
-// rather than stamping raw single axes that would replace each other's snapshot.
+// A trusted ingress resolves each axis (the transport-pinned value from the
+// transport or its config, a within-transport value from a session or store, …)
+// and assembles ONE complete identity here, rather than stamping raw single axes
+// that would replace each other's snapshot.
 func NewCompleteIdentity(subject string, axes ...ScopeValue) (AuthenticatedIdentity, error) {
 	if err := validateAxes(axes); err != nil {
 		return AuthenticatedIdentity{}, err
@@ -148,6 +149,6 @@ func cloneAxes(axes []ScopeValue) []ScopeValue {
 }
 
 // validate reports whether the identity's axes satisfy the canonical invariant.
-// The context stampers call it so an unvalidated raw struct literal (which the
-// exported fields still permit while HSTLES compiles) cannot enter authority.
+// The context stampers call it so an unvalidated raw struct literal, which the
+// exported Scopes and Subject fields permit, cannot enter authority.
 func (a AuthenticatedIdentity) validate() error { return validateAxes(a.Scopes) }

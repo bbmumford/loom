@@ -3,17 +3,17 @@
  * Queries: licensing@hstles.com
  */
 
-// Package secrets defines the Phase-1 CRDT-encrypted secret-gossip model:
-// a node holding a service role's configs seals them onto the swarm topic
+// Package secrets defines the CRDT-encrypted secret-gossip model: a node
+// holding a service role's configs seals them onto the swarm topic
 // role.secrets.<role>; when the mesh detects the role missing, TrustPolicy-
 // authorized, capability-matched nodes holding a wrapped DEK decrypt the
-// bundle and assume the role (failover chain node.hstles.com →
-// node.orbtr.io → thin-apps-as-emergency-thick-apps).
+// bundle and assume the role (a failover chain from one node endpoint to the
+// next, down to thin apps acting as emergency thick apps).
 //
-// It builds on the Phase-0.5-hardened swarm δ-CRDT — do NOT build a new
-// CRDT. Phase 0.5 is a hard prerequisite: identity binding, sparse-topology
-// convergence, observer propagation, raw-HLC validation, and immutable
-// storage are not yet safe on current swarm.
+// It builds on the swarm δ-CRDT — do NOT build a new CRDT. It depends on
+// swarm's identity binding, sparse-topology convergence, observer
+// propagation, raw-HLC validation, and immutable storage; a swarm that lacks
+// any of them is not safe to carry sealed secrets.
 //
 // # The invariant that makes encryption a drop-in
 //
@@ -35,7 +35,7 @@
 // plaintexts — an AEAD/NaCl-box nonce-reuse failure. Bump Epoch OR bind the
 // nonce to content+recipients so distinct plaintexts never share one.
 //
-// DEK wrapping reuses diststore/crypto/recipient_wrap
+// DEK wrapping uses internal/recipientwrap
 // (WrapDataKeyForRecipient — NaCl-box / P256-AESKW, entitlement fail-closed).
 // Recipient selection is gated by ports.TrustPolicy.AuthorizeSecretRecipient:
 // capability advertisement alone NEVER makes a node a recipient.

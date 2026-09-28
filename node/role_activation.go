@@ -18,10 +18,10 @@ import (
 	"github.com/bbmumford/loom/secrets"
 )
 
-// roleActivationManager is the Phase-1 runtime role-init path (plan §1.4):
-// today roles are fixed at boot and SetRoles only re-advertises the label;
-// this manager can bring a role's services up (and down) AFTER boot, on a
-// won takeover claim or an operator action.
+// roleActivationManager is the runtime role-init path. Config.Roles is fixed
+// at boot and SetRoles only re-advertises the label; this manager brings a
+// role's services up (and down) AFTER boot, on a won takeover claim or an
+// operator action.
 //
 // Activation sequence (the ordering is the contract — see ActivateRole):
 // configs → Activate → open exact-generation admission → atomically publish
@@ -135,8 +135,8 @@ func (g *roleGeneration) reopenAdmissionLocked() {
 
 // activationEnv implements ports.ActivationEnv over the runtime: role
 // goroutines bind rt.Context() through rt.Go (wg-tracked, panic-recovered)
-// so Shutdown drains them — the H7 closure-capture rule enforced by
-// construction.
+// so Shutdown drains them, and a role goroutine cannot capture a
+// caller-scoped ctx by construction.
 type activationEnv struct {
 	rt    *Runtime
 	scope ports.RegistrationScope

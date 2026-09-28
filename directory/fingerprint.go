@@ -22,20 +22,19 @@ import (
 // the same accepted set agree byte-for-byte.
 //
 // The key contribution is CONDITIONAL, emitted only when Key != "", for the
-// same reason the signable-byte suffix is (swarm sig.go): every record in the
-// fleet today is keyless, and their fingerprint must not move. A digest that
-// changed shape for existing records would make every live directory disagree
-// with every stored anchor input at once, on a change that added no
-// information.
+// same reason the signable-byte suffix is (swarm sig.go): a keyless record's
+// fingerprint must not move. A digest that changed shape for keyless records
+// would make every live directory disagree with every stored anchor input at
+// once, on a change that added no information.
 //
-// Omitting the key entirely was a real defect, not a cosmetic one: slot
+// Omitting the key entirely would be a real defect, not a cosmetic one: slot
 // identity is (Topic, NodeID, Key), so two directories holding a node's
 // "blob-alpha" and its "blob-beta" are otherwise identical in every hashed
-// field. The shadow gate (§0.5.3 stage 3) would have reported PARITY on
-// divergent state — the one outcome that phase exists to prevent. Guarded by
+// field, and the shadow gate would report PARITY on divergent state — the one
+// outcome it exists to prevent. Guarded by
 // TestFingerprintDistinguishesDirectoriesDifferingOnlyByKey, with
 // TestKeylessFingerprintIsTheLegacyTuple pinning the unkeyed bytes against an
-// independently written pre-composite-key oracle.
+// independently written oracle for the keyless tuple.
 func fingerprintRecords(recs []ports.Record) [32]byte {
 	h := sha256.New()
 	for _, r := range recs {

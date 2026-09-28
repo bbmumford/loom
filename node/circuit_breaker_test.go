@@ -11,29 +11,26 @@ import (
 	"time"
 )
 
-// COVERAGE of CircuitBreaker (health.go:184-246). Reset (:256) and Failures
-// (:266) were both at 0.0%, and the Call state machine had no test of its own.
+// Covers CircuitBreaker in health.go: the Call state machine, Reset and
+// Failures.
 //
-// 🔴 MEASURED FIRST, AND IT CHANGES WHY THIS FILE EXISTS: THE BREAKER IS NEVER
-// INVOKED. runtime.go:563 constructs one when cfg.CircuitBreaker.Enabled and
-// logs "[NODE] circuit breaker enabled", and runtime.go:1343 exposes it via
-// rt.CircuitBreaker. Measured across all three workspace roots (loom, ORBTR,
-// HSTLES): ZERO non-test callers of CircuitBreaker.Call, and ZERO references
-// to rt.CircuitBreaker. Positive control on the same search shape returns
-// the two rt.circuitBreaker sites in runtime.go, so the search works.
+// 🔴 THE BREAKER IS NEVER INVOKED. Initialize constructs one when
+// cfg.CircuitBreaker.Enabled and logs "[NODE] circuit breaker enabled", and
+// Runtime.CircuitBreaker exposes it, but no non-test code in this module
+// calls CircuitBreaker.Call or Runtime.CircuitBreaker.
 //
 // An operator who sets Enabled=true gets a log line asserting protection and
 // receives none. That is worse than an absent feature: the absent one does not
-// claim to be there. Same family as the takeover engine — wired to
-// config, never called — which is now the second instance this lane has
-// measured, in a different subsystem.
+// claim to be there.
 //
 // ⚠ SO WHAT DO THESE TESTS PROVE? The MECHANISM, not the protection. Nothing
-// here makes the breaker run in a deployment, and deciding which calls it
-// should wrap is a production-authority question for @R/DESIGN, not this
-// lane's. What this file does is make the semantics known BEFORE someone wires
-// it — because one of them (see the accumulation test) is not what the name
-// suggests, and discovering that after wiring means discovering it in prod.
+// here makes the breaker run in a deployment, and which calls it should wrap
+// is a production-authority decision. What this file does is make the
+// semantics known BEFORE someone wires it — because one of them (see the
+// accumulation test) is not what the name suggests.
+//
+// TODO: decide which calls the breaker wraps and wire it, or stop logging
+// "circuit breaker enabled" when nothing calls it.
 
 var errBoom = errors.New("boom")
 

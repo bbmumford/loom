@@ -93,10 +93,10 @@ func (c *ladSnapshotCodec) DecodeShardChunk(body []byte) (whisper.SnapshotChunk,
 		return whisper.SnapshotChunk{}, fmt.Errorf("snapshot: short chunk")
 	}
 	bodyLen := binary.BigEndian.Uint32(body[5:9])
-	// MESH-F11: compare in uint64. `9 + int(bodyLen)` overflows to a negative int
-	// on a 32-bit build for a large bodyLen, passing the guard, and the slice
-	// below then panics out of range. 64-bit builds were already safe; this makes
-	// the bound correct on both.
+	// Compare in uint64. `9 + int(bodyLen)` overflows to a negative int on a
+	// 32-bit build for a large bodyLen, passing the guard, and the slice below
+	// then panics out of range; uint64 makes the bound correct on 32- and
+	// 64-bit builds alike.
 	if uint64(9)+uint64(bodyLen) > uint64(len(body)) {
 		return whisper.SnapshotChunk{}, fmt.Errorf("snapshot: truncated chunk body")
 	}

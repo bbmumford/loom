@@ -74,8 +74,8 @@ type ComposeTriggerPrincipalProvider interface {
 	) (authorized context.Context, release func(), err error)
 }
 
-// This file is the Phase-2 composition bridge: it maps the iii-derived
-// compose surfaces onto what the mesh already has.
+// This file is the composition bridge: it maps the compose package's
+// surfaces onto what the mesh already has.
 //
 //   REGISTERED — Registry().List()/AllHandlers() enumerate every function.
 //   CALLABLE   — ComposeInvoke dispatches a FunctionID locally with the
@@ -126,8 +126,8 @@ func (rt *Runtime) composeInvoke(
 		}
 		// Snapshot both the exact registration and the runtime-injected
 		// product validator before dispatch. Trigger callbacks are an
-		// authority-bearing entry point: they may not use the legacy
-		// unauthenticated registry path or re-resolve a same-name replacement.
+		// authority-bearing entry point: they may not use the registry's
+		// unauthenticated dispatch path or re-resolve a same-name replacement.
 		auth := rt.rpcServer.authValidator
 		resp, err := resolved.DispatchRPCWithAuth(ctx, &handlers.RPCRequest{
 			ID:      fmt.Sprintf("compose-%d", time.Now().UnixNano()),
@@ -568,7 +568,8 @@ func composeTaskCompletion(
 
 // TriggerRegistry returns the runtime's compose trigger registry, creating
 // it on first use with the built-in kinds armed. All trigger watch
-// goroutines bind rt.Context() through rt.Go (H7 rule).
+// goroutines bind rt.Context() through rt.Go, so runtime shutdown cancels
+// them and waits for them to exit.
 func (rt *Runtime) TriggerRegistry() *compose.Registry {
 	rt.lifecycleMu.Lock()
 	defer rt.lifecycleMu.Unlock()
@@ -653,7 +654,7 @@ func (k *swarmSubscribeKind) Arm(ctx context.Context, t compose.Trigger, invoke 
 
 // intervalCronKind arms "cron" triggers on a fixed interval.
 // Spec JSON: {"everyMs": N}. Fan-in coordination across nodes belongs to
-// the claim-set (plan §2.5 REJECTS a central cron lock) — a cron trigger
+// the claim-set, never a central cron lock — a cron trigger
 // fires on every node that arms it; the invoked function decides whether
 // this node acts (e.g. by claim ranking).
 type intervalCronKind struct{}

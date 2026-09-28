@@ -25,8 +25,8 @@ type rpcContextKey struct{}
 // This map is caller/wire data, not scope authority. EnforceScope deliberately
 // ignores it and reads only the typed identity installed through
 // WithAuthenticatedScopeIdentity. Keeping the two context surfaces separate
-// prevents a request body or forwarded map from manufacturing partition,
-// organisation, or user presence.
+// prevents a request body or forwarded map from manufacturing presence on any
+// identity axis.
 //
 // Empty / nil maps return ctx unchanged. Re-calling MERGES with the prior
 // value (later keys win) so middleware can layer additional fields without
@@ -48,7 +48,7 @@ func WithRPCContext(ctx context.Context, m map[string]string) context.Context {
 	return context.WithValue(ctx, rpcContextKey{}, m)
 }
 
-// rpcContextMap returns the previously-stamped map (or nil).
+// rpcContextMap returns the map WithRPCContext stamped on ctx, or nil.
 func rpcContextMap(ctx context.Context) map[string]string {
 	if m, ok := ctx.Value(rpcContextKey{}).(map[string]string); ok {
 		return m
@@ -70,19 +70,21 @@ func RPCContextValue(ctx context.Context, key string) (string, bool) {
 	return v, ok
 }
 
-// TenantFromContext returns the "tenantId" an in-process writer stamped via
-// WithRPCContext, or "". It is never taken from the wire, and it names the
-// node's transport-pinned value, not a data partition.
+// TenantFromContext returns the value an in-process writer stamped via
+// WithRPCContext under the map key read below, or "". It is never taken from
+// the wire, and it names the node's transport-pinned value, not a data
+// partition.
 //
 // Deprecated: select data on AuthenticatedScopeIdentityFromContext(ctx).Partition(),
-// and gate a platform-plane operation on an explicit capability the caller
-// holds, not on this value.
+// and gate an operation that needs more than partition presence on an explicit
+// capability the caller holds, not on this value.
 func TenantFromContext(ctx context.Context) string {
 	return rpcContextMap(ctx)["tenantId"]
 }
 
-// UserFromContext returns the "userId" an in-process writer stamped via
-// WithRPCContext, or "".
+// UserFromContext returns the subject value an in-process writer stamped via
+// WithRPCContext under the map key read below, or "". It is never taken from
+// the wire.
 //
 // Deprecated: read AuthenticatedScopeIdentityFromContext(ctx).Subject.
 func UserFromContext(ctx context.Context) string {
@@ -90,7 +92,7 @@ func UserFromContext(ctx context.Context) string {
 }
 
 // AuthenticatedScopeIdentity is the typed, server-established identity used by
-// EnforceScope. It aliases the leaf scope package so the legacy handlers
+// EnforceScope. It aliases the leaf scope package so the node/handlers
 // registry and this package consume the same value and evaluator without an
 // import cycle.
 type AuthenticatedScopeIdentity = rpcscope.AuthenticatedIdentity
@@ -139,17 +141,18 @@ var ErrScopeDenied = rpcscope.ErrDenied
 // denies when it reports unsatisfied. The wrapped error carries the handler
 // FQN and the policy's reason; callers should use errors.Is(err,
 // ErrScopeDenied) at boundaries.
-// authz is an optional two-arm op authorizer (variadic so pre-two-arm callers
-// keep the 3-arg form). When a handler declares a Requirement it is judged by
-// that authorizer, not its Scope tag; a caller that supplies none, or a nil one,
-// fails a Requirement-bearing handler CLOSED (symmetric to a nil PresencePolicy).
+// authz is an optional two-arm op authorizer (variadic so a caller that judges
+// only presence tiers keeps the 3-arg form). When a handler declares a
+// Requirement it is judged by that authorizer, not its Scope tag; a caller that
+// supplies none, or a nil one, fails a Requirement-bearing handler CLOSED
+// (symmetric to a nil PresencePolicy).
 func EnforceScope(ctx context.Context, h *Handler, policy rpcscope.PresencePolicy, authz ...*rpcscope.Policy) error {
 	if h == nil {
 		return fmt.Errorf("%w: nil handler", ErrScopeDenied)
 	}
 	// Two-arm authorization supersedes the presence tier when the handler declares
-	// a Requirement. A nil Requirement (the zero value) falls through to the Scope
-	// path below, so this is behavior-preserving until handlers populate it.
+	// a Requirement. A nil Requirement pointer (the Handler field's zero value)
+	// falls through to the Scope path below.
 	if h.Requirement != nil {
 		var az *rpcscope.Policy
 		if len(authz) > 0 {

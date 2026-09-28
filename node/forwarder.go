@@ -16,25 +16,25 @@ import (
 	"github.com/ORBTR/aether/noise"
 )
 
-// Cross-org noise-UDP forwarder wiring.
+// Noise-UDP forwarder wiring for dials from another origin.
 //
-// The aether/noise package ships an IntraOrgForwarder that can hairpin a
+// The aether/noise package ships a forwarder that can hairpin a
 // preambled msg1 from the anycast-receiving machine (M_r) to the target
 // machine (M_t) over 6PN, then unwrap M_t's reply and write it back
 // from M_r's listener socket so Fly's edge 5-tuple flow stays intact.
 //
-// Library's job here is to:
+// The runtime's part is to:
 //
 // 1. Provide a ForwarderLookup callback that resolves a target NodeID
-// to a same-org 6PN UDP address using the LAD reach cache.
-// 2. Attach an IntraOrgForwarder to each NoiseTransport at startup so
+// to a same-origin 6PN UDP address using the LAD reach cache.
+// 2. Attach that forwarder to each NoiseTransport at startup so
 // the listener path branches into the forwarder before normal
 // classify+dispatch.
 //
 // The dialer-side preamble emission lives in peer_connections.go — the
-// connection manager decides per-dial whether to set the cross-org flag
-// on aether.Target.Metadata based on peer.crossOrigin + the chosen
-// address being a public IPv4.
+// connection manager decides per-dial whether to set the forwarder
+// preamble flag on aether.Target.Metadata based on peer.crossOrigin +
+// the chosen address being a public IPv4.
 
 // forwarderLookup returns a ForwarderLookup closure backed by the
 // runtime's LAD reach cache. The closure scans a target NodeID's reach
@@ -50,13 +50,12 @@ import (
 // POV — the dialer's WS fallback will still establish a session.
 // forwarderLookupTimeout caps the per-packet Reach() lookup so a
 // hot-path UDP hairpin can't be wedged by in-memory writer-mutex
-// contention. Reach() is a read against bbmumford/ledger v0.0.10's
+// contention. Reach() is a read against the live directory's
 // in-memory map — fast in the steady state — but during a writer
 // burst (gossip apply storm, cache-rebuild) reads can queue behind
 // the writer's exclusive lock. 100 ms is a conservative ceiling
 // well above any healthy-path latency; on miss we return (nil, false)
 // and the dialer falls back to WS, so the forwarder never hangs.
-// Was the H6 finding.
 const forwarderLookupTimeout = 100 * time.Millisecond
 
 func (rt *Runtime) forwarderLookup() noise.ForwarderLookup {
@@ -92,15 +91,15 @@ func (rt *Runtime) forwarderLookup() noise.ForwarderLookup {
 // parseSixPNUDPAddr converts a reach address into a *net.UDPAddr if
 // the address is a Fly 6PN ULA (fdaa::/8) — anything else (Docker
 // bridge IPv4, link-local, non-Fly ULA like Tailscale fd7a::) is not a
-// valid intra-org forwarder target.
+// valid target for a same-origin hairpin.
 //
-// Previous implementation only checked `ip.IsPrivate()`
-// which covers all of fc00::/7 (the full IPv6 ULA range). A node
-// running Tailscale on the same host could publish a fd7a:.. address
-// with Scope:"private",Proto:"udp"; forwarderLookup would accept it
-// and the hairpin would route into Tailscale's overlay instead of
-// Fly's 6PN, where the target machine isn't reachable. Strict
-// fdaa::/8 match aligns with extractOriginPrefix's policy.
+// `ip.IsPrivate()` alone is too wide: it covers all of fc00::/7 (the
+// full IPv6 ULA range). A node running Tailscale on the same host can
+// publish a fd7a:.. address with Scope:"private",Proto:"udp";
+// forwarderLookup would accept it and the hairpin would route into
+// Tailscale's overlay instead of Fly's 6PN, where the target machine
+// isn't reachable. The strict fdaa::/8 match is the same policy
+// extractOriginPrefix applies.
 func parseSixPNUDPAddr(a ports.ReachAddress) (*net.UDPAddr, bool) {
 	host := a.Host
 	port := a.Port
@@ -139,8 +138,8 @@ func isFly6PN(ip net.IP) bool {
 	return v6 != nil && v6[0] == 0xfd && v6[1] == 0xaa
 }
 
-// attachIntraOrgForwarder builds an IntraOrgForwarder for the given
-// NoiseTransport and installs it via tr.SetForwarder. The forwarder's
+// Builds aether's noise forwarder for the given NoiseTransport and
+// installs it via tr.SetForwarder. The forwarder's
 // sweeper goroutine exits when NoiseTransport.Close runs (transport
 // owns the forwarder lifecycle).
 //

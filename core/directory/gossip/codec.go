@@ -187,8 +187,8 @@ func metaToProto(m *ExchangeMeta) *gossippb.ExchangeMeta {
 			// Guard zero-time SignedAt — time.Time{}.Unix() returns
 			// -62135596800 (year 1 BC) which survives the wire and
 			// is interpreted by IsStalePEXEntry as a 2000-year-old
-			// entry, filtering it forever. Mirrors the existing
-			// DeletedAtUnix zero-check pattern. Was the H9 finding.
+			// entry, filtering it forever. Mirrors the DeletedAtUnix
+			// zero-check pattern.
 			var ts int64
 			if !entry.SignedAt.IsZero() {
 				ts = entry.SignedAt.Unix()
@@ -216,8 +216,8 @@ func metaToProto(m *ExchangeMeta) *gossippb.ExchangeMeta {
 			Transport:  strings.Join(m.Offer.OfferedTransports, ","),
 			// to_node_id, addresses, timestamp_unix, signature are not populated
 			// because the Go ConnectionOffer struct doesn't carry them.
-			// These proto fields exist for future extension when ConnectionOffer
-			// is wired into peer_connections.go (Aether extraction pre-cleanup item #5).
+			// TODO: populate these proto fields once ConnectionOffer carries
+			// them and peer_connections.go sends it.
 		}
 	}
 
@@ -236,7 +236,7 @@ func protoToMeta(pb *gossippb.ExchangeMeta) *ExchangeMeta {
 			// Mirror the encode-side zero guard — TimestampUnix == 0
 			// decodes to the zero time, NOT to 1970-01-01, so the
 			// staleness check sees IsZero() and rejects rather than
-			// applying a fixed-epoch staleness math. Was H9.
+			// applying a fixed-epoch staleness math.
 			var signedAt time.Time
 			if entry.TimestampUnix != 0 {
 				signedAt = time.Unix(entry.TimestampUnix, 0)

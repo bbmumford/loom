@@ -24,8 +24,8 @@ const dedupRejectEvictTTL = 10 * time.Minute
 // sessions can use `session.Protocol().String()`; callers using
 // node.Protocol can use `mapProtocol(proto).String()` or a hand-written
 // label. The composite-key approach (vs map[string]map[Protocol]) keeps
-// the lock and iteration patterns identical to the original nodeID-only
-// implementation.
+// one flat string-keyed map, so a single lock and a single range loop
+// cover every entry.
 func dedupRejectKey(nodeID, protoTag string) string {
 	return nodeID + "|" + protoTag
 }

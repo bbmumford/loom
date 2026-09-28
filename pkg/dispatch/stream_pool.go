@@ -47,7 +47,6 @@ const poolReapAge = 2 * time.Minute
 // rejects half-closed (peer-FIN) streams that IsOpen still accepts
 // (the aether StreamStateMachine considers StreamHalfClosed "open"
 // from one side's POV but Send fails immediately when peerFIN is set).
-// Was the H-Dispatch-HalfClosedPool finding.
 type poolCanSendChecker interface {
 	CanSend() bool
 }
@@ -90,7 +89,7 @@ func NewStreamPool(capacity int) *StreamPool {
 
 // canDispatchOn returns true when the supplied stream is in a state where
 // Send will not immediately fail. Streams whose concrete type does not
-// implement CanSend fall back to IsOpen (preserves legacy behaviour).
+// implement CanSend are judged by IsOpen alone.
 func canDispatchOn(stream aether.Stream) bool {
 	if cs, ok := stream.(poolCanSendChecker); ok {
 		return cs.CanSend()

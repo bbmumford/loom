@@ -173,7 +173,8 @@ const defaultProbeTimeout = 10 * time.Second
 // parallel-probe goroutine. Tighter than defaultProbeTimeout so that, when
 // bidi is wedged, the dynamic-stream fallback at the bottom of the goroutine
 // still has a usable budget against probeCtx. Without this carve-out the
-// fallback R2 added ran on an already-expired ctx and could never succeed.
+// dynamic-stream fallback would run on an already-expired ctx and could never
+// succeed.
 // 3 s covers healthy bidis (typical < 50 ms) with ~60x headroom; the
 // remaining 7 s of probeCtx are available for the dynamic-stream attempt.
 const bidiProbeTimeout = 3 * time.Second
@@ -192,7 +193,7 @@ type SessionFinder interface {
 	// IsSupersededByUpgrade reports whether the given session has been
 	// replaced by a higher-grade session for the same peer. Used by the
 	// HWPCaller eviction loop to drop stale cached sessions so the next
-	// dispatch picks the upgraded one — L3 #7 fix.
+	// dispatch picks the upgraded one.
 	IsSupersededByUpgrade(session aether.Session) bool
 }
 
@@ -401,7 +402,7 @@ func (c *HWPCaller) evictExpiredCaches() {
 
 // evictIdle removes sessions unused for longer than callerMaxIdle OR
 // superseded by a higher-grade session for the same peer (grade upgrade
-// invalidation — L3 #7). Without the upgrade check, a cross-region
+// invalidation). Without the upgrade check, a cross-region
 // WS session cached on cold-start would keep being used for the full
 // 5-minute idle TTL even after a same-region Noise-UDP session opened
 // 30 seconds later.
@@ -525,7 +526,7 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 	//
 	// HTTP handler contexts (the OAuth callback path) never carry a
 	// deadline — Go's net/http defaults to a per-server cap which Fly's
-	// edge supersedes well before app.orbtr.io's handler is willing to
+	// edge supersedes well before a gateway's handler is willing to
 	// stop. Capping per-call at 10 s gives healthy probes ample time
 	// (typical mesh RPC RTT is < 50 ms) and forces dispatch off a
 	// wedged path within one timeout instead of one edge timeout.
@@ -558,8 +559,8 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 			// TIGHT inner cap (bidiProbeTimeout) carved out of probeCtx so
 			// the dynamic-stream fallback below still has a usable budget
 			// when bidi expires it. Without this carve-out, a wedged bidi
-			// consumed the full probeCtx and the fallback ran on an already-
-			// expired ctx — defeating the very fallthrough R2 wired in.
+			// would consume the full probeCtx and the fallback would run on
+			// an already-expired ctx — defeating the fallthrough entirely.
 			bidiCtx, bidiCancel := context.WithTimeout(probeCtx, bidiProbeTimeout)
 			resp, ok, err := c.finder.CallViaBidi(bidiCtx, r.NodeID, req)
 			bidiCancel()
@@ -739,9 +740,8 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 				// fired but the caller's ctx is still healthy. Fall
 				// through to the dynamic-stream path rather than hard-
 				// failing the dispatch. Without this check the cap
-				// became a hard ceiling instead of a recovery trigger
-				// (the failure mode that produced 0/20 dispatch success
-				// in v0.0.337 + the residual R2 wedge after v0.0.338).
+				// would be a hard ceiling instead of a recovery trigger,
+				// and a wedged bidi would fail every dispatch it carries.
 				if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 					// no breaker failure here — the fallback attempt
 					// will record its own success/failure
@@ -767,9 +767,9 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 
 	// Fallback: dynamic stream from pool (or open fresh). Pull the
 	// op_class hint from ctx so callOnce (warm path) gets the same
-	// priority-routing as the parallel-probe path. Audit H7 — without
-	// this the warm path always shipped at Priority=128 regardless
-	// of the caller's intent.
+	// priority-routing as the parallel-probe path. Without this the warm
+	// path would always ship at Priority=128 regardless of the caller's
+	// intent.
 	var stream aether.Stream
 	if cs != nil && cs.pool != nil {
 		stream, err = cs.pool.Get(ctx, session)
@@ -955,10 +955,9 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 //
 // Singleflight per role: when N concurrent calls hit the same cache miss
 // for a role, only ONE invokes c.finder.FindSession + builds the pool;
-// the others wait on the same in-flight result. Was the
-// M-FindSession-Stampede finding — a thundering herd of cache-miss
-// dispatches each independently walked the directory and overwrote
-// the cache, orphaning the others' StreamPool fills.
+// the others wait on the same in-flight result. Without it a thundering
+// herd of cache-miss dispatches would each walk the directory and
+// overwrite the cache, orphaning the others' StreamPool fills.
 func (c *HWPCaller) getOrFindSession(ctx context.Context, role, handler string) (aether.Session, *cachedSession, error) {
 	// Fast path: cache hit on a healthy session.
 	c.mu.RLock()
@@ -1023,10 +1022,9 @@ type findResult struct {
 
 // openDynamicStream opens a fresh stream (ID 10+) for this RPC call.
 // Used as fallback when no stream pool is available. The priority arg
-// lets callers map req.Context["opClass"] to the right band — L3 #10
-// fix; before this, every dynamic stream rode Priority=128 regardless
-// of class, so a bulk file-transfer RPC and a control-plane RPC shared
-// the same WDRR weight and a large bulk payload could head-of-line
+// lets callers map req.Context["opClass"] to the right band; at a fixed
+// Priority=128, a bulk file-transfer RPC and a control-plane RPC would
+// share the same WDRR weight and a large bulk payload could head-of-line
 // block control traffic.
 //
 // If priority is 0, defaults to 128 (Standard).
@@ -1052,10 +1050,9 @@ type opClassContextKey struct{}
 
 // WithOpClass returns a context that carries the operation-class hint
 // used by the dispatch path to pick stream priority. Empty class is a
-// no-op (same as Standard). Audit H7 — without this, callOnce
-// (the warm/cached-session path, which is the dominant code path in
-// steady state) hardcoded priority=128 even when realtime / bulk
-// classes were specified.
+// no-op (same as Standard). callOnce (the warm/cached-session path, the
+// dominant code path in steady state) reads it; without it that path would
+// ship at priority=128 even when realtime / bulk classes were specified.
 func WithOpClass(ctx context.Context, opClass string) context.Context {
 	if opClass == "" {
 		return ctx

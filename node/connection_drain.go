@@ -39,7 +39,7 @@ type DrainEntry struct {
 	State       DrainState
 	StartedAt   time.Time
 	Reason      string // "scale_down", "grade_upgrade", "budget_exceeded"
-	InFlightOps int    // MESH-C04: reserved for future per-op quiescence tracking — currently inert (never incremented); monitorDrain uses drainGracePeriod instead
+	InFlightOps int    // reserved for per-op quiescence tracking; nothing increments it, so monitorDrain waits drainGracePeriod instead of polling it
 }
 
 // DrainManager coordinates graceful connection draining.
@@ -97,9 +97,8 @@ func drainKey(peerNodeID, transport string) string {
 // onClosed callback.
 //
 // It does NOT wait for in-flight operations, and it does not use DrainTimeout.
-// drainGracePeriod replaces an in-flight poll because
-// InFlightOps is never incremented anywhere, so the poll saw 0 on its first
-// tick and closed almost immediately; monitorDrain now waits
+// Nothing increments InFlightOps, so a poll of it would read 0 on its first
+// tick and close almost immediately; monitorDrain therefore waits
 // min(dm.timeout, drainGracePeriod), which is 5s for every manager built by
 // NewDrainManager. DrainTimeout survives as the field's initial value and has
 // no effect while it exceeds drainGracePeriod.
@@ -134,7 +133,8 @@ func (dm *DrainManager) StartDrain(peerNodeID, transport, reason string) {
 
 // monitorDrain keeps the connection open for a best-effort grace period so
 // in-flight gossip/RPC can finish, then force-closes it. See
-// drainGracePeriod — the previous in-flight poll was inert and closed in ~1s.
+// drainGracePeriod: InFlightOps is never incremented, so it cannot signal
+// when in-flight work has ended.
 func (dm *DrainManager) monitorDrain(key string, entry *DrainEntry) {
 	grace := dm.timeout
 	if drainGracePeriod < grace {
@@ -277,7 +277,7 @@ func SelectForDrain(connections []ConnectionInfo, targetCount int) []ConnectionI
 }
 
 // shouldDrainFirst returns true if a should be drained before b.
-// Priority is the primary sort key so lower-priority (idle/low) partition
+// Priority is the primary sort key so lower-priority (idle/low)
 // connections are drained before higher-priority ones when scale-down
 // pressure hits.
 func shouldDrainFirst(a, b ConnectionInfo) bool {

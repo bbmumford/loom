@@ -98,8 +98,8 @@ func (s *ladStateStore) RecordsInBuckets(buckets uint16, want []bool) [][]byte {
 }
 
 // encodeRecords marshals each lad.Record to its protobuf form. An
-// individual record that fails to marshal is skipped — the same
-// tolerance the legacy respondToG1Exchange applied.
+// individual record that fails to marshal is skipped, so one bad record
+// never fails the whole G1 response.
 func encodeRecords(records []lad.Record) [][]byte {
 	out := make([][]byte, 0, len(records))
 	for _, rec := range records {

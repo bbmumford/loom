@@ -65,8 +65,8 @@ func RecordRoleSelection(result *RoleSelectionResult) {
 // 2. Auto-selection (capabilities + resources + health checks) - production default
 //
 // The config parameter defines the project-specific role definitions, valid
-// role names, and priority ordering. Each project (HSTLES, ORBTR) provides
-// its own RoleConfig.
+// role names, and priority ordering. Each composition root provides its own
+// RoleConfig.
 func SelectRoles(config *RoleConfig) *RoleSelectionResult {
 	result := &RoleSelectionResult{
 		Warnings: []string{},
@@ -88,14 +88,11 @@ func SelectRoles(config *RoleConfig) *RoleSelectionResult {
 		)
 
 		// Override skips *gating* but still populates Capabilities + Resources
-		// so downstream consumers that read Capabilities.Has("auth") /
-		// Resources.MaxRoles get truthful answers. Without this, override
-		// mode produces a half-initialised RoleSelectionResult and any
-		// callsite gating partial initialisation on Capabilities.Has(role)
-		// silently no-ops — for instance, the auth role's handler
-		// registration was being skipped because authCapable derived from
-		// nil Capabilities returned false despite "auth" being explicitly
-		// selected. The override is meant to bypass *checks*, not data.
+		// so a composition root that reads Capabilities.Has(role) /
+		// Resources.MaxRoles gets truthful answers. Left nil, a caller that
+		// gates a role's initialisation (such as its handler registration) on
+		// Capabilities.Has(role) cannot see a role the override explicitly
+		// selected. The override bypasses *checks*, not data.
 		result.Capabilities = DetectCapabilities(config)
 		result.Resources = DetectSystemResources()
 

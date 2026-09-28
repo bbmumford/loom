@@ -38,11 +38,10 @@ func swarmpbAddressNoiseUDP() swarmpb.Address_Transport {
 //
 // A node with multiple NICs (several 6PN families, dual VPNs, a private LAN
 // plus a Fly 6PN ULA) is reduced to a single private address by a lone
-// Platform.PrivateIP() call. Same-org peers that happen to share a different
-// prefix then see no
-// reachable private candidate and degraded to the public anycast path
-// — which then hits the cross-region UDP unreliability the connection
-// log shows.
+// Platform.PrivateIP() call. Same-origin peers that happen to share a
+// different prefix then see no reachable private candidate and degrade to
+// the public anycast path, which carries the cross-region UDP
+// unreliability the connection log shows.
 //
 // Filters:
 //   - Skip interfaces that are not up.
@@ -63,10 +62,10 @@ func swarmpbAddressNoiseUDP() swarmpb.Address_Transport {
 //
 // This enumeration does NOT include the platform-reported PrivateIP. That
 // defensive fallback — for containerised runtimes that hide the host's
-// NICs — is emitted by the caller at swarm_integration.go:528-531, two
-// statements before it calls advertiseLocalInterfaces. Stated here because
-// the previous wording read as if this function supplied it, which would
-// make an enumeration failure look survivable from inside this file alone.
+// NICs — is emitted by the caller, advertiseSwarmListeners in
+// swarm_integration.go, two statements before it calls
+// advertiseLocalInterfaces. An enumeration failure is therefore survivable
+// only because of that separate call, not because of anything in this file.
 type localInterfaceAddress struct {
 	Host  string
 	Scope string
@@ -144,7 +143,7 @@ func enumerateLocalInterfaces() []localInterfaceAddress {
 
 // advertiseLocalInterfaces emits a noise-UDP candidate per interface
 // address discovered. The platform-reported PrivateIP is advertised by the
-// caller (swarm_integration.go:528-531), not here — so if enumeration
+// caller (advertiseSwarmListeners in swarm_integration.go), not here — so if enumeration
 // returns nothing this function advertises nothing and logs nothing, and
 // the private candidate a peer needs comes from that separate call.
 // Idempotent — AdvertiseLocalAddress dedups by
