@@ -9,7 +9,8 @@
 // PunchRequest, the target validates it and replies with a signed
 // PunchOffer carrying the method aether/nat.ChooseMethod selects from
 // both sides' RFC 5780 NAT class. The synchronized simultaneous-dial
-// execution (Task 2.2) consumes the verified offers produced here.
+// execution (nat.ExecutePunch, driven by attemptHolePunch) consumes the
+// verified offers produced here.
 //
 // holepunchRPCHandler exposes the responder side over the mesh RPC
 // path: a peer invokes the "holepunch" handler over its existing
@@ -122,7 +123,7 @@ func (pc *punchCoordinator) buildOfferAuthenticated(req *nat.PunchRequest) *nat.
 
 // verifyOffer checks an inbound PunchOffer's Ed25519 signature against
 // the responder's public key. A nil return means the offer is
-// authentic and safe for the punch executor (Task 2.2) to act on.
+// authentic and safe for the punch executor (nat.ExecutePunch) to act on.
 func (pc *punchCoordinator) verifyOffer(offer *nat.PunchOffer, responderPub ed25519.PublicKey) error {
 	return offer.Verify(responderPub)
 }
@@ -187,9 +188,9 @@ func (pc *punchCoordinator) requestOffer(ctx context.Context, call punchRPCCalle
 }
 
 // (Coordinated-punch execution — ExecutePunch / ExecuteProbe / fire-time
-// derivation — lives in the transport-agnostic aether/nat package so the
-// HSTLES fleet and the ORBTR agent drive identical punch logic. This
-// file holds only the fleet-side wiring: signaling over mesh RPC and
+// derivation — lives in the transport-agnostic aether/nat package so
+// every caller of that package drives identical punch logic. This
+// file holds only the mesh-side wiring: signaling over mesh RPC and
 // the dial-path integration.)
 
 // holepunchRPCHandler is the responder side of punch signaling. It is
@@ -315,7 +316,7 @@ func (m *ConnectionManager) attemptHolePunch(ctx context.Context, nodeID, peerRe
 	// Bind the session to the long-lived runtime ctx, not the
 	// ephemeral dial ctx (which runEnsure cancels the instant attemptHolePunch
 	// returns) — otherwise the freshly hole-punched path is torn down at its
-	// first OpenStream, silently defeating coordinated NAT traversal. See E01.
+	// first OpenStream, silently defeating coordinated NAT traversal.
 	go m.rt.DialAndAcceptMesh(m.rt.ctx, baseConn.Conn, nodeID, peerRegion, ProtoNoiseUDP, bootstrapHost, serviceName, "", dialBorrowsConnectingState)
 	log.Printf("[multipath-dial] %s: hole-punch established noise-UDP path", truncID(nodeID))
 	return true

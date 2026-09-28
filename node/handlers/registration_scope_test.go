@@ -35,12 +35,12 @@ func (h *registrationScopeHandler) HandleStream(context.Context, MessageStream) 
 	return nil
 }
 
-// TestHandlerRegistryRejectsSentinelTenantScopeBeforeMutation proves the legacy
-// handlers registration path refuses ONLY the two non-declarable sentinels
-// (TenantScopeUnset zero value, ScopeUnknown proto-decay marker) before
-// mutating the handler map — matching the rpc.Registry path. A consumer-defined
-// opaque axis admits (see TestHandlerRegistryAcceptsOpaqueConsumerAxis); loom
-// no longer enumerates a fixed ladder at registration.
+// TestHandlerRegistryRejectsSentinelTenantScopeBeforeMutation proves the
+// HandlerRegistry registration path refuses ONLY the two non-declarable
+// sentinels (the scope.ScopeUnset zero value and ScopeUnknown) before mutating
+// the handler map — matching the rpc.Registry path. A consumer-defined opaque
+// tag is admitted (see TestHandlerRegistryAcceptsOpaqueConsumerAxis):
+// registerMeta checks scope.IsDeclared and enumerates no fixed ladder.
 func TestHandlerRegistryRejectsSentinelTenantScopeBeforeMutation(t *testing.T) {
 	registrars := []struct {
 		name string
@@ -81,8 +81,8 @@ func TestHandlerRegistryRejectsSentinelTenantScopeBeforeMutation(t *testing.T) {
 	}
 }
 
-// TestHandlerRegistryAcceptsOpaqueConsumerAxis proves the legacy handlers path
-// admits a consumer-defined opaque scope tag loom does not bless — its meaning
+// TestHandlerRegistryAcceptsOpaqueConsumerAxis proves the HandlerRegistry
+// registration path admits a consumer-defined opaque scope tag loom does not bless — its meaning
 // is the consumer PresencePolicy's to judge, and an unrecognised tag fails
 // CLOSED at enforcement (proven in the rpc package).
 func TestHandlerRegistryAcceptsOpaqueConsumerAxis(t *testing.T) {

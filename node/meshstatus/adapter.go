@@ -55,9 +55,9 @@ func (d *directoryCacheAdapter) Reach(ctx context.Context, partition string, que
 }
 
 // NewHandlerFromRuntime creates a /mesh/status handler from runtime components.
-// This is the convenience constructor used by each endpoint's main.go.
+// This is the convenience constructor a composition root mounts at /mesh/status.
 // It avoids circular imports by accepting the individual components rather than
-// the full node.Runtime struct.
+// the full node.Runtime struct. opts pass through to NewHandler unchanged.
 func NewHandlerFromRuntime(
 	nodeID aether.NodeID,
 	vl1MetricsFn func() map[string]interface{},
@@ -65,6 +65,7 @@ func NewHandlerFromRuntime(
 	serviceName string,
 	platform ports.PlatformInfo,
 	startTime time.Time,
+	opts ...Option,
 ) http.HandlerFunc {
 	if platform == nil {
 		platform = ports.DevPlatform()
@@ -79,5 +80,5 @@ func NewHandlerFromRuntime(
 		directory:   dirProvider,
 		serviceName: serviceName,
 	}
-	return NewHandler(adapter, platform, startTime)
+	return NewHandler(adapter, platform, startTime, opts...)
 }

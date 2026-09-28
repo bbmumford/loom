@@ -12,17 +12,15 @@ import (
 )
 
 // LocalDispatcher mirrors dispatch.LocalDispatcher — the rpc package
-// keeps the type alias so existing callers (the runtime adapter at
-// mesh/node/rpc_local_dispatch.go, and any out-of-tree consumers)
-// don't need to change imports. The canonical implementation + global
-// dispatcher state lives in the dispatch package so dispatch.CallJSON,
-// dispatch.CallProto, rpc.Call, and rpc.CallRaw all consult the same
-// installed instance.
+// keeps the type alias so callers (the runtime adapter at
+// node/rpc_local_dispatch.go, and any out-of-tree consumers) can import it
+// from here. The canonical implementation + global dispatcher state lives in
+// the dispatch package so dispatch.CallJSON, dispatch.CallProto, rpc.Call,
+// and rpc.CallRaw all consult the same installed instance.
 //
-// Audit critical fix #2 — before this consolidation each package had
-// its own copy of the global, so the per-domain dispatch shims that
-// go through dispatch.CallProto silently bypassed the local-handler
-// short-circuit that rpc.Call had.
+// One global, not one per package: a per-package copy would let a dispatch
+// shim that goes through dispatch.CallProto silently skip the local-handler
+// short-circuit rpc.Call takes.
 type LocalDispatcher = sharedDispatch.LocalDispatcher
 
 // SetLocalDispatcher delegates to dispatch.SetLocalDispatcher so the

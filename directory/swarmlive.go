@@ -3,9 +3,9 @@
  * Queries: licensing@hstles.com
  */
 
-// Package directory implements the Phase-0.5 cutover ports: the fail-closed
-// TrustPolicy (trust.go), the Swarm-backed LiveDirectory projection
-// (swarmlive.go), and the shadow parity comparator (shadow.go).
+// Package directory implements loom's directory and trust ports: the
+// fail-closed TrustPolicy (trust.go), the Swarm-backed LiveDirectory
+// projection (swarmlive.go), and the shadow parity comparator (shadow.go).
 package directory
 
 import (
@@ -61,13 +61,12 @@ type recordSlot struct {
 // SwarmDirectory is the Swarm-backed ports.LiveDirectory: immutable typed
 // projections fed by ONE accepted-record stream (Ingest), with every
 // accepted record journaled first — restart replays the journal through
-// the same projection path, reproducing identical state (§0.5.4).
+// the same projection path, reproducing identical state.
 //
-// Wiring: swarm's Config.OnAccepted → Ingest (v0.0.9 hardened swarm), or
-// per-topic swarm.Node.Subscribe callbacks → Ingest on v0.0.8. During the
-// shadow phase, records may also be fed from the LAD side; the optional
-// TrustPolicy re-gates every record pre-projection so an unhardened source
-// cannot pollute the views.
+// Wiring: swarm's Config.OnAccepted → Ingest, or per-topic
+// swarm.Node.Subscribe callbacks → Ingest. Records may also be fed from the
+// LAD side for the shadow comparison; the optional TrustPolicy re-gates every
+// record pre-projection so an unhardened source cannot pollute the views.
 type SwarmDirectory struct {
 	journal ports.DurableJournal
 	policy  ports.TrustPolicy // optional pre-projection gate
@@ -299,7 +298,7 @@ func (d *SwarmDirectory) projectPeerLocked(r ports.Record) {
 	}
 	if pr.Capabilities != nil {
 		m.Roles = append([]string(nil), pr.Capabilities.Roles...)
-		// ports.Member.Roles is contractually lexicographic (#R-1607 ④).
+		// ports.Member.Roles is contractually lexicographic.
 		// Sorted HERE, at the write, rather than in Member()/Members() — the
 		// same idiom this file already uses for reach addresses (sorted by
 		// Priority immediately before the only store below), so the verbatim
@@ -442,7 +441,7 @@ func (d *SwarmDirectory) Member(_ context.Context, partition ports.Partition, id
 //
 // Swarm carries roles inside the peer record, so unlike the LAD side there is
 // no separate role record that could exist without a member — the projection
-// is the only source. Roles are already sorted at projection (#R-1607 ④); the
+// is the only source. Roles are already sorted at projection; the
 // clone below preserves that and the result is ordered by NodeID so the two
 // implementations are comparable.
 func (d *SwarmDirectory) RoleAdverts(_ context.Context, partition ports.Partition) ([]ports.RoleAdvert, error) {
@@ -625,9 +624,9 @@ var _ ports.LiveDirectory = (*SwarmDirectory)(nil)
 // 🛑 Key IS PART OF THE ORDER, not a nicety. With composite keys one node
 // holds several records on a topic, so ordering by NodeID alone leaves their
 // relative order to Go's map iteration — and Fingerprint() hashes this exact
-// sequence. A fingerprint that reorders run-to-run makes shadow parity
-// (§0.5.3 stage 3) fail at random, or worse, mask a real divergence behind
-// noise everyone learns to ignore.
+// sequence. A fingerprint that reorders run-to-run makes shadow parity fail
+// at random, or worse, mask a real divergence behind noise everyone learns to
+// ignore.
 //
 // Members() deliberately does NOT use this: a member is per-node, so NodeID
 // alone is its full identity.

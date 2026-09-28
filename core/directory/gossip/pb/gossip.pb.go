@@ -23,11 +23,9 @@ const (
 
 // GossipEnvelope is the wire format for gossip exchanges.
 // The records field carries opaque serialised payloads — the gossip engine
-// does not know or care about record structure. Each consumer (HSTLES LAD,
-// Hospitium CRDTs, Mercury announcements) defines its own record proto.
-//
-// When this package extracts to Whisper, this proto moves with it.
-// The LADRecord message below stays in HSTLES/Ledger.
+// does not know or care about record structure. Each consumer defines its
+// own record proto; LADRecord below is the directory's, and the envelope
+// does not depend on it.
 type GossipEnvelope struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Meta          *ExchangeMeta          `protobuf:"bytes,1,opt,name=meta,proto3" json:"meta,omitempty"`
@@ -336,12 +334,11 @@ func (x *ConnectionOffer) GetSignature() []byte {
 	return nil
 }
 
-// LADRecord is the wire format for HSTLES/ORBTR directory records.
-// This message stays in HSTLES/Ledger when Whisper is extracted —
-// it is NOT part of the gossip engine's generic envelope.
+// LADRecord is the wire format for loom directory records. It is NOT part
+// of the gossip engine's generic envelope.
 //
-// Fields 12-15 are the C1 follow-up additions so receiving peers can
-// reconstruct the full lad.Record state from a gossip exchange:
+// Fields 12-15 let receiving peers reconstruct the full lad.Record state
+// from a gossip exchange:
 //   - hlc_timestamp: HLC tie-breaker for IBLT reconcile and snapshot
 //     manifest HLC; without it, every peer interprets the record at
 //     HLC=0 and stale records win on equal lamport clocks.
@@ -352,7 +349,7 @@ func (x *ConnectionOffer) GetSignature() []byte {
 //   - blob_cid: content-addressed reference for off-record blobs
 //     (snapshot manifest payloads).
 //
-// All four use the existing zero-check pattern from `deleted_at_unix`
+// All four use the zero-check pattern from `deleted_at_unix`
 // so unset fields round-trip cleanly without surprise default-zero
 // effects.
 type LADRecord struct {

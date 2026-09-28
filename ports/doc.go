@@ -3,38 +3,35 @@
  * Queries: licensing@hstles.com
  */
 
-// Package ports defines the explicit seams the loom extraction and the
-// Phase-0.5 directory cutover are built on. Nothing in this package has
-// behaviour — these are contracts:
+// Package ports defines the explicit seams between loom's node runtime and
+// the directory, journal, trust and host implementations it is composed with.
+// Nothing in this package has behaviour — these are contracts:
 //
-//   - LiveDirectory  — the single typed live replicated-state read surface
-//     (Phase 0.5.1). Initially adapted over the LAD DirectoryCache; cutover
-//     target is Swarm-backed immutable projections.
+//   - LiveDirectory  — the single typed live replicated-state read surface,
+//     implemented over the LAD DirectoryCache and over Swarm-backed
+//     immutable projections.
 //   - DurableJournal — durable history and recovery behind a narrow append
-//     port (Phase 0.5.1). Initially a hardened Ledger/MeshLedger adapter.
-//     It is never a second live merge authority.
+//     port. It is never a second live merge authority.
 //   - TrustPolicy    — fail-closed NodeID↔key / partition / topic / role /
-//     observer / secret-recipient authorization (Phase 0.5.1). Mandatory
-//     pre-store gate; self-advertised RoleTable state is NOT a trust root.
-//   - RoleActivator  — the Phase-1 runtime role-init path (the single
-//     largest net-new build; roles are fixed at boot today).
-//   - The §0.3 Config injection seams — MeshFallbackStatsFunc,
-//     AuthValidator, BootstrapInfo/VerifyBootstrapFunc, PlatformInfo —
-//     that replace the HSTLES library couplings. (The domain-registration
-//     seam is node.Config.RegisterDomains, typed directly with the
-//     in-module *rpc.Registry.)
+//     observer / secret-recipient authorization. Mandatory pre-store gate;
+//     self-advertised RoleTable state is NOT a trust root.
+//   - RoleActivator  — the runtime role-init path that brings a role's
+//     services up after boot.
+//   - The Config injection seams — MeshFallbackStatsFunc, AuthValidator,
+//     BootstrapInfo/VerifyBootstrapFunc, PlatformInfo — through which a
+//     composition root supplies host- and deployment-specific behaviour.
+//     (The domain-registration seam is node.Config.RegisterDomains, typed
+//     directly with the in-module *rpc.Registry.)
 //
-// Type provenance: types here are loom-local and provisional where the plan
-// allows it (NodeID, Topic, Watermark, Record). Where the plan REQUIRES
-// type identity with an upstream module for the preserved public surface
-// (aether.NodeID, grade.Grade, lad types — Appendix A hazard), the Phase-0
-// extraction must alias or depend on the identical upstream version;
-// adapters map these port types at the boundary.
+// Type provenance: NodeID, Topic, Watermark and Record are loom-local. Where
+// the public surface needs type identity with an upstream module
+// (aether.NodeID, grade.Grade, lad types), loom aliases or depends on the
+// identical upstream version; adapters map these port types at the boundary.
 //
-// Non-negotiable migration invariants (plan §0.5.4):
+// Invariants every implementation keeps:
 //
-//   - Exactly one live merge/convergence authority at each cutover stage;
-//     no permanent Swarm↔LAD feedback loop.
+//   - Exactly one live merge/convergence authority at a time; no permanent
+//     Swarm↔LAD feedback loop.
 //   - Authorization happens before a record can affect roles, reachability,
 //     routing, handlers, anchor snapshots, or secret recipients.
 //   - Owner-signed provenance survives gossip, persistence, snapshot,

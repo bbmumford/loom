@@ -95,12 +95,11 @@ func (s *RPCServer) serveUnclaimedStream(ctx context.Context, stream aether.Stre
 	s.ServeMeshStream(ctx, stream, remoteID)
 }
 
-// ServeMeshStreamBidirectional was removed. It had no callers, and as
-// written it was broken as a bidirectional server — no request/response
-// correlation (any inbound response was logged "Unrecognized message" and
-// dropped, the exact order-based hazard the review flagged), no panic recovery,
-// and it ignored Marshal/Send errors. The correlated bidirectional path is
-// BidiRPC (bidi_rpc.go), which every production caller already uses.
+// ServeMeshStream is one-directional. A bidirectional server on a mesh
+// stream needs request/response correlation (an uncorrelated one logs an
+// inbound response as "Unrecognized message" and drops it), panic recovery,
+// and Marshal/Send error handling; BidiRPC (bidi_rpc.go) provides all three
+// and is the bidirectional path every production caller uses.
 
 // ErrAetherHandlerNotFound is returned when no handler is registered for a method.
 var ErrAetherHandlerNotFound = fmt.Errorf("aether rpc: handler not found")

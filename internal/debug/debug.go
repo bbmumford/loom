@@ -36,13 +36,12 @@ func init() {
 }
 
 // Configure replaces the debug log output destination and (optionally)
-// flips the legacy global-enable switch on. The tag-list activation
-// model is the source of truth for which namespaces emit — Configure
-// is retained for back-compat with code that historically toggled all
-// debug at once.
+// flips the global-enable switch on. The tag-list activation model is the
+// source of truth for which namespaces emit — Configure serves callers that
+// toggle all debug at once.
 //
-//	debug.Configure(true, os.Stderr)   // legacy: equivalent to DEBUG=*
-//	debug.Configure(false, nil)        // legacy: silence everything regardless of DEBUG
+//	debug.Configure(true, os.Stderr)   // equivalent to DEBUG=*
+//	debug.Configure(false, nil)        // clears the global switch; DEBUG tags still apply
 func Configure(enabled bool, output io.Writer) {
 	forceAllEnabled.Store(enabled)
 	mu.Lock()
@@ -56,7 +55,7 @@ func Configure(enabled bool, output io.Writer) {
 	refreshLoggers()
 }
 
-// SetEnabled flips the legacy "everything on" toggle. Equivalent to
+// SetEnabled flips the global "everything on" toggle. Equivalent to
 // setting DEBUG=* — every Logger and every registered Feature becomes
 // enabled. Use SetTags for finer-grained control.
 func SetEnabled(enabled bool) {
@@ -64,7 +63,7 @@ func SetEnabled(enabled bool) {
 	refreshLoggers()
 }
 
-// IsEnabled reports whether the legacy "everything on" toggle is set.
+// IsEnabled reports whether the global "everything on" toggle is set.
 // Prefer TagEnabled("<namespace>") when checking a specific feature.
 func IsEnabled() bool {
 	return forceAllEnabled.Load()
@@ -151,8 +150,8 @@ func (l *Logger) isEnabled() bool {
 }
 
 // SetNamespaceEnabled enables/disables debug for a specific namespace
-// at runtime. Bypasses the tag list; intended for legacy callers and
-// per-test fixtures. For env-driven control, set DEBUG=<namespace> or
+// at runtime. Bypasses the tag list; intended for callers that set one
+// namespace directly and for per-test fixtures. For env-driven control, set DEBUG=<namespace> or
 // DEBUG=<prefix>.* and let TagEnabled drive activation.
 func SetNamespaceEnabled(namespace string, enabled bool) {
 	mu.Lock()

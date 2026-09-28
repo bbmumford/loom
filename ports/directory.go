@@ -14,13 +14,12 @@ type Member struct {
 	// Roles are the node's service roles ("auth", "identity", …) — NOT
 	// swarm.Role — returned in LEXICOGRAPHIC ORDER.
 	//
-	// The ordering is part of the contract (#R-1607 ④), stated here for the
-	// same reason Reach below states "priority-ordered": an implementation
-	// that returned map order would make Member undiffable and unhashable,
-	// and a consumer indexing Roles[0] would get a different answer per
-	// implementation. It was previously unstated and the two implementations
-	// disagreed — LADDirectory sorted, SwarmDirectory returned producer
-	// order (#M-620 ④).
+	// The ordering is part of the contract, stated here for the same reason
+	// Reach below states "priority-ordered": an implementation that returned
+	// map order would make Member undiffable and unhashable, and a consumer
+	// indexing Roles[0] would get a different answer per implementation.
+	// SwarmDirectory sorts once when it projects a record, before storing;
+	// LADDirectory stores nothing and sorts each projection it returns.
 	Roles          []string
 	PartitionID    string
 	Region         string
@@ -34,7 +33,7 @@ type Member struct {
 	// service name under BOTH spellings — the swarm→LAD bridge writes
 	// "serviceName", reach-published records document "service_name").
 	// Without this, a consumer needing any other key must bypass the port
-	// entirely (#R-1464 ④).
+	// entirely.
 	//
 	// Additive: never a substitute for the typed fields, which stay the
 	// primary surface. Nil when the producer carries no metadata.
@@ -45,7 +44,7 @@ type Member struct {
 //
 // It carries BOTH the normalised form (Protocol/Address) and the producer's
 // raw form (RawProtocol/Host/Port). The raw fields are ADDITIVE — they never
-// replace the normalised ones (#R-1464 ④).
+// replace the normalised ones.
 //
 // 🛑 WHY THE RAW FORM EXISTS, because "we already have Address" is the
 // tempting reading: the normalisation RENAMES transports. The reach layer
@@ -64,8 +63,8 @@ type ReachAddress struct {
 	// Protocol is the NORMALISED transport name: "noise-udp" > "ws" > "grpc" >
 	// "http", best first.
 	//
-	// 🛑 THIS VOCABULARY IS NOT THE WIRE'S, AND SAYING SO IS THE POINT
-	// (#R-1517 ①). It is what SwarmDirectory derives from the
+	// 🛑 THIS VOCABULARY IS NOT THE WIRE'S, AND SAYING SO IS THE POINT.
+	// It is what SwarmDirectory derives from the
 	// Address_Transport enum. The reach layer's records — already written, and
 	// data at rest is a compatibility event with no publish event — carry a
 	// DIFFERENT vocabulary, measured across all 16 module roots:
@@ -94,7 +93,7 @@ type ReachAddress struct {
 	// scores noise-udp=0 and sorts with `<`. Both are internally consistent
 	// and they are in different packages, so nothing catches a reader who
 	// carries the intuition across — and the failure is a silently reversed
-	// dial preference, not an error (#M-547).
+	// dial preference, not an error.
 	//
 	// Unknown transports take a deliberately worst rank rather than 0, so an
 	// unrecognised address can never outrank a known one.
@@ -117,8 +116,7 @@ type ReachAddress struct {
 }
 
 // LatencySample is one predicted/observed RTT observation between two nodes.
-// Multiple observations per node require composite record keys (Phase-0.5
-// blocker 7) — the schema reason latency cuts over last.
+// Multiple observations per node require composite record keys (Record.Key).
 type LatencySample struct {
 	From, To         NodeID
 	RTTMs            float64
@@ -127,14 +125,14 @@ type LatencySample struct {
 
 // HandlerAdvert is a typed RPC-handler advertisement (who serves a name).
 type HandlerAdvert struct {
-	Name   string // FQN, e.g. "hstles.auth.<op>"
+	Name   string // FQN, e.g. "orbtr.<domain>.<Op>"
 	NodeID NodeID
 	Roles  []string
 }
 
 // RoleAdvert is one node's service-role advertisement.
 //
-// Roles are lexicographic, matching Member.Roles (#R-1607 ④).
+// Roles are lexicographic, matching Member.Roles.
 type RoleAdvert struct {
 	NodeID NodeID
 	Roles  []string
@@ -146,7 +144,7 @@ type RoleAdvert struct {
 // 🛑 WHY THIS IS A SEPARATE INTERFACE AND NOT A METHOD ON LiveDirectory.
 // LiveDirectory is exported on a published module. Adding a method to a
 // published INTERFACE breaks every external implementer at compile time —
-// additive on a struct, not on an interface (#R-1598 ②). The capability is
+// additive on a struct, not on an interface. The capability is
 // therefore offered as a probe: `if re, ok := dir.(ports.RoleEnumerator); ok`.
 // Both in-tree implementations satisfy it.
 //
@@ -155,55 +153,53 @@ type RoleAdvert struct {
 // entries), so a node that has published a ROLE record but no member record
 // is absent from it. Counting members-with-roles is therefore a DIFFERENT
 // QUANTITY from counting role advertisements, and the difference is silent —
-// which is exactly why node/runtime.go's mesh-status count stayed on the raw
-// cache with a recorded capability gap (#M-619 ⑤) rather than being
-// approximated through the port.
+// which is why node/runtime.go's mesh-status role count probes this interface
+// and reports 0 when it is absent, rather than approximating through Members.
 //
 // NodesByRole answers "who has role X"; this answers "who has any role".
 type RoleEnumerator interface {
-	// RoleAdverts returns every role advertisement in a tenant, one entry per
+	// RoleAdverts returns every role advertisement in a partition, one entry per
 	// advertising node. Order is by NodeID so the result is comparable.
 	RoleAdverts(ctx context.Context, partition Partition) ([]RoleAdvert, error)
 }
 
 // DirectorySnapshot is a deterministic point-in-time view: two nodes with the
 // same accepted-record set produce the same Fingerprint. Used for shadow
-// parity comparison (Phase-0.5 stage 3) and anchor snapshot input.
+// parity comparison and anchor snapshot input.
 type DirectorySnapshot struct {
 	Watermark   Watermark
 	Fingerprint [32]byte
 	Records     []Record
 }
 
-// LiveDirectory is the single typed read surface for live replicated state
-// (Phase 0.5.1). Every Mesh consumer reads through it — the cutover
-// inventory must eliminate direct DirectoryCache/Ledger reads outside
-// adapters before shadow mode starts.
-//
-// Implementations: (1) transitional adapter over the LAD DirectoryCache;
-// (2) Swarm-backed immutable projections fed by one accepted-record stream.
-// Records surface here only AFTER TrustPolicy authorization (pre-store for
-// Swarm; pre-projection during shadow migration).
-//
-// Capability-parity requirement (plan B.4): every LAD typed query/index,
-// liveness override, ACL, changed-since/fingerprint/bucket view, and
-// anchor-snapshot input must map explicitly to a method here or to
-// DurableJournal before Ledger/Whisper removal. "Swarm has a record map"
-// is not parity — RecordsByTopic is an escape hatch for KeyOps/Quorum
-// consumers, not a substitute for the typed projections.
 // Partition scopes a directory query.
 //
 // 🛑 IT IS A LITERAL BUCKET KEY, NOT A WILDCARD — measured against ladcache:
-// a record stored with Partition "hstles" returns 0 from a query for "" and 1
-// from a query for "hstles". The empty partition selects records stored with
+// a record stored with Partition "p1" returns 0 from a query for "" and 1
+// from a query for "p1". The empty partition selects records stored with
 // an empty partition, nothing more.
 //
-// This parameter exists because the substrate requires it and the port used to
-// hide it (#R-1455 ③). Nine of loom's ten partition-scoped cache reads pass "",
-// and they still may — but they now SAY SO, which is the precondition for
-// fixing the hardcode rather than the fix itself.
+// This parameter exists because the substrate keys every read by it. Most of
+// loom's partition-scoped cache reads pass "", the bucket loom itself writes;
+// passing it explicitly keeps that choice visible at each call site.
 type Partition string
 
+// LiveDirectory is the single typed read surface for live replicated state,
+// so a consumer need not read a DirectoryCache or Ledger directly.
+//
+// Implementations: LADDirectory (directory/ladlive.go), an adapter over the
+// LAD DirectoryCache; SwarmDirectory (directory/swarmlive.go), immutable
+// projections fed by one accepted-record stream. Records surface here only
+// AFTER TrustPolicy authorization (before the store for Swarm; before the
+// projection for the shadow directory).
+//
+// "Swarm has a record map" is not parity: RecordsByTopic is an escape hatch
+// for KeyOps/Quorum consumers, not a substitute for the typed projections.
+//
+// TODO: every LAD typed query/index, liveness override, ACL,
+// changed-since/fingerprint/bucket view, and anchor-snapshot input must map
+// explicitly to a method here or to DurableJournal before the Ledger and
+// Whisper imports can be dropped.
 type LiveDirectory interface {
 	// Members returns the live membership projection for one partition
 	// (tombstoned/TTL-expired entries excluded unless still within retention
@@ -221,21 +217,21 @@ type LiveDirectory interface {
 	// Reach returns priority-ordered dial candidates for a node.
 	Reach(ctx context.Context, partition Partition, id NodeID) ([]ReachAddress, error)
 
-	// Latency takes NO tenant, deliberately: the substrate indexes latency by
+	// Latency takes NO partition, deliberately: the substrate indexes latency by
 	// observing node only (ladcache.Latency(fromNode)), and adding a parameter
 	// the layer beneath does not use would be the same error as hiding one it
 	// does — a port promising a distinction that does not exist. The same
 	// reasoning keeps RecordsByTopic, OverrideLiveness, Snapshot, Fingerprint
-	// and Subscribe tenant-free.
+	// and Subscribe partition-free.
 	//
 	// Latency returns the freshest RTT observation between two nodes;
 	// ok=false when no observation exists. Dropping this feed silently
-	// reverts route/dispatch ordering to grade-only (plan B.5 Vivaldi note).
+	// reverts route/dispatch ordering to grade-only.
 	Latency(ctx context.Context, from, to NodeID) (s LatencySample, ok bool, err error)
 
 	// HandlersByName returns the nodes advertising an RPC handler FQN.
-	// rpc_forward target discovery reads this (via RoleTable today) — the
-	// cutover must not re-point it at retired LAD Roles records.
+	// rpc_forward target discovery reads handler adverts through
+	// RoleTable.Lookup, not LAD Roles records.
 	HandlersByName(ctx context.Context, partition Partition, name string) ([]HandlerAdvert, error)
 
 	// RecordsByTopic returns the accepted records of one topic (KeyOps,

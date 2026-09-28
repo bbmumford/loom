@@ -12,9 +12,9 @@ import (
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
-// These probes began as a characterisation of the camelCase/snake_case split
-// in mutable RPC maps. The replacement contract makes spelling irrelevant:
-// neither map is authority. Only the typed server-established identity may
+// These probes put a partition key into the mutable RPC map in both the
+// camelCase and the snake_case spelling. Spelling is irrelevant: the map is not
+// authority in either spelling. Only the typed server-established identity may
 // satisfy a scope tier.
 const probeTenant = "orbtr"
 
@@ -29,12 +29,11 @@ func TestSpellingProbe_MeshShapedArrivalIsDenied(t *testing.T) {
 		}), h)
 
 		if err == nil {
-			t.Errorf("scope %q: a mesh-shaped arrival was ADMITTED. The tenant-key "+
-				"spelling appears to have been reconciled. That is the change R-959 "+
-				"required a probe for: verify the identity-substitution half was "+
-				"addressed FIRST, because on single-tenant-fallback endpoints the "+
-				"transport/request tenant-match check is a no-op and this admission "+
-				"carries the SENDING APP'S constant, not the caller's tenant", scope)
+			t.Errorf("scope %q: a mesh-shaped arrival was ADMITTED from a mutable "+
+				"request-map key. Only the typed authenticated identity may satisfy "+
+				"a scope tier: on an unbound (\"default\") transport the "+
+				"transport/identity partition check is skipped, so this admission "+
+				"would carry the SENDING APP'S constant, not the caller's partition", scope)
 			continue
 		}
 		if !strings.Contains(err.Error(), "tenant") && !strings.Contains(err.Error(), "org") {
@@ -44,8 +43,8 @@ func TestSpellingProbe_MeshShapedArrivalIsDenied(t *testing.T) {
 	}
 }
 
-// TestSpellingProbe_ReaderShapedArrivalIsDenied proves the old snake_case
-// accidental admission is gone. Neither spelling is scope authority.
+// TestSpellingProbe_ReaderShapedArrivalIsDenied proves the snake_case spelling
+// admits nothing either. Neither spelling is scope authority.
 func TestSpellingProbe_ReaderShapedArrivalIsDenied(t *testing.T) {
 	r := newScopedRegistry()
 

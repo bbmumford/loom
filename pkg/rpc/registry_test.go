@@ -7,6 +7,8 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/emptypb"
 	"google.golang.org/protobuf/types/known/wrapperspb"
+
+	"github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 func TestRegistryBasics(t *testing.T) {
@@ -313,5 +315,42 @@ func TestRegisterAllAtomic_Success(t *testing.T) {
 	}
 	if reg.Count() != 3 {
 		t.Errorf("Count = %d, want 3", reg.Count())
+	}
+}
+
+// TestRegistrationRefusesZeroRequirement: a non-nil Requirement whose arm was
+// never set is refused on every registration path, so a handler cannot reach
+// enforcement carrying a requirement that declares nothing. The three declared
+// arms and a nil Requirement still register.
+func TestRegistrationRefusesZeroRequirement(t *testing.T) {
+	zero := func(op string) Handler {
+		h := atomicH(op)
+		h.Requirement = &scope.Requirement{}
+		return h
+	}
+	reg := NewRegistry()
+	if err := reg.Register(zero("Z1")); err == nil {
+		t.Fatal("Register accepted a Requirement with no arm")
+	}
+	if err := reg.RegisterAll([]Handler{atomicH("Z2ok"), zero("Z2")}); err == nil {
+		t.Fatal("RegisterAll accepted a Requirement with no arm")
+	}
+	if err := reg.RegisterProxy([]Handler{zero("Z3")}); err == nil {
+		t.Fatal("RegisterProxy accepted a Requirement with no arm")
+	}
+	if reg.Count() != 0 {
+		t.Fatalf("Count = %d after refused registrations, want 0", reg.Count())
+	}
+
+	open, capability, nexus := scope.Open(), scope.Capability("orbtr:records.read"), scope.Nexus()
+	for op, req := range map[string]*scope.Requirement{"Open": &open, "Cap": &capability, "Nexus": &nexus, "None": nil} {
+		h := atomicH(op)
+		h.Requirement = req
+		if err := reg.Register(h); err != nil {
+			t.Errorf("Register(%s): %v", op, err)
+		}
+	}
+	if reg.Count() != 4 {
+		t.Errorf("Count = %d, want 4", reg.Count())
 	}
 }

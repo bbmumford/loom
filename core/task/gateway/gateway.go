@@ -80,7 +80,7 @@ type Gateway struct {
 	admissionsByID        map[string]*taskAdmission
 	partitionOutstanding  map[ports.ExecutionPartitionKey]int
 	closing               chan struct{}
-	stopOnce              sync.Once // MESH-H08: makes Stop idempotent (close(g.closing) once)
+	stopOnce              sync.Once // makes Stop idempotent (close(g.closing) once)
 	stopped               bool
 }
 
@@ -213,8 +213,9 @@ func (g *Gateway) Start(ctx context.Context) {
 	}()
 }
 
-// Stop closes internal channels once workers drain. MESH-H08: idempotent — a
-// second Stop previously panicked with "close of closed channel".
+// Stop closes internal channels once workers drain. Idempotent: stopOnce
+// guards close(g.closing), which would panic with "close of closed channel"
+// on a second call, and Start's ctx watcher calls Stop too.
 func (g *Gateway) Stop() {
 	g.stopOnce.Do(func() {
 		g.mu.Lock()
@@ -593,7 +594,7 @@ func (g *Gateway) issueAssignmentLocked(state *offerState, bid *task.Bid) {
 		attempt:    t.Attempt,
 	}
 	g.lastWin[bid.NodeID] = now
-	// MESH-H05: prune lastWin entries older than the recent-win window so the map
+	// Prune lastWin entries older than the recent-win window so the map
 	// can't accumulate one permanent entry per winning node across fleet churn.
 	// Only entries within MaxRecentWindow affect handleBid's recentWin decision.
 	if win := g.config.BidPolicy.MaxRecentWindow; win > 0 {
@@ -643,18 +644,18 @@ func (g *Gateway) handleResult(result task.Result) {
 		state.task.Status = task.TaskStatusCompleted
 		g.releaseAdmissionLocked(state.task)
 	case task.ResultStatusRejected:
-		// Authorization and tenant failures are deterministic for this admitted
+		// Authorization and partition failures are deterministic for this admitted
 		// object. Retrying them cannot create authority and only amplifies load.
 		state.task.Status = task.TaskStatusFailed
 		g.releaseAdmissionLocked(state.task)
 	default:
 		state.task.Status = task.TaskStatusFailed
-		// MESH-H09: use the same retry budget as produceOffers / expireLeases
+		// Use the same retry budget as produceOffers / expireLeases
 		// (clone.Attempt <= MaxAttempts). state.task.Attempt+1 is what
 		// CloneForRetry sets clone.Attempt to, so `+1 <= MaxAttempts` matches;
-		// the previous `+1 < MaxAttempts` stopped one attempt early, so a task
-		// got a different number of retries depending on whether it failed
-		// (here) vs timed out (expireLeases).
+		// `+1 < MaxAttempts` would stop one attempt early, so a task would get
+		// a different number of retries depending on whether it failed (here)
+		// or timed out (expireLeases).
 		if state.task.Attempt+1 <= g.config.MaxAttempts {
 			g.scheduleRetryLocked(state.task)
 		} else {

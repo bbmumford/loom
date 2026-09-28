@@ -16,33 +16,31 @@ import (
 	"github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
-// This file holds the Config injection seams that replace the HSTLES
-// library couplings (plan §0.3). Zero-value = current behaviour for all of
-// them EXCEPT Platform: loom cannot reproduce host.Detect() auto-detection,
-// so nil Platform falls back to DevPlatform() and cloud deployments MUST
-// inject their platform implementation or they silently lose
+// This file holds the Config injection seams through which a composition root
+// supplies host- and deployment-specific behaviour. A nil seam keeps loom's
+// built-in behaviour for all of them EXCEPT Platform: loom has no host
+// auto-detection, so nil Platform falls back to DevPlatform() and cloud
+// deployments MUST inject their platform implementation or they silently lose
 // fly-global-services UDP bind, 6PN origin detection, and region codes.
 
-// MeshFallbackStatsFunc supplies session-validate fallback-cache counters
-// (§0.3 #1, replaces platform/session.MeshFallbackStats). The return type is
-// uint64 — NOT int — because the values are assigned directly into the
-// metrics map. When nil, the runtime still emits
-// session_validate_cache_hits=0 / session_validate_cache_misses=0 so the
-// metrics schema is unchanged.
+// MeshFallbackStatsFunc supplies session-validate fallback-cache counters.
+// The return type is uint64 — NOT int — because the values are assigned
+// directly into the metrics map. When nil, the runtime still emits
+// session_validate_cache_hits=0 / session_validate_cache_misses=0 so both
+// metric keys are always present.
 type MeshFallbackStatsFunc func() (hits, misses uint64)
 
-// Scope is the opaque scope label of a handler. It keeps the historical
-// name but aliases the one canonical defined type (scope.ScopeTag) in
-// pkg/rpc/scope, so SecureHandler remains structurally satisfied by registry
-// metadata without permitting arbitrary strings or creating a second scope
-// identity.
+// Scope is the opaque scope label of a handler. It aliases the one canonical
+// defined type (scope.ScopeTag) in pkg/rpc/scope, so SecureHandler remains
+// structurally satisfied by registry metadata without permitting arbitrary
+// strings or creating a second scope identity.
 type Scope = scope.ScopeTag
 
-// SecureHandler is the handler metadata surface AuthValidator judges.
-// It mirrors platform/security/helpers.SecureHandler method-for-method
-// (all parameter/return types are stdlib or aliases), so the registry's
-// handler entries satisfy both interfaces and the HSTLES-side validator
-// can delegate to the real helpers package with a plain conversion.
+// SecureHandler is the handler metadata surface AuthValidator judges. Every
+// parameter and return type is stdlib or an alias, so the registry's handler
+// entries also satisfy a method-for-method equivalent interface a composition
+// root declares, and an injected validator can hand them to its own checks
+// with a plain conversion.
 type SecureHandler interface {
 	Name() string
 	RequiresAuth() bool
@@ -52,15 +50,17 @@ type SecureHandler interface {
 	AllowedPartitions() []string
 }
 
-// AuthValidator replaces the platform/security/helpers hard import
-// (§0.3 #5 — the HIGHEST-DANGER cut, shared unexported context keys).
+// AuthValidator is the seam through which a composition root supplies the
+// execution-time auth check and the partition stamp for nested calls.
 //
-// The HSTLES-build implementation MUST delegate to the real helpers package:
-// WithPartitionID must write the SAME unexported context key that HSTLES domain
-// handlers read via helpers.ExtractTenantID, or nested rpc.Calls silently
-// lose the tenant and multi-tenant authz/data-scoping breaks with no
-// compile-time signal. The loom-local default (internal/securityctx) is
-// fail-closed and safe ONLY in builds with no HSTLES domain handlers.
+// An injected implementation's WithPartitionID MUST write the SAME context key
+// its composition root's domain handlers read the partition from, or nested
+// rpc.Calls silently lose the partition and partition-scoped authorization and
+// data selection break with no compile-time signal. The loom-local default
+// (internal/securityctx) writes only its own private keys, so it is fail-closed
+// and safe ONLY where no domain handler reads the partition from a key of its
+// own.
+//
 // EXTENSIONS, AND WHAT WRAPPING ONE COSTS. Four optional interfaces in this
 // package are type-asserted on the value supplied here, and a failed assertion
 // changes behaviour rather than erroring: AuthenticatedPrincipalStamper (the
@@ -237,12 +237,11 @@ const (
 	SourceUPnP        AddressSource = "upnp"
 )
 
-// PlatformInfo is loom's platform seam (§0.3 #4, replaces platform/host —
-// NOT a leaf: 913 LOC of Fly/AWS/GCP/k8s detectors stay in HSTLES and are
-// injected). The method set mirrors host.PlatformInfo; because
-// PreferredSources returns a loom-local AddressSource slice, HSTLES wraps
-// its host.PlatformInfo in a one-line adapter at injection time. The
-// interface remains structurally assignable where aether expects a
+// PlatformInfo is loom's host-platform seam. The Fly/AWS/GCP/k8s detectors
+// live in the composition root and are injected through it; because
+// PreferredSources returns a loom-local AddressSource slice, a composition root
+// with its own platform type wraps it in a one-line adapter at injection time.
+// The interface remains structurally assignable where aether expects a
 // bind-address resolver (ResolveUDPBind/OpenUDPListener are stdlib-typed).
 type PlatformInfo interface {
 	// Region returns the normalized 3-letter region code ("iad", "syd");
@@ -261,7 +260,7 @@ type PlatformInfo interface {
 
 	// PrivateIP returns the private mesh IP (Fly: FLY_PRIVATE_IP 6PN fdaa:;
 	// AWS/GCP: VPC IP; k8s: POD_IP), "" → interface enumeration fallback.
-	// Feeds ourOrigin detection for the cross-org forwarder and the reach
+	// Feeds ourOrigin detection for the cross-origin forwarder and the reach
 	// publisher's interface filter.
 	PrivateIP() string
 

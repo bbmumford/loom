@@ -198,7 +198,7 @@ type DivergedPeer struct {
 // Detect checks for split-brain indicators.
 // Returns a PartitionStatus summarising the current state.
 func (pd *PartitionDetector) Detect() PartitionStatus {
-	pd.mu.Lock() // MESH-G02: write lock so we can evict long-departed peers inline
+	pd.mu.Lock() // write lock so we can evict long-departed peers inline
 	defer pd.mu.Unlock()
 
 	localClock := pd.local.Current()

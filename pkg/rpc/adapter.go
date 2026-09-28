@@ -41,8 +41,8 @@ func (r *Registry) ExportToHandlerRegistry(hr *handlers.HandlerRegistry) error {
 // handlers.RPCHandler and handlers.TaskHandler. The task interface is
 // required so mesh execution.Executor (which type-asserts GetMeta result
 // to TaskHandler before invoking) can dispatch handlers registered via
-// rpc.Registry — e.g. hstles.maintenance.RotateRecord published by the
-// rotation scanner as a mesh task.
+// rpc.Registry — e.g. an orbtr.<domain>.<Op> handler a scanner publishes as a
+// mesh task.
 type registryShim struct {
 	handler *Handler
 }

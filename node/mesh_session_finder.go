@@ -90,12 +90,11 @@ func (m *ConnectionManager) IsSupersededByUpgrade(session aether.Session) bool {
 // evicts the bidi entry. A GetBidiRPC call inside that window returns the
 // still-registered-but-dead bidi; without IsAlive() / post-call recheck,
 // the dispatch loop would surface "bidi stream closed" as the probe error
-// and skip the dynamic-stream fallback — which is exactly what was
-// producing fleet-wide "all 3 probes failed: bidi stream closed" auth-
-// callback failures (CompleteOAuth) when WS sessions to cross-org anchors
-// churned. We now treat a dead bidi as "no bidi" and evict the stale
-// entry so the next call goes straight to the dynamic-stream path until
-// a fresh bidi is registered.
+// and skip the dynamic-stream fallback, so every probe of a caller fails
+// with "bidi stream closed" whenever WS sessions to cross-origin anchors
+// churn. So a dead bidi is treated as "no bidi" and the stale entry is
+// evicted, and the next call goes straight to the dynamic-stream path
+// until a fresh bidi is registered.
 //
 // Implements dispatch.SessionFinder.CallViaBidi.
 func (m *ConnectionManager) CallViaBidi(ctx context.Context, nodeID string, req *pb.RPCRequest) (*pb.RPCResponse, bool, error) {
@@ -307,9 +306,9 @@ func (m *ConnectionManager) findNodeForRole(ctx context.Context, role, handler s
 			bestNode = node.NodeID
 			bestGrade = m.rt.peerGrade(node.NodeID)
 		case rtt == 0 && bestRTT == 0:
-			// Neither node has a latency record. Previously
-			// this fell through to bestNode=nodes[0] alphabetically;
-			// now we tiebreak on the locally-measured connection grade
+			// Neither node has a latency record. Rather than
+			// falling through to bestNode=nodes[0] alphabetically,
+			// tiebreak on the locally-measured connection grade
 			// to that peer. A peer we're already connected to at
 			// Grade A beats an unknown one even without latency data.
 			if g := m.rt.peerGrade(node.NodeID); g > bestGrade {

@@ -6,8 +6,7 @@
 // Package journal provides the standard ports.DurableJournal: a
 // crash-consistent, append-only file journal of accepted records.
 //
-// This is the Phase-0.5 "narrow journal port" implementation (plan §0.5.1):
-// it records canonical, already-authorized records for recovery and audit.
+// It records canonical, already-authorized records for recovery and audit.
 // It is NEVER a merge authority — replay feeds records back through the
 // same projection path that accepted them live.
 //
@@ -385,9 +384,9 @@ func (j *FileJournal) dropSub(id uint64) {
 // fanoutLocked pushes a newly-durable record to live subscribers. Caller
 // holds mu. A full subscriber buffer does NOT block the append path — the
 // record is already durable, so a slow consumer recovers by resuming a
-// fresh Replay from its last processed watermark (§0.5.4: resume from a
-// watermark, no silent gap — the file is the source of truth, the live
-// channel is only a latency optimisation).
+// fresh Replay from its last processed watermark (resume from a watermark,
+// no silent gap — the file is the source of truth, the live channel is only
+// a latency optimisation).
 func (j *FileJournal) fanoutLocked(w ports.Watermark, rec ports.Record) {
 	for _, sub := range j.subs {
 		if w <= sub.from {
@@ -444,7 +443,7 @@ func (b *boundedReadCloser) Close() error { return b.f.Close() }
 // Compact implements ports.DurableJournal: rewrites the journal retaining
 // (a) every entry with watermark > upTo, and (b) for entries ≤ upTo, the
 // LATEST entry per (topic,node) slot — so no slot's current state and no
-// governing tombstone is ever dropped by retention (§0.5.4: tombstone GC by
+// governing tombstone is ever dropped by retention (tombstone GC by
 // acknowledged checkpoint, never wall clock). Atomic: temp + fsync + rename.
 func (j *FileJournal) Compact(_ context.Context, upTo ports.Watermark) error {
 	j.mu.Lock()

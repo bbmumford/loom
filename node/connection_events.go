@@ -97,12 +97,10 @@ func (l *ConnectionEventLog) EventsSince(t time.Time) []ConnectionEvent {
 
 // Recent returns the last n events.
 //
-// UNWIRED: zero non-test callers across all three workspace roots, measured
-// with a non-ignoring grep. Retained rather than removed
-// because it is exported on a published module — an in-tree caller count
-// cannot bound external users — and because it is harmless: a pure
-// read helper with no side effects that cannot lead a caller onto an unsafe
-// path.
+// UNWIRED: no non-test caller in this module. It stays exported because it
+// is part of a published module — an in-tree caller count cannot bound
+// external users — and because it is harmless: a pure read helper with no
+// side effects that cannot lead a caller onto an unsafe path.
 func (l *ConnectionEventLog) Recent(n int) []ConnectionEvent {
 	l.mu.RLock()
 	defer l.mu.RUnlock()

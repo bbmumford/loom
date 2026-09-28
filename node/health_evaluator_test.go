@@ -15,11 +15,11 @@ import (
 
 // Covers the 4-layer HealthEvaluator, whose consumers are:
 //
-//	NewHealthEvaluator   1 production caller   io/endpoints/help.orbtr.io/routes.go:540
-//	AllServiceHealth     -> node/metrics_export.go:177  (the /metrics alert value)
-//	ServiceHealth        -> help.orbtr.io/monitoring_api.go:1364  (the monitoring API)
-//	MeshStatus           -> HSTLES Library/domain/monitoring/service/checker.go:177,
-//	                        injected at routes.go:556 — a CROSS-REPO consumer
+//	NewHealthEvaluator   a composition root's monitoring routes
+//	AllServiceHealth     -> MetricsExporter in metrics_export.go (the /metrics alert value)
+//	ServiceHealth        -> a monitoring API served by a composition root
+//	MeshStatus           -> a monitoring checker outside this module that maps
+//	                        the returned strings to alerts
 //
 // This file exercises the producer of the strings that alert mapping consumes.
 // Covering the mapping without the producer asserts on both endpoints of an

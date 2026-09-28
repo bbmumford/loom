@@ -12,7 +12,7 @@ import (
 	"github.com/bbmumford/loom/ports"
 )
 
-// CoverageConfig tunes missing-role detection (plan §1.3).
+// CoverageConfig tunes missing-role detection.
 type CoverageConfig struct {
 	// MinReplicas is the per-role floor; coverage below it (not just zero)
 	// counts as missing. Default 1.

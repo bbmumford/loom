@@ -34,11 +34,12 @@ type jsonDeltaPersistence struct {
 }
 
 // NewJSONDeltaPersistence returns a DeltaPersistence backed by a JSON
-// file at <dataDir>/.mesh/watermarks.json. Creates the parent
-// directory on first use; logs (but doesn't fail) if the directory
-// can't be created — the consumer's runtime continues without
-// persistence (degrades to today's behaviour where every restart
-// starts cold).
+// file at <dataDir>/.mesh/watermarks.json. It creates the parent
+// directory and ignores an error doing so: Load then returns no states
+// or an error, and whisper's AttachPersistence starts empty on either;
+// each Save returns its create-temp error, which the tracker's save loop
+// logs. The runtime keeps running without persisted watermarks, so every
+// restart starts cold.
 func NewJSONDeltaPersistence(dataDir string) whisper.DeltaPersistence {
 	dir := filepath.Join(dataDir, ".mesh")
 	_ = os.MkdirAll(dir, 0o700)

@@ -3,10 +3,10 @@
  * Queries: licensing@hstles.com
  */
 
-// Projection helpers for the transitional LAD adapter (ladlive.go): the
-// LAD-record -> ports.Record mapping, the topic and watermark domains, and
-// the reach-layer transport naming. Split out of ladlive.go to keep both
-// files under the 500-line limit.
+// Projection helpers for the LAD adapter (ladlive.go): the LAD-record ->
+// ports.Record mapping, the topic and watermark domains, and the reach-layer
+// transport naming. They sit in their own file to keep both files under the
+// 500-line limit.
 package directory
 
 import (
@@ -30,8 +30,8 @@ import (
 // ⇒ Querying them through this adapter cannot distinguish "no key rotations
 // have happened" from "I cannot see key rotations at all", and the first
 // reading is the dangerous one for a security consumer. RecordsByTopic returns
-// ErrTopicNotProjected instead; the typed KeyOps/Quorum projections the
-// cutover needs must be fed from swarm, which does carry these records.
+// ErrTopicNotProjected instead; typed KeyOps/Quorum projections must be fed
+// from swarm, which does carry these records.
 var ladProjectedTopics = []lad.Topic{
 	lad.TopicMember, lad.TopicRole, lad.TopicReach, lad.TopicLatency,
 }
@@ -64,12 +64,10 @@ func ladTopicsFor(t ports.Topic) []lad.Topic {
 // ladToPortRecord projects one LAD record into the port envelope.
 //
 // 🛑 THIS FUNCTION COPIES BYTES VERBATIM AND THAT IS NOT ENOUGH TO PRESERVE
-// PROVENANCE — its INPUT has already lost it. An earlier version of this
-// comment claimed the projection "never re-encodes or re-signs", which is true
-// of this code and false of the pipeline, and that is the more dangerous kind
-// of wrong (#M-515).
+// PROVENANCE — its INPUT has already lost it. "The projection never re-encodes
+// or re-signs" is true of this code and false of the pipeline.
 //
-// MEASURED against ladcache v0.0.20, the tree loom builds: the only bulk read,
+// MEASURED against the ledger version go.mod pins: the only bulk read,
 // ChangesSinceHLC, SYNTHESISES records from the typed store —
 // `body, _ := json.Marshal(r)` — and constructs lad.Record{Topic, Partition,
 // NodeID, Seq, Body, Timestamp} with NO Signature and NO AuthorPubKey field at
@@ -154,47 +152,45 @@ func ladWatermark(r lad.Record) ports.Watermark {
 // normaliseReachProto maps reach-layer transport names onto the mesh address
 // table's names. The reach layer calls the Noise transport "udp".
 //
-// 🛑 EVERY ALIAS BELOW IS A STRING A PRODUCER ACTUALLY WRITES, and the two
-// added at #M-547 were the ones that mattered, because their absence failed
-// SILENTLY toward "unknown transport":
+// 🛑 EVERY ALIAS BELOW IS A STRING A PRODUCER ACTUALLY WRITES, and two of them
+// carry the ranking, because without them the input falls SILENTLY toward
+// "unknown transport":
 //
-//   - "wss"   — node/lad_reach_bridge.go:258 addressProtoToReach(WEBSOCKET).
-//   - "https" — the same function for Address_HTTP, advertised by EVERY node
-//     at node/swarm_integration.go:549.
+//   - "wss"   — node/lad_reach_bridge.go addressProtoToReach(WEBSOCKET).
+//   - "https" — the same function for Address_HTTP, which every node with a
+//     public domain advertises from node/swarm_integration.go.
 //
-// Both used to fall through this default and reach reachPriority as
-// unrecognised, scoring 9 — BELOW every ranked transport — so the ordering
-// this package documents ("noise-udp" > "ws" > "grpc" > "http") was not the
-// ordering it produced. MEASURED before the fix: udp=0 ws=9 grpc=2 http=9.
+// Without those two cases both fall through this default and reach
+// reachPriority as unrecognised, scoring 9 — BELOW every ranked transport —
+// so the ordering this package documents ("noise-udp" > "ws" > "grpc" >
+// "http") would not be the ordering it produced (udp=0 ws=9 grpc=2 http=9).
 //
-// 🔑 The case for "ws" matched a string NO producer writes (measured across
-// all 16 module roots: "udp" x13, "tls" x2, "wss" x1, "ws" ZERO), which is
-// why the existing tests were green — their fixtures were written to this
-// reader rather than to the wire.
+// 🔑 The case for "ws" matches a string NO producer writes (measured across
+// all 16 module roots: "udp" x13, "tls" x2, "wss" x1, "ws" ZERO), so a test
+// fixture that uses "ws" is written to this reader rather than to the wire.
 //
-// 🛑🛑 THIS MAPPING IS LOSSY IN A SECURITY DIMENSION — READ BEFORE EXTENDING IT
-// (#R-1517 ②). "wss"->"ws" and "https"->"http" ERASE THE TLS DISTINCTION.
-// That is harmless ONLY because bare "ws" and bare "http" are written ZERO
-// times today, and this alias bakes that census in as a permanent assumption.
+// 🛑🛑 THIS MAPPING IS LOSSY IN A SECURITY DIMENSION — READ BEFORE EXTENDING IT.
+// "wss"->"ws" and "https"->"http" ERASE THE TLS DISTINCTION.
+// That is harmless ONLY while no producer writes bare "ws" or bare "http",
+// and this alias bakes that census in as an assumption.
 //
 // ⇒ THE MOMENT ANY PRODUCER EMITS BARE "ws" OR "http", secure and insecure
 // transports collapse to ONE RANK and the dialer may prefer the UNENCRYPTED
-// peer. If that day comes, "wss"/"https" MUST outrank their bare forms — the
-// constraint is inherited here deliberately so the next reader does not
-// inherit only the shortcut. This is a merge of two security classes wearing
-// the costume of a naming tidy-up.
+// peer. At that point "wss"/"https" MUST outrank their bare forms. This is a
+// merge of two security classes wearing the costume of a naming tidy-up.
 //
-// ⚠ "tls" is deliberately NOT aliased and NOT ranked, and #R-1517 ③ turned
-// that into a measurement rather than a preference. MEASURED since: it is NOT
-// vestigial — it has a ProtoTLS constant, live dial paths
-// (node/peer_connections.go:2705 constructs one and :2712 matches it), and
-// node/runtime.go:3648 grades it "B", the SAME as websocket and ABOVE grpc's
-// "C". reachPriority ranks grpc=2 and leaves tls unknown at 9, so THE TWO
-// RANKINGS IN THIS REPO DISAGREE about tls-vs-grpc.
+// ⚠ "tls" is deliberately NOT aliased and NOT ranked. It is NOT vestigial: it
+// has a ProtoTLS constant and live dial and accept paths in
+// node/peer_connections.go, and node/runtime.go's transport grade list
+// grades it "B", the SAME as websocket and ABOVE grpc's "C". reachPriority
+// ranks grpc=2 and leaves tls unknown at 9, so THE TWO RANKINGS IN THIS REPO
+// DISAGREE about tls-vs-grpc.
 //
 // It is still not ranked here, because a rank asserts dialability AND a
-// position, and "tls" has no Address_Transport counterpart — that pairing is
-// @R's call, not a mapping decision. Routed at #M-549.
+// position, and "tls" has no Address_Transport counterpart.
+//
+// TODO: decide whether "tls" pairs with an Address_Transport value; that is a
+// wire decision, not a mapping one, and a rank here follows from it.
 func normaliseReachProto(p string) string {
 	switch strings.ToLower(p) {
 	case "udp", "noise-udp":
@@ -237,20 +233,14 @@ func reachPriority(proto string) int {
 // attrServiceName reads a member's service name across BOTH conventions in
 // this estate, camelCase first.
 //
-// 🛑 THE CAMELCASE KEY IS THE ONE THAT MATTERS AND I HAD ONLY THE OTHER
-// (#M-521). The swarm→LAD bridge — the producer for every mesh member —
-// writes "serviceName" (node/lad_reach_bridge.go:156,191, alongside "region"
-// and comma-joined "roles"). Reading only "service_name" yields an EMPTY
-// service name for every record the bridge publishes.
+// 🛑 THE CAMELCASE KEY IS THE ONE THAT MATTERS. The swarm→LAD bridge — the
+// producer for every mesh member — writes "serviceName" (node/lad_reach_bridge.go,
+// alongside "region" and comma-joined "roles"). Reading only "service_name"
+// yields an EMPTY service name for every record the bridge publishes.
 //
-// This exact bug has now been fixed three times in this repo: help.orbtr.io
-// carries two comments naming it ("HELP-01", "HELP-02" in monitoring_api.go),
-// each recording that reading snake_case "always got" nothing. I made it a
-// third time without looking for the sibling that had it right.
-//
-// Snake_case is retained as a fallback rather than deleted because it is the
-// documented convention for reach-published metadata (reach/config.go:97,
-// ledger/types.go:198) — both keys are genuinely in use by different
+// Snake_case is kept as a fallback because it is the documented convention
+// for reach-published metadata (the reach module's config and the ledger
+// module's record types) — both keys are genuinely in use by different
 // producers, so preferring one and accepting the other is correct here, not
 // defensive padding.
 func attrServiceName(attrs map[string]string) string {

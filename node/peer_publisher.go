@@ -61,7 +61,7 @@ type PeerPublisher struct {
 }
 
 // SetServiceName updates the operator-facing service identifier
-// emitted in every PeerRecord (e.g. "help-orbtr-io", "node-hstles-com").
+// emitted in every PeerRecord (e.g. "node-example-com").
 // Carried inside Capabilities.tags as "service=<name>" so the typed
 // proto stays stable while topology readers can still pick it up.
 func (p *PeerPublisher) SetServiceName(name string) {
@@ -475,7 +475,7 @@ func (p *PeerPublisher) publishOnce() {
 	}
 
 	// http_port: receivers consume this via peerHTTPPort to dial the
-	// peer's same-org 6PN-direct WebSocket on its actual HTTP port
+	// peer's same-origin 6PN-direct WebSocket on its actual HTTP port
 	// instead of falling back to the hard-coded defaultMeshHTTPPort.
 	// All current fleet endpoints listen on 8080, so the fallback hides
 	// the loss today; advertising the real port future-proofs against
@@ -497,18 +497,13 @@ func (p *PeerPublisher) publishOnce() {
 		}
 	}
 
-	// Guard the p.rt deref. run/Start explicitly support p.rt == nil
-	// (bare-goroutine fallback) and publishOnce nil-checks p.rt in three places,
-	// but this NodeId read did not — so a publisher constructed with rt==nil
-	// panicked on its first publish. Production always passes a Runtime, so this
-	// only affects that fallback / test paths.
-	// The identity nil-check is the second half of . The original fix
-	// guarded p.rt and stopped there, so a publisher holding a HALF-BUILT
-	// Runtime — non-nil but with identity not yet assigned — still panicked on
-	// its first publish, which is exactly the fallback/test shape the comment
-	// above says the guard exists to protect. Production assigns identity
-	// during Initialize before swarm_integration.go:100 constructs the
-	// publisher, so this changes no live behaviour.
+	// Guard both derefs for the NodeId read. run and Start support
+	// p.rt == nil (the bare-goroutine fallback), and publishOnce nil-checks
+	// p.rt elsewhere too. A publisher can also hold a half-built Runtime —
+	// non-nil, identity not yet assigned — in that fallback and in tests.
+	// Without both checks either shape panics on its first publish.
+	// Initialize assigns rt.identity before InitSwarm constructs the
+	// publisher, so on a Runtime built by Initialize both checks pass.
 	var nodeIDBytes []byte
 	if p.rt != nil && p.rt.identity != nil {
 		nodeIDBytes = []byte(p.rt.identity.NodeID)

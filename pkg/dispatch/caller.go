@@ -84,7 +84,7 @@ func GetCaller() Caller {
 	return globalCaller
 }
 
-// SetDomain sets the global domain (e.g. "hstles.com").
+// SetDomain sets the global domain (e.g. "example.com").
 func SetDomain(d string) {
 	globalMu.Lock()
 	defer globalMu.Unlock()

@@ -20,19 +20,18 @@ import (
 	"github.com/bbmumford/loom/ports"
 )
 
-// LADDirectory is the transitional ports.LiveDirectory over the LAD
-// DirectoryCache — implementation (1) named in ports/directory.go, and the
-// side the Swarm projection is compared against during shadow mode
-// (§0.5.3 stage 3). Without it the shadow phase has one implementation and
-// nothing to compare it to.
+// LADDirectory is the ports.LiveDirectory over the LAD DirectoryCache, and
+// the side the Swarm projection is compared against by CompareDirectories.
+// Without it the shadow comparison has one implementation and nothing to
+// compare it to.
 //
 // It is READ-ONLY over the cache. Records enter LAD through the existing
 // gossip/apply paths; this type never writes state, with one deliberate
 // exception — OverrideLiveness, which the port defines as a write and which
 // the connection reporter needs.
 //
-// 🛑 THE TWO SIDES DO NOT SHARE A RECORD MODEL, and the cutover depends on
-// knowing that. LAD stores a node's identity, roles and reachability as
+// 🛑 THE TWO SIDES DO NOT SHARE A RECORD MODEL, and every parity check
+// depends on knowing that. LAD stores a node's identity, roles and reachability as
 // THREE typed records on three topics; the Swarm projection carries one
 // signed fleet.peer record per node. This adapter therefore projects LAD's
 // three onto one loom topic using the composite key (Key = "member" | "role"
@@ -44,7 +43,7 @@ import (
 // Fingerprints differ by construction. Cross-implementation parity is
 // asserted on the TYPED projections (CompareDirectories), never on
 // Fingerprint/Snapshot. CompareFingerprints refuses the pairing rather than
-// returning a mismatch a lane might read as real divergence — see
+// returning a mismatch a caller might read as real divergence — see
 // RecordModel.
 type LADDirectory struct {
 	cache *ladcache.DirectoryCache
@@ -62,18 +61,14 @@ const (
 	ladKeyReach  = "reach"
 )
 
-// NewLADDirectory wraps a live DirectoryCache as a ports.LiveDirectory for
-// the given tenant. The cache is borrowed, never owned: Close releases only
-// this adapter's own resources (liveness-override timers).
 // NewLADDirectory wraps a live DirectoryCache as a ports.LiveDirectory. The
 // cache is borrowed, never owned: Close releases only this adapter's own
 // resources (liveness-override timers).
 //
-// 🔑 IT TAKES NO TENANT. An earlier version fixed one at construction, which
-// #R-1455 ③(b) rejected: a tenant appearing after wiring would silently get no
-// adapter — trading a visible hardcode for an invisible lifecycle dependency,
-// which is a NEW silent-empty of exactly the class this file spent two rounds
-// closing. The tenant is now a parameter of each operation that needs one.
+// 🔑 IT TAKES NO PARTITION. The partition is a parameter of each operation
+// that needs one: a partition fixed at construction would leave a partition
+// that appears after wiring silently without an adapter, an invisible
+// lifecycle dependency that returns empty results instead of an error.
 func NewLADDirectory(c *ladcache.DirectoryCache) (*LADDirectory, error) {
 	if c == nil {
 		return nil, fmt.Errorf("directory: LAD directory needs a cache")
@@ -202,9 +197,9 @@ func (d *LADDirectory) NodesByRole(ctx context.Context, partition ports.Partitio
 //
 // It queries the ROLE records directly (an empty RoleQuery), NOT Members —
 // LAD stores roles on their own records, so a node with a role record and no
-// member record is invisible to Members and must not be invisible here
-// (#M-626). Roles are sorted to match ports.Member.Roles (#R-1607 ④), and the
-// result is ordered by NodeID so two directories are comparable.
+// member record is invisible to Members and must not be invisible here.
+// Roles are sorted to match ports.Member.Roles, and the result is ordered by
+// NodeID so two directories are comparable.
 func (d *LADDirectory) RoleAdverts(ctx context.Context, partition ports.Partition) ([]ports.RoleAdvert, error) {
 	rs, err := d.cache.Roles(ctx, string(partition), ladcache.RoleQuery{})
 	if err != nil {

@@ -44,7 +44,8 @@ type SwarmIntegration struct {
 // convergence path. checked = signature-verified records that reached the gate;
 // wouldReject = records whose NodeID did not bind to their key under the aether
 // scheme. In observe mode a would-reject record is still accepted, so the ratio
-// is the ME-P21 shadow-parity evidence that gates the move to enforce.
+// is the shadow-parity evidence an operator reads before setting
+// SwarmTrustMode to "enforce".
 type trustGateCounters struct {
 	checked     atomic.Uint64
 	wouldReject atomic.Uint64
@@ -86,25 +87,33 @@ func (si *SwarmIntegration) ShadowParity(ctx context.Context, authoritative port
 // newSwarmTrustGate builds the inbound trust-gate check for the given mode, or
 // returns (nil, nil) when the gate is off ("" / "off"). The check verifies each
 // signature-verified record's NodeID binds to its key under loom's aether scheme
-// via TrustPolicy.VerifyNodeKey (ME-P18) — for an observer attestation the bound
+// via TrustPolicy.VerifyNodeKey — for an observer attestation the bound
 // identity is the observer, whose key signed the record. "observe" counts a
-// would-reject and ACCEPTS (the ME-P04/ME-P21 shadow-parity step); "enforce"
-// rejects. A minimal PolicyConfig covers the binding+revocation check; topic /
-// partition / role authorization is a later leg needing a seeded PolicyConfig.
+// would-reject and ACCEPTS (the shadow-parity step); "enforce" rejects. The
+// baseline PolicyConfig covers the binding, revocation and topic publish
+// rule; partition and role entitlement need a seeded PolicyConfig (see the
+// seed comment below).
 func newSwarmTrustGate(mode string) (func(swarm.Record) error, *trustGateCounters) {
 	if mode != "observe" && mode != "enforce" {
 		return nil, nil
 	}
 	gate := &trustGateCounters{enforce: mode == "enforce"}
-	// Seed the self-owned open-publish prefixes (fleet.peer, fleet.latency.) so a
-	// node's own PeerRecord and latency records pass. An unseeded policy rejects
-	// EVERY publish ("topic matches no publish rule"), which is why the gate is
-	// off by default — observe mode with this seed is what shows whether the seed
-	// is complete against live traffic before an enforce cut. Partition/role
-	// entitlement is not seeded here: a principal with no partition skips the
-	// partition gate, and role-restricted topics (role.secrets.*) are absent from the
-	// baseline, so they count as would-rejects in observe until their writers are
-	// configured — surfacing exactly which topics still need entitlement.
+	// Seed directory.SelfOwnedPublishPrefixes (fleet.peer, fleet.latency. and
+	// the mesh database member topic) as open-publish rules so a node's own
+	// PeerRecord, latency and member records pass: a Policy built from the
+	// zero PolicyConfig rejects every publish ("topic matches no publish
+	// rule"). This gate exists only when Config.SwarmTrustMode is "observe" or
+	// "enforce". Loom's zero value "" leaves it off; the composition root picks
+	// the mode, and a root that defaults to "enforce" runs this baseline seed
+	// unchanged. Nothing beyond the baseline is seeded here. The principal
+	// below carries no partition, so it skips the partition gate. The topics
+	// loom's own writers publish outside the baseline match no rule:
+	// fleet.route (the swarmRoutePublisher InitRoute wires) and role.claim.<role> /
+	// role.secrets.<role> (the role takeover writers). "observe" counts them
+	// as would-rejects and "enforce" rejects them.
+	// TODO: take a seeded PolicyConfig from Config (fleet.route as a self-owned
+	// open prefix; role.claim.<role> and role.secrets.<role> from the
+	// endpoint's role entitlements) so "enforce" admits those topics.
 	policy := directory.NewPolicy(directory.BaselinePolicyConfig())
 	check := func(r swarm.Record) error {
 		bindID := r.NodeID
@@ -114,9 +123,9 @@ func newSwarmTrustGate(mode string) (func(swarm.Record) error, *trustGateCounter
 		gate.checked.Add(1)
 		pr := ports.Principal{NodeID: ports.NodeID(string(bindID)), PubKey: ed25519.PublicKey(r.PubKey)}
 		// AuthorizePublish is the full pre-store authorization the ports.TrustPolicy
-		// contract mandates for Swarm: NodeID↔key bind (VerifyNodeKey), tenant scope,
-		// and the topic publish rule — a superset of the bind-only check this gate
-		// began as.
+		// contract mandates for Swarm: NodeID↔key bind (VerifyNodeKey), partition
+		// scope, and the topic publish rule — a superset of the bind-only
+		// VerifyNodeKey check.
 		if err := policy.AuthorizePublish(context.Background(), pr, ports.Topic(string(r.Topic))); err != nil {
 			n := gate.wouldReject.Add(1)
 			if n <= 10 || n%100 == 0 {
@@ -169,7 +178,7 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 		TreeDegree: 4,
 	}
 
-	// Inbound trust gate (ME-P18): loom's TrustPolicy wired as swarm's TrustCheck
+	// Inbound trust gate: loom's TrustPolicy wired as swarm's TrustCheck
 	// hook (see newSwarmTrustGate). Off by default; "observe" counts would-rejects
 	// without rejecting (the shadow-parity step), "enforce" rejects. NOT the swarm
 	// RequireNodeKeyBinding bool — its hex(pubkey) NodeID derivation is incompatible
@@ -264,7 +273,7 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	// PeerRecord delivers a Tier-0 (6PN ULA noise-UDP) address,
 	// AddressTable invokes this callback which signals the upgrade
 	// walker. Without this signal the walker waits up to its 30s
-	// ticker to discover the new address — a same-org peer stuck on
+	// ticker to discover the new address — a same-origin peer stuck on
 	// WebSocket can sit on Grade C for half a minute after the 6PN
 	// endpoint actually arrives via gossip. SignalWalkerWake is non-
 	// blocking and goroutine-safe so it satisfies the AddressTable's
@@ -373,7 +382,7 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	// cache.MemberCount) remain; this bridge closes that gap without adding a
 	// second publisher.
 	//
-	// Uses DirectoryCache.ApplyLocal (ledger v0.0.13+) to bypass the
+	// Uses DirectoryCache.ApplyLocal to bypass the
 	// signedTopicACL — the swarm record's signature is in swarm's
 	// canonical scheme (sig.go signableBytes), not lad's, so
 	// lad.VerifyRecord cannot speak it. The swarm engine has already
@@ -391,7 +400,7 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	// goroutines run until rt.cancel. A caller-scoped ctx (e.g. a request
 	// handler's) would silently break the hook and tear down the engines
 	// the moment the caller returned — which is why InitSwarm does not
-	// accept one. Was the H7 finding (closure ctx capture).
+	// accept one.
 	rtCtx := rt.Context()
 
 	if rt.connMgr != nil {
@@ -639,9 +648,9 @@ func (s *SwarmIntegration) AdvertiseLocalAddress(transport swarmpb.Address_Trans
 //
 // What gets advertised:
 // - noise-UDP @ cfg.VL1.UDPPort on cfg.PublicDomain (scope=public) —
-// the Grade-A target for cross-fabric / cross-org peers
+// the Grade-A target for cross-fabric / cross-origin peers
 // - noise-UDP @ cfg.VL1.UDPPort on the platform private IP
-// (scope=private) when the platform exposes one — same-org peers
+// (scope=private) when the platform exposes one — same-origin peers
 // prefer this entry, skipping the public LB and routing direct
 // over the private fabric (Fly 6PN, GCP VPC, etc.). Uses the SAME
 // listener socket as the public entry — single UDP port, two
@@ -664,13 +673,10 @@ func (rt *Runtime) advertiseSwarmListeners(si *SwarmIntegration) {
 		publicHost = rt.publicIP
 	}
 	if publicHost == "" {
-		// Having no public hostname is not a reason to advertise nothing.
-		//
-		// loom is the platform-service mesh, distinct from the partition overlay,
-		// and no settled rule governs the advertisement path this feeds. The
-		// behaviour here stands on its own merits: a node reachable over its
-		// private fabric that publishes ZERO candidates is unreachable to peers
-		// that could otherwise dial it directly. So skip only the entries that
+		// Having no public hostname is not a reason to advertise nothing: a
+		// node reachable over its private fabric that publishes ZERO
+		// candidates is unreachable to peers that could otherwise dial it
+		// directly. So skip only the entries that
 		// genuinely need a public name, and keep publishing the private-fabric
 		// and interface-derived candidates. This is a normal steady state for a
 		// private-only node, not a transient condition a later publish will
@@ -696,7 +702,7 @@ func (rt *Runtime) advertiseSwarmListeners(si *SwarmIntegration) {
 		// Multi-NIC enumeration: the platform-reported PrivateIP is one
 		// address; a host with multiple NICs (dual VPNs, multiple 6PN
 		// families, private LAN plus Fly 6PN, etc.) has more dial
-		// targets that same-org peers may need. AdvertiseLocalAddress
+		// targets that same-origin peers may need. AdvertiseLocalAddress
 		// dedups by {transport, host, port} so the calls here are
 		// safe to interleave with the explicit public/private entries
 		// above. Scope is inferred per-address via scopeForHost.

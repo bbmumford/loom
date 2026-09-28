@@ -53,19 +53,22 @@ type BidiRPC struct {
 
 	// transport is the underlying mesh transport label for this bidi
 	// ("noise-udp" / "ws" / "tcp"). Captured at construction so the
-	// OBS-7 bidirpc_call_latency_ms histogram can tag samples by
+	// bidirpc_call_latency_ms histogram can tag samples by
 	// transport without re-resolving the session.Protocol() on every
 	// Call. Stable for the bidi's lifetime — the session it rides on
 	// has exactly one transport.
 	transport string
 
-	// scope is "same-origin" / "cross-org", snapshotted from the peer's
-	// crossOrigin flag at construction. A peer's origin classification
-	// can re-evaluate as addresses are learned, but the bidi only sees
-	// one classification per lifetime; the histogram absorbs the rare
-	// reclassification mid-bidi without harm. Same-origin = both peers
-	// share a Fly org / private network; cross-org = traversing the
-	// 6PN hairpin or edge-WS path.
+	// scope is one of the three origin/region classes the session
+	// registrar assigns as bidiScope in mesh_connection.go (same origin
+	// and same region, same origin and another region, another origin),
+	// snapshotted from the peer's crossOrigin flag and region at
+	// construction. A peer's origin classification can re-evaluate as
+	// addresses are learned, but the bidi only sees one classification
+	// per lifetime; the histogram absorbs the rare reclassification
+	// mid-bidi without harm. Same origin = both peers share one Fly.io
+	// organisation's private network; another origin = the path
+	// traverses the 6PN hairpin or edge-WS path.
 	scope string
 
 	// Pending outbound calls awaiting responses, keyed by wire-side ID
@@ -81,7 +84,7 @@ type BidiRPC struct {
 	// per instance makes "b1"/"b2"… collide across every peer/session. The
 	// responder's single process-wide
 	// responseCache is keyed on that id, so Peer A's cached success was returned
-	// to Peer B's unrelated (cross-tenant) request. A random per-instance prefix
+	// to Peer B's unrelated request. A random per-instance prefix
 	// keeps the id unique across bidis while local correlation (b.pending) is
 	// unaffected.
 	wireIDPrefix string
@@ -89,8 +92,7 @@ type BidiRPC struct {
 	// ctx is canceled when the read loop exits. All server-side dispatch
 	// goroutines and the per-response Send derive from this — a closing
 	// session terminates in-flight handlers cleanly instead of letting
-	// them block forever on context.Background(). Was the root of the
-	// H-Bidi-Background-Send / H-CrossCut-BackgroundSmuggling findings.
+	// them block forever on context.Background().
 	ctx       context.Context
 	ctxCancel context.CancelFunc
 
@@ -116,10 +118,10 @@ type BidiRPC struct {
 // Starts a read loop that dispatches incoming requests to the server
 // and routes responses to pending callers.
 //
-// transport ("noise-udp" / "ws" / "tcp") and scope ("same-origin" /
-// "cross-org") tag the OBS-7 bidirpc_call_latency_ms histogram so an
-// operator can see whether cross-org WS sessions are dragging RPC tail
-// latency vs same-origin noise-UDP. Pass empty strings to skip
+// transport ("noise-udp" / "ws" / "tcp") and scope (the origin/region
+// class described on BidiRPC.scope) tag the bidirpc_call_latency_ms
+// histogram so an operator can see whether WS sessions to another origin
+// are dragging RPC tail latency vs same-origin noise-UDP. Pass empty strings to skip
 // instrumentation (test bidis, ad-hoc construction without a peer
 // context).
 func NewBidiRPC(stream aether.Stream, remoteID aether.NodeID, server *RPCServer, transport, scope string) *BidiRPC {
@@ -172,8 +174,7 @@ func (b *BidiRPC) InflightCalls() int64 {
 // nextWireID allocates a bidi-unique wire-side ID. Always used to stamp
 // req.Id before sending so two upstream forwarder probes that happen to
 // share the same caller-side ID (e.g. retried RPC on parallel paths)
-// can't overwrite each other's pending channel — was the
-// M-BidiPending-IDCollision finding.
+// can't overwrite each other's pending channel.
 func (b *BidiRPC) nextWireID() string {
 	n := atomic.AddUint64(&b.callID, 1)
 	// Prefix with the per-instance namespace so the id is globally
@@ -199,13 +200,13 @@ func (b *BidiRPC) Call(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse
 	b.inflightCalls.Add(1)
 	defer b.inflightCalls.Add(-1)
 
-	// OBS-7 bidirpc_call_latency_ms: full client-side round-trip
+	// bidirpc_call_latency_ms: full client-side round-trip
 	// (marshal → send → wait → correlate). The defer fires regardless
 	// of which select arm wins below; successful and bidi-teardown
 	// exits feed the success histogram, but DeadlineExceeded exits go
 	// to the dedicated bidiTimeout histogram (RecordBidiTimeout) so
 	// timed-out calls don't pin the success p99 at the 30s
-	// callerRequestTTL (per wd4zasivv root-cause). Tagging happens at
+	// callerRequestTTL. Tagging happens at
 	// construction (b.transport / b.scope) so the per-Call cost is just
 	// the time.Now() + one map lookup inside whichever Record* fires.
 	t0 := time.Now()
@@ -238,7 +239,7 @@ func (b *BidiRPC) Call(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse
 		b.mu.Unlock()
 	}()
 
-	// OBS-7b phase decomposition: split the aggregate bidirpc latency
+	// Phase decomposition: split the aggregate bidirpc latency
 	// into marshal / send / wait so an elevated p50 can be attributed to
 	// codec cost vs transport stall vs peer-side dispatch delay. Each
 	// phase is timed end-to-end of its respective sub-operation; sum ≈
@@ -302,8 +303,7 @@ func (b *BidiRPC) Call(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse
 
 // readLoop runs for the lifetime of the stream, demuxing incoming messages.
 // On exit it drains every pending caller with a synthetic "stream closed"
-// response so no Call survives only because of stream.Send's error path
-// (was the M-Pending-NotDrained finding).
+// response so no Call survives only because of stream.Send's error path.
 func (b *BidiRPC) readLoop() {
 	defer func() {
 		// Cancel the bidi-scoped ctx so any in-flight server handlers
@@ -328,11 +328,11 @@ func (b *BidiRPC) readLoop() {
 		// This framing relies on aether's Stream.Receive being
 		// message-oriented — exactly one Send unit per Receive, boundaries
 		// preserved. That is aether's documented Stream contract for the
-		// ReliableOrdered stream this bidi rides (Stream 1), and the one
-		// transport that could historically re-fragment a stream (TCP) was fixed
-		// to preserve boundaries. If a future transport that splits/coalesces
-		// stream payloads is added, data[0] would no longer be a reliable type
-		// tag and this must switch to a length-prefixed reassembly framing.
+		// ReliableOrdered stream this bidi rides (Stream 1), and the TCP
+		// transport preserves those boundaries too. A transport that
+		// splits/coalesces stream payloads would make data[0] an unreliable
+		// type tag, so adding one requires switching this loop to a
+		// length-prefixed reassembly framing.
 		data, err := b.stream.Receive(b.ctx)
 		if err != nil {
 			log.Printf("[BIDI-RPC] %s: stream %d read loop exit: %v",
@@ -360,11 +360,10 @@ func (b *BidiRPC) readLoop() {
 			// semaphore acquire here would BLOCK readLoop entirely —
 			// outgoing Call() responses would queue in the underlying
 			// stream buffer, never demultiplexed, and every BidiRPC
-			// Caller would hang until ctx fires. That was the pattern
-			// observed across the fleet: BidiRPC stream 1 shows inFlight
-			// grow, rack.fackAge climb to minutes, TLP probing
-			// fruitlessly. The inline-acquire fix
-			// solved request HOL but re-introduced response-side HOL.
+			// Caller would hang until ctx fires: BidiRPC stream 1's
+			// inFlight grows, rack.fackAge climbs to minutes, and TLP
+			// probes fruitlessly. An inline acquire removes request-side
+			// HOL but creates response-side HOL.
 			//
 			// In-goroutine acquire decouples readLoop from handler
 			// pressure: readLoop spawns + continues; the goroutine
@@ -414,8 +413,7 @@ func (b *BidiRPC) dispatchRequest(payload []byte) {
 // handleIncomingRequest deserializes and dispatches an RPC request, then
 // sends the response. Recovers from handler panics to prevent crashing
 // the entire process; protects against nil resp from a panicked handler
-// (was H-Bidi-NilDeref) and against context.Background() smuggling on
-// the response send (was H-Bidi-Background-Send).
+// and against context.Background() smuggling on the response send.
 //
 // Diagnostic trace (DEBUG=mesh.node.rpc) covers the full lifecycle —
 // arrival, dispatch start/end with duration, send result — so a hung

@@ -135,8 +135,8 @@ func (s *SharedTransport) ResolveKeys(partitionID string) ([][]byte, error) {
 // aether.Transport implementation
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-// Dial establishes a session with preamble for the tenant identified in context.
-// The context must contain a tenant ID (set by TransportManager.Dial via WithPartitionID).
+// Dial establishes a session with preamble for the partition identified in context.
+// The context must contain a partition ID (set by TransportManager.Dial via WithPartitionID).
 func (s *SharedTransport) Dial(ctx context.Context, target aether.Target) (aether.Connection, error) {
 	partitionID, ok := PartitionIDFromContext(ctx)
 	if !ok || partitionID == "" {
@@ -150,7 +150,7 @@ func (s *SharedTransport) Dial(ctx context.Context, target aether.Target) (aethe
 		return nil, fmt.Errorf("%w: %s", ErrSharedPartitionNotFound, partitionID)
 	}
 
-	// Inject the tenant's keys and ID into context so the underlying
+	// Inject the partition's keys and ID into context so the underlying
 	// NoiseTransport handshake prepends the preamble.
 	ctx = noise.WithDialOverride(ctx, string(partitionID), keys)
 	return s.inner.Dial(ctx, target)

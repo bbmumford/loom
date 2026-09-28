@@ -43,7 +43,8 @@ type triggerEntry struct {
 // NewRegistry builds a trigger registry.
 //
 //   - ctx is the runtime lifetime context (rt.Context()); every armed
-//     instance's watch goroutine binds it, never a caller ctx (H7 rule).
+//     instance's watch goroutine binds it, never a caller ctx, so a
+//     returned request cannot cancel an armed trigger.
 //   - spawn launches tracked goroutines (rt.Go). Must not be nil.
 //   - invoke dispatches a FunctionID with an event payload — wire it to the
 //     local dispatch path (registry.Dispatch / rpc.Call fallthrough).

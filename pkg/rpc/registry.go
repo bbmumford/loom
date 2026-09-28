@@ -65,20 +65,18 @@ func (r *Registry) AuthzPolicy() *scope.Policy {
 	return r.authz
 }
 
-// Register adds a handler to the registry.
-//
-// Mutability defence: the Middleware and Tags slice headers on h alias the
-// caller's backing arrays. We copy them so a caller that later mutates
-// their own slice (e.g. `mw = append(mw, extra)`) cannot retroactively
-// modify what the registry hands out via Get/All/ByRole.
-// prepareStored validates the handler's partition scope and returns its FQN, role,
-// and a defensively-copied stored Handler. It takes no lock and touches no map,
-// so it is the shared lock-free half of Register and the atomic batch core:
-// scope validation and the Middleware/Tags copy live here once. Collision
-// checks and the store happen under the caller's lock.
+// prepareStored validates the handler's scope tag and Requirement arm and returns
+// its FQN, role, and a defensively-copied stored Handler. It takes no lock and
+// touches no map, so it is the shared lock-free half of Register and the atomic
+// batch core (RegisterAll and RegisterProxy): scope validation and the
+// Middleware/Tags copy live here once. Collision checks and the store happen
+// under the caller's lock.
 func (r *Registry) prepareStored(h Handler) (fqn, role string, stored *Handler, err error) {
 	if !scope.IsDeclared(h.Scope) {
 		return "", "", nil, fmt.Errorf("handler %s has a non-declarable scope %q: declare a concrete scope tag (the ScopeUnset zero value and the ScopeUnknown proto-decay sentinel are refused)", h.FQN(), h.Scope)
+	}
+	if h.Requirement != nil && h.Requirement.Kind == scope.ArmUnset {
+		return "", "", nil, fmt.Errorf("handler %s declares a Requirement with no authorization arm: build it with scope.Open, scope.Capability or scope.Nexus", h.FQN())
 	}
 	s := h
 	if len(h.Middleware) > 0 {
@@ -90,6 +88,12 @@ func (r *Registry) prepareStored(h Handler) (fqn, role string, stored *Handler, 
 	return h.FQN(), h.Role(), &s, nil
 }
 
+// Register adds a handler to the registry.
+//
+// Mutability defence: the Middleware and Tags slice headers on h alias the
+// caller's backing arrays. We copy them so a caller that later mutates
+// their own slice (e.g. `mw = append(mw, extra)`) cannot retroactively
+// modify what the registry hands out via Get/All/ByRole.
 func (r *Registry) Register(h Handler) error {
 	fqn, role, stored, err := r.prepareStored(h)
 	if err != nil {
@@ -230,8 +234,8 @@ func (r *Registry) Count() int {
 // These serve as proxy endpoints — the HTTP bridge dispatches them over
 // mesh via CallRaw instead of executing locally.
 //
-// Use this on gateway endpoints (app.orbtr.io, devices.orbtr.io) to register
-// domain handlers that run on node endpoints:
+// Use this on a gateway endpoint to register domain handlers that run on
+// node endpoints:
 //
 //	proxyReg := rpc.NewRegistry()
 //	proxyReg.RegisterProxy(device.Types())

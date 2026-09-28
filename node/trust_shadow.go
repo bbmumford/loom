@@ -46,7 +46,7 @@ func swarmToPortsRecord(r swarm.Record) ports.Record {
 const shadowBuffer = 1024
 
 // TrustShadow runs the Swarm-backed directory as a passive SHADOW of the live
-// LAD directory during the Phase-0.5 cutover: it ingests the same accepted
+// LAD directory while SwarmTrustMode is "observe": it ingests the same accepted
 // records — in OBSERVE mode, so a trust-gate failure is counted, never fatal —
 // into a SwarmDirectory that no live consumer reads. Its two jobs are to
 // accumulate the trust would-reject evidence (Stats) and to expose a directory
@@ -137,7 +137,7 @@ func (s *TrustShadow) Stats() (checked, rejected, dropped uint64) {
 	return s.dir.Checked(), s.dir.Rejected(), s.dropped
 }
 
-// shadowParityScope names the tenant + role set the parity pass queries on both
+// shadowParityScope names the partition + role set the parity pass queries on both
 // directories. It reads the node's own configured partition and roles: an empty
 // partition selects records stored under the empty partition (ports.Partition is a
 // literal bucket key, not a wildcard), and the role list bounds the per-role

@@ -30,7 +30,7 @@ type AcceptMeshConnectionOpts struct {
 	Proto         Protocol
 	IsInitiator   bool
 	BootstrapHost string
-	// ServiceName identifies the peer's service (e.g., "node.hstles.com").
+	// ServiceName identifies the peer's service (e.g., "node.example.com").
 	// When present, a lad.MemberRecord is published for the peer as soon
 	// as the session is accepted so topology views resolve the peer
 	// immediately rather than waiting for its own gossip to propagate.
@@ -71,7 +71,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 	// Compute cross-origin BEFORE taking m.mu — the LAD reach lookup
 	// inside computeCrossOriginForNode can stall under cache
 	// contention, and holding m.mu across that I/O would serialize
-	// the entire connection table. Audit critical fix #4.
+	// the entire connection table.
 	preComputedCrossOrigin := m.computeCrossOriginForNode(nodeID)
 
 	lifecycleMu := m.sessionLifecycleLock(nodeID)
@@ -83,12 +83,11 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 	// case where the literal "no previous proto" value is the zero
 	// Protocol. Without this, the reject rollback path would restore
 	// a freshly-created peer to opts.Proto (the rejected proto), which
-	// is a no-op. The audit (H5) caught the corner case where a
-	// same-grade rejection against an unknown peer leaks a stub
-	// peer entry with state=PeerConnected, connCount=0 (after the
-	// rollback), protocol=<rejected>. We now (a) snapshot before
-	// create, and (b) delete the freshly-created peer entirely on
-	// reject so no stub remains.
+	// is a no-op, and a same-grade rejection against an unknown peer
+	// would leak a stub peer entry with state=PeerConnected,
+	// connCount=0 (after the rollback), protocol=<rejected>. So we
+	// (a) snapshot before create, and (b) delete the freshly-created
+	// peer entirely on reject so no stub remains.
 	var previousProtocol Protocol
 	if peerExisted {
 		previousProtocol = peer.protocol
@@ -175,11 +174,10 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 	// peer.addTransport, m.budget.Acquire) because the cleanup label
 	// won't run on this early-return path. Without rollback, every
 	// same-grade rejection leaks one connCount unit + one budget slot
-	// + one transport-map entry per peer per reject. Under the
-	// v0.0.228-era WS flap this drove peer.connCount to 40+ for stable
-	// peers, which then made the scaler perpetually try to "scale down"
-	// the phantom connections (drain decrement * 1s tick, never
-	// catching up to the leak rate).
+	// + one transport-map entry per peer per reject. Under a WS flap
+	// that drives peer.connCount to 40+ for stable peers, and the scaler
+	// then perpetually tries to "scale down" the phantom connections
+	// (drain decrement * 1s tick, never catching up to the leak rate).
 	if !m.registerMeshSession(ctx, nodeID, opts.Session, opts.IsInitiator) {
 		m.mu.Lock()
 		if peer.connCount > 0 {
@@ -192,7 +190,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			// active protocol — not the rejected one.
 			peer.protocol = previousProtocol
 		} else {
-			// Audit H5: the peer was created in THIS call for a
+			// The peer was created in THIS call for a
 			// session that just got rejected. There are no other
 			// active transports on it (no addTransport ran except
 			// the one we just removed) and no consumer has seen
@@ -206,7 +204,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			}
 		}
 		m.mu.Unlock()
-		if budgetAcquired { // MESH-C07: only release a slot we actually acquired
+		if budgetAcquired { // only release a slot we actually acquired
 			m.budget.Release()
 		}
 		lifecycleMu.Unlock()
@@ -472,15 +470,15 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 
 	// Start services on the streams
 	{
-		// Bidirectional RPC on Stream 1 — both sides can initiate requests.
-		// Replaces the one-directional ServeMeshStream. The forwarder uses
+		// Bidirectional RPC on Stream 1 — both sides can initiate requests,
+		// unlike the one-directional ServeMeshStream. The forwarder uses
 		// bidiRPC.Call() instead of opening dynamic streams.
 		//
-		// Snapshot (transport, scope) for OBS-7 bidirpc_call_latency_ms
-		// tagging. opts.Proto.String() emits the Library's transport label
+		// Snapshot (transport, scope) for bidirpc_call_latency_ms
+		// tagging. opts.Proto.String() emits the node Protocol's label
 		// ("noise-udp" / "websocket" / "grpc" / "tls"); normalise WS down
-		// to "ws" so the metric label set matches the spec's
-		// (noise-udp / ws / tcp) vocabulary. Scope reads peer.crossOrigin
+		// to "ws" so the metric label set matches the
+		// (noise-udp / ws / tcp) vocabulary documented on BidiRPC.transport. Scope reads peer.crossOrigin
 		// (set during the peer-table prologue above under m.mu) without
 		// re-locking — bool reads are atomic in practice and a stale read
 		// only affects this bidi's tag for the brief reclassification
@@ -495,13 +493,12 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			// fallback transport.
 			bidiTransport = "ws"
 		}
-		// Scope label tracks both cross-origin (different Fly org) and
-		// cross-region (same Fly org but different region). Pre-v0.0.405
-		// the label was just "same-origin" / "cross-org", which lumped
-		// same-region same-org (~1ms RTT) and cross-region same-org
+		// Scope label tracks both cross-origin (different Fly.io
+		// organisation) and cross-region (same Fly.io organisation but a
+		// different region). An origin-only 2-way label would lump
+		// same-region same-origin (~1ms RTT) and cross-region same-origin
 		// (~200ms RTT) into one bucket, making the p99 unreadable for
-		// real local latency. The 3-way split below makes the histogram
-		// honest. See workflow wd4zasivv synthesis.
+		// real local latency; the 3-way split below keeps them apart.
 		bidiScope := "same-org-same-region"
 		switch {
 		case peer != nil && peer.crossOrigin:
@@ -598,10 +595,10 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 				newPathGraceWindow = 60 * time.Second
 			)
 			// fastRetryGap is the inter-retry gap on the FAST path
-			// (after a ping has failed). Previously the loop fell back
-			// to the full interval (5–30 s) between retries, so a
-			// genuinely dead session took 3 × interval = 15–90 s to
-			// declare. With a 1 s fast retry, the death budget after
+			// (after a ping has failed). Falling back to the full
+			// interval (5–30 s) between retries would make a genuinely
+			// dead session take 3 × interval = 15–90 s to declare.
+			// With a 1 s fast retry, the death budget after
 			// the first failed ping is bounded by maxKeepaliveRetries
 			// × pingTimeout — fast enough that the multipath manager
 			// can fail over before the dispatcher repeatedly hits a
@@ -1012,8 +1009,8 @@ cleanup:
 	// WINDOW_UPDATE re-emission can't recover). Mark this protocol
 	// failed with its normal cooldown so the next connectPeer scan
 	// walks protocolOrder past it to the next grade (Noise-UDP → QUIC
-	// → gRPC → WebSocket → TLS). Symmetric with dial-failure handling
-	// at peer_connections.go:767, so the rest of the fallback machine
+	// → gRPC → WebSocket → TLS). Symmetric with the dial-failure handling
+	// in recordDialFailure, so the rest of the fallback machine
 	// (suppression counter, exponential backoff, dormant reactivation)
 	// applies unchanged.
 	if errors.Is(closeReason, aether.ErrSessionStuck) {
@@ -1119,10 +1116,9 @@ cleanup:
 				m.meshSessions[nodeID] = standby
 				// Carry the standby's REAL initiator into the per-nodeID
 				// dedup hint. sessionInitiators is the source-of-truth
-				// (populated at registerMeshSession); falling back to
-				// deletion (previous behaviour) caused both peers to
-				// compute the tie-break against the wrong oldInitiator
-				// after a parallel failover (H-Mesh-Failover-Initiators).
+				// (populated at registerMeshSession); deleting the entry
+				// instead would make both peers compute the tie-break
+				// against the wrong oldInitiator after a parallel failover.
 				if m.meshSessionInitiators != nil {
 					if standbyInit, known := m.sessionInitiators[standby]; known {
 						m.meshSessionInitiators[nodeID] = standbyInit
@@ -1161,7 +1157,7 @@ cleanup:
 	}
 	m.multipathMu.Unlock()
 
-	if budgetAcquired { // MESH-C07: balance Release strictly against a successful Acquire
+	if budgetAcquired { // balance Release strictly against a successful Acquire
 		m.budget.Release()
 	}
 	m.removeMultipathSession(nodeID, opts.Session)
@@ -1214,27 +1210,26 @@ cleanup:
 	// counting them as error closes drives the reliability EMA down,
 	// which inflates the scaler's failure factor, which inflates K,
 	// which causes more parallel dials and produces MORE dedup races —
-	// a self-amplifying feedback loop that turned the initial v0.0.245
-	// rollout into 65 active sessions across 9 peers within 30 minutes.
+	// a self-amplifying feedback loop that multiplies the active
+	// sessions per peer within minutes.
 	// The 500 ms dedup-reject window matches the chronic-skip guard
 	// above, so the two concur on what counts as a real failure.
 	if m.qualityTracker != nil {
 		// Classify the close into one of three reasons so the
-		// reliability EMA gets the right signal. Audit H9: the
-		// original implementation used lifetime alone as a proxy
-		// for "dedup race" — meaning ANY session that died in the
-		// first 500 ms (or 6 s for Grade-C) was treated as a
-		// race-loser and contributed no signal to reliability EMA.
-		// That misclassified genuinely-broken paths (handshake
+		// reliability EMA gets the right signal. Lifetime alone is
+		// not a usable proxy for "dedup race": ANY session that died
+		// in the first 500 ms (or 6 s for Grade-C) would be treated
+		// as a race-loser and contribute no signal to reliability
+		// EMA, misclassifying genuinely-broken paths (handshake
 		// failed, AEAD verify failed, immediate RST) as harmless
-		// churn, leaving their reliability score at 1.0 forever.
+		// churn and leaving their reliability score at 1.0 forever.
 		//
-		// Now: a close is CloseRaceLoser ONLY when there's a
+		// So a close is CloseRaceLoser ONLY when there's a
 		// matching dedup-reject record stamped by registerMeshSession
 		// for the same (peer, proto). All other short closes are
 		// CloseTransportError — the chronic-fail bucket above
 		// already incremented for the same lifetime range, so the
-		// reliability tracker now agrees.
+		// reliability tracker agrees with it.
 		key := quality.Key(nodeID, mapProtocol(opts.Proto).String())
 		var reason quality.CloseReason
 		hasDedupReject := false
@@ -1898,14 +1893,14 @@ func (m *ConnectionManager) GetMeshSession(nodeID string) (aether.Session, bool)
 		// Quality-driven pick comes first. PickByQuality returns
 		// the highest-DispatchRank alive session; falls back to
 		// PrimarySession internally when no quality config is
-		// attached (legacy callers).
+		// attached.
 		if sess, ok := mgr.PickByQuality(quality.OpDefault); ok && sess != nil && !sess.IsClosed() {
 			return sess, true
 		}
 		// PickByQuality returned a closed session or none — walk all
-		// paths to find any open one. Same fallback the previous
-		// implementation used; preserves dispatch availability when
-		// the score-driven primary briefly points at a zombie.
+		// paths to find any open one. This walk preserves dispatch
+		// availability when the score-driven primary briefly points at
+		// a zombie.
 		for _, sess := range mgr.AllSessions() {
 			if sess == nil {
 				continue
@@ -2104,9 +2099,9 @@ func (m *ConnectionManager) addMultipathSession(nodeID string, session aether.Se
 	}
 
 	// AddPathQA records the path with region metadata for score
-	// classification. AddPath is still called internally so the legacy
-	// integer-Quality scheduler (WDRR) keeps working for callers that
-	// haven't migrated.
+	// classification. AddPathQA runs AddPath's path insertion under the
+	// same lock, so the integer-Quality scheduler (WDRR) keeps working
+	// for callers that read it.
 	mgr.AddPathQA(session, mapProtocol(proto), remoteRegion)
 
 	// [MULTIPATH] high-signal log: every path register reveals when a

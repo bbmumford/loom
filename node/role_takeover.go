@@ -21,7 +21,7 @@ import (
 	"github.com/bbmumford/loom/secrets"
 )
 
-// TakeoverConfig tunes the Phase-1 missing-role detection + takeover engine.
+// TakeoverConfig tunes the missing-role detection + takeover engine.
 type TakeoverConfig struct {
 	// Roles this node guards (typically capabilities.RoleConfig
 	// PriorityOrder ∩ roles this node has an activator + entitlement for).
@@ -59,8 +59,8 @@ type TakeoverConfig struct {
 	// degraded operation, not absence."
 	//
 	// 1 is the MOST-preferred rung; higher numbers are later fallbacks. A
-	// node only wins a role when no lower-numbered rung claims it, which is
-	// §6's "the chain descends only as far as needed".
+	// node only wins a role when no lower-numbered rung claims it: the chain
+	// descends only as far as needed.
 	//
 	// Default: ChainDepth — the LAST rung. An unconfigured node is the LEAST
 	// preferred candidate, never the most. Defaulting to 1 would make every
@@ -82,7 +82,7 @@ type TakeoverConfig struct {
 // 🔴 This is deliberate and load-bearing. `Rung` is `omitempty` on the wire, so
 // a claim carrying no rung decodes to 0 — and 0 would be the
 // MOST-preferred rung. Absence must not outrank measurement, so an unset rung
-// is treated as the least-preferred candidate. Fail-closed, per §10.
+// is treated as the least-preferred candidate, so the ranking fails closed.
 const rungUnset = 1 << 30
 
 // claimBody is the JSON body of a role.claim.<role> record.
@@ -129,10 +129,10 @@ type roleClaim struct {
 	// SIGNED claim order".
 	//
 	// 🔑 IT IS SAFE TO ORDER ON THIS AND ON NOTHING WEAKER. swarm verifies the
-	// signature before delivery (swarm@v0.0.8 sig.go:95, ed25519.Verify over
+	// signature before delivery (swarm's sig.go, ed25519.Verify over
 	// signableBytes(r)), so a delivered record's Sig is attested, not
-	// claimant-asserted. The previous final tie-break was the node ID — which
-	// the claimant CHOOSES, so a node could bias which claim won a rung/HLC tie
+	// claimant-asserted. The node ID is not the final tie-break because the
+	// claimant CHOOSES it, so a node could bias which claim won a rung/HLC tie
 	// simply by picking a low-sorting ID. A signature cannot be ground toward a
 	// target without the private key.
 	//
@@ -162,11 +162,11 @@ func normaliseFloor(f int) int {
 }
 
 // claimFloorDisagreement reports whether a peer's declared cardinality floor
-// contradicts this node's, and is the ONE thing MinHolders does today.
+// contradicts this node's, and is the ONE thing MinHolders does.
 //
-// A carried-but-unread field is the "mechanism that exists, is wired, and never
-// fires" shape this lane has filed four findings on today, so the field earns
-// its place on the wire by surfacing a real operational fault: two nodes
+// A carried-but-unread field is a mechanism that exists, is wired, and never
+// fires, so the field earns its place on the wire by surfacing a real
+// operational fault: two nodes
 // guarding one role while disagreeing about how many holders it needs is a
 // configuration split-brain that is otherwise invisible until the role is
 // under-covered in production.
@@ -232,10 +232,10 @@ func resolveChainPosition(rung, depth int) (int, int) {
 	return rung, depth
 }
 
-// TakeoverEngine implements plan §1.3–§1.5: watch coverage via the role
-// table, corroborate over a window, claim via the role.claim.<role>
-// claim-set (first-N-by-HLC+NodeID win — the anti-thundering-herd
-// mechanism), then decrypt the role.secrets.<role> envelope and activate.
+// TakeoverEngine watches coverage via the role table, corroborates over a
+// window, claims via the role.claim.<role> claim-set (first-N-by-HLC+NodeID
+// win — the anti-thundering-herd mechanism), then decrypts the
+// role.secrets.<role> envelope and activates.
 // Every decision is deterministic-local ("same view, same decision") — no
 // leader.
 type TakeoverEngine struct {
@@ -513,8 +513,8 @@ func (e *TakeoverEngine) run() {
 	}
 }
 
-// evaluateRole is one deterministic-local pass of the §1.3/§1.4 state
-// machine for a role.
+// evaluateRole is one deterministic-local pass of the detect → corroborate
+// → claim state machine for a role.
 func (e *TakeoverEngine) evaluateRole(role string) {
 	rt := e.rt
 	selfID := string(rt.identity.NodeID)
@@ -668,14 +668,14 @@ func (e *TakeoverEngine) withdrawClaim(role string) {
 //
 // 🔑 RUNG DOMINATES. The failover chain is explicit and ordered, so
 // a nearer rung outranks an earlier claim: a rung-1 node that claims late
-// still beats a rung-3 node that claimed first. That is §6's "the chain
-// descends only as far as needed" — the mesh reaches for the last rung only
-// when no nearer one is claiming, and the last rung is emergency-thick
-// operation rather than absence (acceptance criterion 7).
+// still beats a rung-3 node that claimed first. The chain descends only as
+// far as needed — the mesh reaches for the last rung only when no nearer one
+// is claiming, and the last rung is emergency-thick operation rather than
+// absence.
 //
-// HLC remains the tie-break WITHIN a rung, so the anti-thundering-herd
-// property is unchanged for a flat (single-rung) chain — which is exactly the
-// flat behaviour, and what ChainDepth defaults to.
+// HLC remains the tie-break WITHIN a rung, so a flat (single-rung) chain —
+// what ChainDepth defaults to — keeps the anti-thundering-herd
+// first-N-by-HLC order.
 //
 // An unset rung normalises to rungUnset and therefore sorts last; see the
 // constant. Absence must never outrank a declared position.

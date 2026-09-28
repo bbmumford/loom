@@ -24,7 +24,6 @@ import (
 // for authenticated callers should use RegisterAllWithBridge, pre-configure
 // the Bridge via bridge.SetDirectoryAuth, and pass that bridge in — the
 // auth predicate is per-Bridge (per-Registry), NOT a process-wide global.
-// See finding rev-080.
 func RegisterAll(reg *rpc.Registry, router chi.Router) {
 	RegisterAllWithBridge(NewBridge(reg), router)
 }

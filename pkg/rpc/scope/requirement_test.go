@@ -73,3 +73,21 @@ func TestRequirement_UnknownArmFailsClosed(t *testing.T) {
 		t.Fatal("unknown arm should fail closed")
 	}
 }
+
+// The zero Requirement declares no arm, so it denies even an identity every
+// declared arm would admit; admission without authorization is Open(), never the
+// zero value.
+func TestRequirement_ZeroValueFailsClosed(t *testing.T) {
+	var zero Requirement
+	if zero.Kind != ArmUnset {
+		t.Fatalf("zero Requirement Kind = %d, want ArmUnset", zero.Kind)
+	}
+	if ok, r := NewPolicy(capSet{"orbtr:records.read": true}).Authorize(zero, resolved("p1")); ok {
+		t.Fatal("a Requirement with no arm must deny")
+	} else if r == "" {
+		t.Fatal("deny should carry a reason")
+	}
+	if Open().Kind == ArmUnset {
+		t.Fatal("Open() must declare an explicit arm")
+	}
+}

@@ -25,7 +25,7 @@ type BloomFilter struct {
 // NewBloomFilter creates a Bloom filter optimized for the expected number of elements
 // and desired false positive rate.
 func NewBloomFilter(expectedElements uint64, falsePositiveRate float64) *BloomFilter {
-	// MESH-F12: clamp inputs. expectedElements==0 makes numBits==0, and the
+	// Clamp inputs. expectedElements==0 makes numBits==0, and the
 	// first Add then panics on `hash % 0`; an out-of-range false-positive rate
 	// makes math.Log misbehave. DefaultBloomConfig is safe, but a caller-supplied
 	// BloomConfig{ExpectedElements:0} would crash on the first ledger Append.
@@ -124,10 +124,11 @@ func DeserializeBloomFilter(data []byte) (*BloomFilter, error) {
 	bits := make([]byte, len(data)-12)
 	copy(bits, data[12:])
 
-	// MESH-F02: validate numBits against the actual bit-slice length. A corrupt
+	// Validate numBits against the actual bit-slice length. A corrupt
 	// row with numBits==0 makes Add panic on `hash % 0`; numBits > len(bits)*8
 	// makes Add index bits[idx/8] out of range. Either crashes the ledger on the
-	// next updateBloomFilter→Add. The old code only checked len(data) < 12.
+	// next updateBloomFilter→Add; the len(data) < 12 check above catches
+	// neither.
 	if numBits == 0 || numBits > uint64(len(bits))*8 {
 		return nil, fmt.Errorf("bloom: invalid numBits=%d for %d-byte bit slice", numBits, len(bits))
 	}

@@ -10,7 +10,7 @@ import (
 	"io"
 )
 
-// DurableJournal is the narrow durability port (Phase 0.5.1): atomic ordered
+// DurableJournal is the narrow durability port: atomic ordered
 // append of ACCEPTED records, monotonic watermarks, lossless replay, restart
 // recovery, retention, and snapshots. Accepted Swarm changes are journaled
 // AFTER signature, identity, partition/topic authorization, clock, and resource
@@ -18,13 +18,16 @@ import (
 // never a second live merge authority. Replay feeds accepted records back
 // through the same projection path (LiveDirectory), not around it.
 //
-// Initial implementation: a hardened Ledger/MeshLedger adapter. Known gaps
-// it must close first (plan B.4): the current schema omits the signed CRDT
-// fields (Record carries them all); auto-seq Head-then-INSERT is not atomic;
-// history is queried before live subscribe; slow subscribers are silently
-// dropped; compaction can delete the latest state/tombstone. The Ledger
-// package dependency is removed LAST (Phase 0.5.3 step 6) — removal selects
-// a new journal implementation, it never deletes durability/audit semantics.
+// journal.FileJournal is the standard implementation. An implementation must
+// store every signed CRDT field Record carries, append atomically (no
+// Head-then-INSERT sequence race), subscribe before it replays history, never
+// silently drop records to a slow subscriber, and never let compaction delete
+// a slot's latest state or tombstone. Replacing an implementation never
+// removes these durability/audit semantics.
+// TODO: FileJournal does not yet meet the slow-subscriber requirement: its
+// live tail (fanoutLocked) drops a record when the subscriber's 256-slot
+// buffer is full, and Record carries no watermark, so the subscriber cannot
+// see the gap or know where to resume a Replay.
 type DurableJournal interface {
 	// Append durably appends one accepted record and returns its watermark.
 	// Appends are atomic and totally ordered; watermarks are strictly
@@ -51,7 +54,7 @@ type DurableJournal interface {
 
 	// Snapshot returns a consistent serialized checkpoint. Restarting from
 	// snapshot+journal must reproduce the same live projection and Merkle
-	// root as an uninterrupted node (§0.5.4).
+	// root as an uninterrupted node.
 	Snapshot(ctx context.Context) (io.ReadCloser, error)
 
 	// Compact applies retention up to a causally-stable checkpoint. It must

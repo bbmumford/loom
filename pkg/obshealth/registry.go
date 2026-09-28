@@ -21,8 +21,8 @@ import (
 type SubsystemID string
 
 // Entry is the public, point-in-time view of one degraded subsystem.
-// JSON tags match the ORBTR DegradedSubsystem shape so meshmon can
-// deserialise either source with one struct.
+// JSON tags match the device agent's DegradedSubsystem shape so a monitoring
+// client can deserialise either source with one struct.
 type Entry struct {
 	Name  SubsystemID `json:"name"`
 	Error string      `json:"error"`

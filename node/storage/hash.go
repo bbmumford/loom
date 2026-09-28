@@ -59,10 +59,9 @@ func (h Hash) Hex() string {
 
 // Equal reports whether two hashes are identical.
 func (h Hash) Equal(other Hash) bool {
-	// Removed a dead `if &h == &other` branch — it compared the
-	// addresses of two by-value parameter copies, which are always distinct, so
-	// it was always false and misleading. Hash is a comparable array; == is the
-	// correct check.
+	// Hash is a comparable array, so == compares all 32 bytes. Both
+	// operands are by-value copies, so comparing their addresses would
+	// never report equality.
 	return h == other
 }
 

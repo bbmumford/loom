@@ -92,7 +92,7 @@ const (
 	// performs scheduled remote probes.
 	SubsystemUptimeRunner SubsystemID = "uptime.runner"
 
-	// ORBTR agent PolicyEngine post-commit appliers (rev-054). Each
+	// Device-agent PolicyEngine post-commit appliers. Each
 	// identifier corresponds to a single applyOrLog site inside
 	// PolicyEngine.PullAndApply: a bundle has already been committed by
 	// the time these run, so failure is a soft-degradation reflected here

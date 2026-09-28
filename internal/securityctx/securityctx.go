@@ -6,14 +6,15 @@
 // Package securityctx is loom's fail-closed default implementation of
 // ports.AuthValidator, plus the loom-local security context keys it reads.
 //
-// IMPORTANT SCOPE LIMIT: these context keys are loom-PRIVATE. In an HSTLES
-// build nothing writes them (SecurityCore writes platform/security/helpers'
-// unexported keys), so this validator denies every RequiresAuth handler —
-// which is exactly the safe behaviour when the real validator was not
-// injected. HSTLES builds MUST inject an AuthValidator that delegates to
-// the real helpers package (Config.AuthValidator / ExecutorConfig.
-// AuthValidator); this package is the default only so pure-loom
-// deployments get coherent, fail-closed semantics without HSTLES.
+// IMPORTANT SCOPE LIMIT: these context keys are loom-PRIVATE. The
+// authentication keys ValidateExecutionAuth reads are written only by
+// WithAuth, which nothing outside loom's tests calls, and the package is
+// internal, so no code outside loom can call it. The default validator
+// therefore denies every RequiresAuth handler — the safe behaviour when no
+// validator was injected. A composition root that authenticates callers MUST
+// inject its own AuthValidator (Config.AuthValidator /
+// ExecutorConfig.AuthValidator) that reads the context keys its
+// authentication writes.
 package securityctx
 
 import (
@@ -86,9 +87,10 @@ func IsAuthenticated(ctx context.Context) bool {
 	return ok && v
 }
 
-// WithExecutionPrincipal stamps a product-created immutable principal onto
-// the Pure-Loom private context. The principal—not a task body—must have
-// established its owner key before calling this helper.
+// WithExecutionPrincipal stamps an immutable principal a composition root
+// created onto the Pure-Loom private context. The principal—not a task
+// body—must have established its execution partition key before calling
+// this helper.
 func WithExecutionPrincipal(
 	ctx context.Context,
 	principal ports.ExecutionPrincipal,
@@ -101,8 +103,8 @@ func Default() ports.AuthValidator { return defaultValidator{} }
 
 type defaultValidator struct{}
 
-// ValidateExecutionAuth replicates the platform/security/helpers logic
-// against the loom-local keys: no-auth handlers pass; RequiresAuth handlers
+// ValidateExecutionAuth applies the handler's auth rules against the
+// loom-local keys: no-auth handlers pass; RequiresAuth handlers
 // need an authenticated principal with a permitted auth type and every
 // required scope. With nothing writing these keys the result is a uniform
 // deny for RequiresAuth handlers — fail closed, never fail open.
@@ -155,7 +157,7 @@ func (defaultValidator) ExecutionPartitionID(ctx context.Context) (string, bool)
 	return partitionID, partitionID != ""
 }
 
-// ExecutionPrincipal reads the private Pure-Loom owner principal without
+// ExecutionPrincipal reads the private Pure-Loom execution principal without
 // constructing one from request or task data.
 func (defaultValidator) ExecutionPrincipal(ctx context.Context) (ports.ExecutionPrincipal, bool) {
 	principal, ok := ctx.Value(executionPrincipalKey).(ports.ExecutionPrincipal)

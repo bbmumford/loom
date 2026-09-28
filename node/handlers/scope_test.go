@@ -31,11 +31,11 @@ func (s *stubMeta) Scopes() []string            { return nil }
 func (s *stubMeta) Scope() Scope                { return s.scope }
 func (s *stubMeta) AllowedPartitions() []string { return s.allowed }
 
-// scopeRefPolicy is a CONSUMER-side reference PresencePolicy reproducing the
-// platform's historical presence semantics. loom no longer contains this
-// logic — validateScope delegates every declared (non-None) tag to
-// whatever policy the registry carries; a nil policy fails closed. The reason
-// strings mirror the diagnostics these tests characterise.
+// scopeRefPolicy is a consumer-side reference PresencePolicy for these tests.
+// loom holds no presence logic: validateScope delegates every declared
+// (non-None) tag to whatever policy the registry carries, and a nil policy
+// fails closed. The tests below match substrings of the reason strings it
+// returns, so a reason string changes only together with those tests.
 func scopeRefPolicy(platforms ...string) rpcscope.PresencePolicyFunc {
 	allow := make(map[string]struct{}, len(platforms))
 	for _, p := range platforms {
@@ -107,11 +107,10 @@ func ctxWithRPC(m map[string]interface{}) context.Context {
 	return context.WithValue(context.Background(), "rpc_context", m)
 }
 
-// TestValidateTenantScope_Profile_MissingTenantFailsClosed asserts that the
-// newly-added ScopePartition arm rejects a request that is not carrying a
-// tenant. Before finding rev-069 this scope value silently matched the empty
-// default (fall-through) — profile-scoped handlers were effectively
-// unenforced when declared via the handlers package.
+// TestValidateTenantScope_Profile_MissingTenantFailsClosed asserts that a
+// ScopePartition handler denies a request whose identity carries no
+// transport-pinned partition, so a declared tier never falls through to
+// admission when the partition is absent.
 func TestValidateTenantScope_Profile_MissingTenantFailsClosed(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "billing.getProfile", scope: ScopePartition}
@@ -125,10 +124,10 @@ func TestValidateTenantScope_Profile_MissingTenantFailsClosed(t *testing.T) {
 	}
 }
 
-// TestValidateTenantScope_Profile_WithTenantPasses asserts the Profile arm
-// admits a caller that has stamped a tenant. Deeper profile-membership
-// enforcement is handled at the middleware tier (RequireScopesWithParam)
-// per Quorum ADR-0012 — the dispatch tier only checks the tenant prerequisite.
+// TestValidateTenantScope_Profile_WithTenantPasses asserts a ScopePartition
+// handler admits a caller whose authenticated identity carries a partition.
+// validateScope checks only that the partition is present; which records the
+// caller may act on is decided by the handler or its middleware.
 func TestValidateTenantScope_Profile_WithTenantPasses(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "billing.getProfile", scope: ScopePartition}
@@ -162,12 +161,10 @@ func TestValidateTenantScope_Unknown_FailsClosed(t *testing.T) {
 	}
 }
 
-// TestValidateTenantScope_GarbageScope_FailsClosed asserts the default arm
-// rejects any scope value that is not one of the recognised constants —
-// preserving the isolation guarantee against typos and partial migrations
-// from future scope tiers. Before finding rev-069 this fell through silently
-// (fail-open), which meant a mis-typed scope value ("tennant") accepted any
-// caller including anonymous ones.
+// TestValidateTenantScope_GarbageScope_FailsClosed asserts the policy's
+// default arm rejects any scope value that is not one of the recognised
+// constants, so a mis-typed scope value ("tennant") admits no caller,
+// anonymous or authenticated.
 func TestValidateTenantScope_GarbageScope_FailsClosed(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "typo.op", scope: Scope("tennant")}
@@ -217,8 +214,8 @@ func TestValidateTenantScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			r := NewHandlerRegistry()
-			// The platform allowlist now lives in the CONSUMER policy, not in
-			// loom. An empty/nil allowlist admits nobody — fail closed.
+			// The allow-list lives in the consumer policy, not in loom. An
+			// empty or nil allow-list admits nobody — fail closed.
 			r.SetPresencePolicy(scopeRefPolicy(test.set...))
 			err := r.validateScope(identity(test.partition), h)
 			if test.wantErr {
@@ -234,8 +231,9 @@ func TestValidateTenantScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing
 	}
 }
 
-// TestValidateTenantScope_LegacyScopes_StillEnforce guards against a
-// regression where the switch refactor drops enforcement of an existing tier.
+// TestValidateTenantScope_LegacyScopes_StillEnforce asserts each tier that
+// requires a partition (ScopePartition, ScopeWithinPartition, ScopeSubject)
+// denies a request with no authenticated partition, wrapping ErrDenied.
 func TestValidateTenantScope_LegacyScopes_StillEnforce(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -299,17 +297,17 @@ func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 	}
 }
 
-// TestValidateTenantScope_TransportReconcile is a REGRESSION LOCK on the
-// transport/authenticated-identity reconciliation. On a tenant-specific
-// transport the aether session's partition is stamped by WithTransportPartition; a
-// later authenticated identity that disagrees is rejected. Mutable request
+// TestValidateTenantScope_TransportReconcile locks the
+// transport/authenticated-identity reconciliation. On a partition-bound
+// transport the aether session's partition is stamped by WithTransportPartition;
+// a later authenticated identity that disagrees is rejected. Mutable request
 // maps are never one side of this comparison.
 //
-// This is the load-bearing behaviour the endpoint-template Config.Tenants fix
-// (#R-697 Directive-1, "prove enforcement not config-presence") rests on, and
-// it had no direct coverage. The switch arms above return only on failure, so
-// the reconcile is reached on every scope whose context check passes; these
-// cases drive a ScopePartition handler (partition present) straight into it.
+// A composition root that binds a listener to a partition relies on this
+// check to deny a session that authenticates as a different partition.
+// reconcileTransportPartition runs only after the presence policy admits, so
+// these cases drive a ScopePartition handler (partition present) straight
+// into it.
 func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 	const reqTenant = "acme"
 	cases := []struct {

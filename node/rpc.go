@@ -112,13 +112,13 @@ func (m *rpcMetrics) Stats() map[string]map[string]int64 {
 	return result
 }
 
-// dispatchLatencyRegistry holds per-handler DurationHist samples for OBS-6
-// (dispatch_handler_latency_ms). Wraps a sync.Map<string,*DurationHist> with
+// dispatchLatencyRegistry holds per-handler DurationHist samples for
+// dispatch_handler_latency_ms. Wraps a sync.Map<string,*DurationHist> with
 // a double-checked load so the hot path is a single sync.Map.Load on the
 // common case (handler already registered) and only takes the LoadOrStore
 // slow path on first sight of a handler name.
 //
-// Cardinality is bounded by the handler registry — each partition.<domain>.<Op>
+// Cardinality is bounded by the handler registry — each orbtr.<domain>.<Op>-style
 // FQN gets exactly one entry, and there is no per-call or per-partition key
 // component, so the map size stays at O(handlers) regardless of traffic.
 type dispatchLatencyRegistry struct {
@@ -188,17 +188,19 @@ func (r *dispatchLatencyRegistry) TopN(n int) []dispatchLatencySnapshot {
 }
 
 // bidiLatencyRegistry holds per-(transport, scope) DurationHist samples for
-// OBS-7 bidirpc_call_latency_ms — the full client-side BidiRPC.Call
-// round-trip (marshal → send → wait → correlate). Pairs with OBS-6
-// (dispatch_handler_latency_ms): OBS-6 measures the responder's pure
-// handler execution; OBS-7 measures the wire + queue time on top, so the
-// gap between the two surfaces network or scheduler stalls vs handler
+// bidirpc_call_latency_ms — the full client-side BidiRPC.Call round-trip
+// (marshal → send → wait → correlate). Pairs with
+// dispatch_handler_latency_ms: that one measures the responder's pure
+// handler execution; this one measures the wire + queue time on top, so
+// the gap between the two surfaces network or scheduler stalls vs handler
 // work.
 //
-// Tag key is "<transport>|<scope>" — e.g. "noise-udp|same-origin",
-// "ws|cross-org". Cardinality is bounded by the product of the two
-// label dimensions (~3 transports × 2 scopes = 6 buckets max), so the
-// map never grows unbounded regardless of peer count.
+// Tag key is "<transport>|<scope>": transport is Protocol.String() with
+// websocket and tls folded into "ws" (plus "unknown" for an empty label),
+// and scope is one of the 3 origin/region values described on
+// BidiRPC.scope (plus "unknown"). Cardinality is bounded by the product of
+// those two small label sets, so the map never grows unbounded regardless
+// of peer count.
 type bidiLatencyRegistry struct {
 	hists sync.Map // map[string]*aethermetrics.DurationHist
 }
@@ -226,7 +228,7 @@ func (r *bidiLatencyRegistry) Record(transport, scope string, d time.Duration) {
 }
 
 // bidiLatencySnapshot is a per-(transport, scope) readout used when
-// surfacing OBS-7 in MeshMetrics.
+// surfacing bidirpc_call_latency_ms in MeshMetrics.
 type bidiLatencySnapshot struct {
 	Transport string
 	Scope     string
@@ -319,25 +321,26 @@ type RPCServer struct {
 	// authValidator stamps wire-envelope partition IDs onto the platform-
 	// canonical context key (convention (b) in handleRequest). Injected
 	// from Config.AuthValidator; defaults to the loom-local securityctx
-	// implementation, which HSTLES builds must override so domain
-	// handlers' helpers.ExtractTenantID sees the value.
+	// implementation, which a composition root whose domain handlers read
+	// identity through their own helpers package must override so those
+	// handlers see the value.
 	authValidator ports.AuthValidator
 
 	// dispatchLatency records per-handler registry.Dispatch wall-clock
-	// duration (OBS-6). Updated in executeLocal so it covers both the
+	// duration (dispatch_handler_latency_ms). Updated in executeLocal so it covers both the
 	// non-bidi path (handleRequest → executeLocal) AND the bidi path
 	// (handleIncomingRequest → server.handleRequest → executeLocal).
 	dispatchLatency dispatchLatencyRegistry
 
 	// bidiLatency records the full BidiRPC.Call client-side round-trip
-	// (OBS-7), tagged by (transport, scope). Lives on RPCServer (not on
+	// (bidirpc_call_latency_ms), tagged by (transport, scope). Lives on RPCServer (not on
 	// individual BidiRPC instances) so all of a node's bidi sessions
 	// aggregate into a single histogram per tag — operator dashboards
 	// see one p50/p99 per (transport, scope), not per peer. Updated
 	// from BidiRPC.Call's defer.
 	bidiLatency bidiLatencyRegistry
 
-	// bidiPhase{Marshal,Send,Wait} decompose the OBS-7 aggregate into
+	// bidiPhase{Marshal,Send,Wait} decompose the bidiLatency aggregate into
 	// the three contiguous wall-clock phases inside BidiRPC.Call:
 	// marshal = pb.MarshalRequest + Type-prefix concat
 	// send = stream.Send (wire write + scheduler enqueue + park)
@@ -358,7 +361,6 @@ type RPCServer struct {
 	// 30,000ms sample into the bidiLatency histogram, pinning p99 at
 	// the exact deadline value and making the histogram unreadable for
 	// real successful-call latency. Per-tag tag = (transport, scope).
-	// See workflow wd4zasivv synthesis.
 	bidiTimeout bidiLatencyRegistry
 }
 
@@ -427,7 +429,7 @@ func (s *RPCServer) PrincipalPathStats() (sealed, unsealed int64) {
 }
 
 // DispatchLatencyTopN returns up to n per-handler dispatch latency snapshots,
-// sorted by sample count descending. Powers the OBS-6
+// sorted by sample count descending. Powers the
 // dispatch_handler_latency_ms_p50/p99_<handler> keys in Runtime.MeshMetrics
 // without surfacing a key per handler in a registry that may hold 100+
 // entries. Returns nil if no samples have been recorded yet.
@@ -435,7 +437,7 @@ func (s *RPCServer) DispatchLatencyTopN(n int) []dispatchLatencySnapshot {
 	return s.dispatchLatency.TopN(n)
 }
 
-// RecordBidiLatency appends a sample to the OBS-7 bidi-RPC latency
+// RecordBidiLatency appends a sample to the bidirpc_call_latency_ms
 // histogram. Called from BidiRPC.Call's defer with the full round-trip
 // duration. Exposed (vs an internal method) because BidiRPC is in the
 // same package but the call sequence is one tight defer at the top of
@@ -446,7 +448,7 @@ func (s *RPCServer) RecordBidiLatency(transport, scope string, d time.Duration) 
 }
 
 // RecordBidiPhaseMarshal records the time inside BidiRPC.Call spent on
-// pb.MarshalRequest + type-prefix concat. Decomposes the OBS-7 aggregate
+// pb.MarshalRequest + type-prefix concat. Decomposes the bidiLatency aggregate
 // so the operator can distinguish "codec cost" from "wire/wait cost".
 func (s *RPCServer) RecordBidiPhaseMarshal(transport, scope string, d time.Duration) {
 	s.bidiPhaseMarshal.Record(transport, scope, d)
@@ -470,7 +472,7 @@ func (s *RPCServer) RecordBidiPhaseWait(transport, scope string, d time.Duration
 // RecordBidiTimeout records a DeadlineExceeded exit from BidiRPC.Call.
 // Split from RecordBidiLatency so the success-path histogram is not
 // pinned at the 30s callerRequestTTL by timed-out calls. Surfaced as
-// bidirpc_timeout_<p50|p99|count>_<transport>_<scope>.
+// bidirpc_timeout_ms_<p50|p99|count>_<transport>_<scope>.
 func (s *RPCServer) RecordBidiTimeout(transport, scope string, d time.Duration) {
 	s.bidiTimeout.Record(transport, scope, d)
 }
@@ -482,20 +484,19 @@ func (s *RPCServer) BidiTimeoutSnapshots() []bidiLatencySnapshot {
 	return s.bidiTimeout.Snapshots()
 }
 
-// BidiPhaseSnapshots returns one entry per phase per (transport, scope)
-// bucket. Used by Runtime.MeshMetrics to surface the OBS-7 phase
-// decomposition keys. The returned slice's "phase" field is one of
-// "marshal", "send", "wait" — surface key is built as
-// bidirpc_phase_<phase>_<p50|p99|count>_<transport>_<scope>.
+// BidiPhaseSnapshots returns one slice per phase (marshal, send, wait),
+// each holding one entry per (transport, scope) bucket. Runtime.MeshMetrics
+// surfaces them as bidirpc_<marshal|send|wait>_ms_<p50|p99|count>_<transport>_<scope>.
 func (s *RPCServer) BidiPhaseSnapshots() (marshal, send, wait []bidiLatencySnapshot) {
 	return s.bidiPhaseMarshal.Snapshots(), s.bidiPhaseSend.Snapshots(), s.bidiPhaseWait.Snapshots()
 }
 
 // BidiLatencySnapshots returns one entry per (transport, scope) bucket
-// that has recorded samples. Powers the OBS-7
+// that has recorded samples. Powers the
 // bidirpc_latency_ms_p50/p99_<transport>_<scope> keys in
-// Runtime.MeshMetrics. Cardinality is naturally bounded (~6 buckets max:
-// 3 transports × 2 scopes) so no top-N truncation is needed. Returns
+// Runtime.MeshMetrics. Cardinality is naturally bounded (the normalised
+// transport labels × the 3 scope values, see bidiLatencyRegistry) so no
+// top-N truncation is needed. Returns
 // nil if no samples have been recorded yet.
 func (s *RPCServer) BidiLatencySnapshots() []bidiLatencySnapshot {
 	return s.bidiLatency.Snapshots()
@@ -587,14 +588,15 @@ func callerNodeFromCtx(ctx context.Context) string {
 // process-global namespace, read at step 0a before any principal is bound and
 // written for every successful local execution with a 10s TTL. Keyed on it
 // alone, any two requests sharing an id collide regardless of who sent them or
-// what they called — peer A's `orbtr.ai.auth.Login` response answers peer B's
-// `orbtr.io.dhcp.ListLeases`, because the only thing compared is "42" == "42".
+// what they called — peer A's `orbtr.auth.Login` response answers peer B's
+// `orbtr.dhcp.ListLeases`, because the only thing compared is "42" == "42".
 // pkg/dispatch mints these ids from a process-global base36 counter
-// (hwp_dispatch.go:231), so two nodes booting together emit the same low ids.
+// (buildRPCRequestCtx in hwp_dispatch.go), so two nodes booting together
+// emit the same low ids.
 //
 // 🔑 LENGTH-PREFIXED, NOT DELIMITER-JOINED. requestID is fully caller-
 // controlled, so any fixed separator is forgeable: with "a|b|c" a caller could
-// send Id = "|orbtr.ai.auth.Login|42" and land on another handler's entry.
+// send Id = "|orbtr.auth.Login|42" and land on another handler's entry.
 // Length prefixes make the encoding injective — one key can be produced by
 // exactly one triple — so no choice of requestID can impersonate a different
 // (caller, handler) pair.
@@ -702,7 +704,7 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 
 	// If both paths available, check if we should forward instead of local
 	//
-	// Audit L14: the forwarded response is NOT cached in s.responseCache.
+	// The forwarded response is NOT cached in s.responseCache.
 	// Intentional — when this node forwards, it's acting as a proxy hop;
 	// the canonical responder is the node that actually executes the
 	// handler. That node's own responseCache stores the successful
@@ -845,13 +847,13 @@ func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startT
 		}
 	}
 
-	// OBS-6 dispatch_handler_latency_ms: time the pure handler logic
+	// dispatch_handler_latency_ms: time the pure handler logic
 	// (validateScope + middleware Before + ExecuteRPC + middleware
 	// After), excluding network decode/encode which happens in the
 	// caller. This is the canonical instrumentation site for inbound
-	// dispatch — both the non-bidi path (handleRequest at rpc.go:243)
-	// and the bidi path (handleIncomingRequest at bidi_rpc.go:299, which
-	// forwards through server.handleRequest) terminate here.
+	// dispatch — both the non-bidi path (RPCServer.handleRequest) and
+	// the bidi path (BidiRPC.handleIncomingRequest, which forwards
+	// through server.handleRequest) terminate here.
 	t0 := time.Now()
 	resp, err := s.registry.Dispatch(ctx, handlerReq)
 	s.dispatchLatency.Record(req.Handler, time.Since(t0), err == nil && resp != nil && resp.Success)

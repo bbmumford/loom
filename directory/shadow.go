@@ -15,9 +15,9 @@ import (
 )
 
 // ShadowReport is the result of one parity comparison between the
-// authoritative directory and its shadow (Phase-0.5 stage 3). Mismatches
-// are OBSERVABLE and fail the phase gate — the comparator never silently
-// prefers one side.
+// authoritative directory and its shadow. Mismatches are OBSERVABLE and fail
+// the parity gate (InParity) — the comparator never silently prefers one
+// side.
 type ShadowReport struct {
 	Mismatches []string
 	// Compared counts per-capability comparisons performed, so an
@@ -42,9 +42,9 @@ type ShadowReport struct {
 // A degraded axis fails the gate deliberately. The shadow phase compares the
 // Swarm directory against a DIFFERENT implementation, so "the other side
 // could not answer" is the expected shape of an unperformed check, not a rare
-// edge — and an unperformed check reporting parity is precisely the silent
-// pass §0.5.3 stage 3 forbids ("shadow mismatches are observable and fail the
-// phase gate; do not silently prefer one side"). An unlisted item is
+// edge — and an unperformed check reporting parity would be a silent pass,
+// which the gate exists to refuse: mismatches are observable and fail it, and
+// the comparator never silently prefers one side. An unlisted item is
 // unmeasured, not negative.
 func (r *ShadowReport) InParity() bool {
 	return len(r.Mismatches) == 0 && len(r.Degraded) == 0
@@ -83,7 +83,7 @@ func CompareDirectories(ctx context.Context, authoritative, shadow ports.LiveDir
 			rep.add("member %s service %q vs %q", short(id), am.ServiceName, sm.ServiceName)
 		}
 		if am.PartitionID != sm.PartitionID {
-			rep.add("member %s tenant %q vs %q", short(id), am.PartitionID, sm.PartitionID)
+			rep.add("member %s partition %q vs %q", short(id), am.PartitionID, sm.PartitionID)
 		}
 		if !stringSetEqual(am.Roles, sm.Roles) {
 			rep.add("member %s roles %v vs %v", short(id), am.Roles, sm.Roles)
@@ -324,8 +324,8 @@ func reachSetEqual(a, b []ports.ReachAddress) bool {
 	if len(a) != len(b) {
 		return false
 	}
-	// 🛑 Priority IS PART OF THE KEY, and its absence was a measured blind
-	// spot (#M-547). The two implementations derive the rank by different
+	// 🛑 Priority IS PART OF THE KEY; without it the comparison is blind to
+	// rank disagreement. The two implementations derive the rank by different
 	// routes — SwarmDirectory from the Address_Transport enum, LADDirectory
 	// by normalising the reach layer's string — so they can disagree on the
 	// rank of an address they otherwise describe identically. Both then sort

@@ -71,14 +71,67 @@ type DirectoryProvider interface {
 	Reach(ctx context.Context, tenant string, query ladcache.ReachQuery) ([]lad.ReachRecord, error)
 }
 
+// Option configures NewHandler and NewHandlerFromRuntime.
+type Option func(*handlerOptions)
+
+// handlerOptions holds the settings Options write. allowedOrigins is nil
+// until WithAllowedOrigins runs; nil selects the built-in origins in
+// originAllowed.
+type handlerOptions struct {
+	allowedOrigins []string
+}
+
+// WithAllowedOrigins replaces the built-in CORS allow-list with exactly
+// origins: the handler echoes a request's Origin header in
+// Access-Control-Allow-Origin only when it equals one entry byte-for-byte
+// (scheme://host[:port]). Calling it with no origins admits no
+// cross-origin caller; empty entries never match. The slice is copied, so
+// the caller may reuse it. The last WithAllowedOrigins passed wins.
+func WithAllowedOrigins(origins ...string) Option {
+	list := make([]string, len(origins))
+	copy(list, origins)
+	return func(o *handlerOptions) {
+		o.allowedOrigins = list
+	}
+}
+
+// originAllowed reports whether the handler echoes origin in
+// Access-Control-Allow-Origin. configured is nil unless WithAllowedOrigins
+// was passed: nil admits the built-in pair below; a non-nil slice replaces
+// that pair exactly. An empty origin (a request with no Origin header) is
+// never echoed.
+func originAllowed(origin string, configured []string) bool {
+	if origin == "" {
+		return false
+	}
+	if configured == nil {
+		return origin == "https://help.orbtr.io" || origin == "https://localhost:8080"
+	}
+	for _, allowed := range configured {
+		if allowed != "" && allowed == origin {
+			return true
+		}
+	}
+	return false
+}
+
 // NewHandler returns an http.HandlerFunc that serves GET /mesh/status.
 // It exposes public, aggregate mesh status data suitable for external monitoring.
-// Intentionally does NOT expose: private keys, PSKs, tenant IDs, IP addresses, handler names.
-func NewHandler(provider RuntimeProvider, platform ports.PlatformInfo, startTime time.Time) http.HandlerFunc {
+// Intentionally does NOT expose: private keys, PSKs, partition IDs, IP addresses, handler names.
+// opts are applied in order when the handler is built; with none, CORS
+// admits the built-in origins in originAllowed.
+func NewHandler(provider RuntimeProvider, platform ports.PlatformInfo, startTime time.Time, opts ...Option) http.HandlerFunc {
+	var settings handlerOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&settings)
+		}
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		// CORS — allow help.orbtr.io to fetch this endpoint
+		// CORS — echo the Origin only when the allow-list admits it, so a
+		// browser page on an admitted origin can read this response.
 		origin := r.Header.Get("Origin")
-		if origin == "https://help.orbtr.io" || origin == "https://localhost:8080" {
+		if originAllowed(origin, settings.allowedOrigins) {
 			w.Header().Set("Access-Control-Allow-Origin", origin)
 		}
 		if r.Method == http.MethodOptions {

@@ -41,7 +41,7 @@ type AddressTable struct {
 	// wakeCb fires after onRecord stores a PeerRecord that added a
 	// Tier-0 (6PN ULA noise-UDP) address for the peer. Wired by
 	// ConnectionManager via SetWakeCallback so the upgrade walker can
-	// run immediately when a fresh same-org private endpoint shows
+	// run immediately when a fresh same-origin private endpoint shows
 	// up rather than waiting for the next 30s ticker. Kept as an
 	// opaque func so AddressTable doesn't import the node package
 	// and create a cycle.
@@ -125,7 +125,7 @@ func (a *AddressTable) Router() route.Router {
 // indexing a PeerRecord that delivered a Tier-0 (6PN ULA noise-UDP)
 // address — i.e. an address with Scope="private" + Transport=NOISE_UDP.
 // The expected wiring is ConnectionManager.SignalWalkerWake so the
-// proactive upgrade walker fires immediately when a same-org private
+// proactive upgrade walker fires immediately when a same-origin private
 // endpoint becomes dialable, rather than waiting up to
 // upgradeWalkInterval (30s) for the next ticker.
 //
@@ -263,13 +263,13 @@ func (a *AddressTable) onRecord(r swarm.Record) error {
 	// Detect a freshly-added Tier-0 (6PN ULA noise-UDP) candidate: an
 	// entry with Scope=="private" + Transport=="noise-udp" that was not
 	// present in the previous snapshot for this peer. Tier-0 is the
-	// only path that can promote a same-org peer from WS Grade C to
+	// only path that can promote a same-origin peer from WS Grade C to
 	// noise-UDP Grade A, so its arrival is exactly the signal the
 	// proactive upgrade walker needs to drop its 30s tick latency to
-	// "next select iteration". Cross-org peers don't carry Scope=
+	// "next select iteration". Peers of another origin don't carry Scope=
 	// "private" addresses (their 6PN ULAs are not routable across the
-	// org boundary) so the trigger is naturally scoped to the same-org
-	// upgrade case.
+	// Fly.io organisation boundary) so the trigger is naturally scoped to
+	// the same-origin upgrade case.
 	//
 	// We only wake when a NEW Tier-0 address appears (set-difference,
 	// not membership) so spurious republications of the same record

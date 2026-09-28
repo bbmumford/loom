@@ -127,11 +127,12 @@ func (ds *DiskStore) Put(hash Hash, data []byte) error {
 	}
 
 	// Write to a temp file in the same directory, fsync, then
-	// atomically rename into the content-addressed path. Writing directly to
-	// `path` (O_CREATE|O_EXCL) left a TRUNCATED file there on a crash between
-	// create and Sync; the dedupe Stat above then never rewrote it and Get
-	// served the corrupt bytes unverified. A rename is atomic, so a reader never
-	// observes a partial chunk. (delta_persist.go uses the same pattern.)
+	// atomically rename into the content-addressed path. The dedupe Stat
+	// above treats any file at `path` as a complete chunk and Get returns its
+	// bytes unverified, so `path` must never hold a partial write: a crash
+	// between create and Sync on `path` itself would leave a truncated chunk
+	// that is never rewritten. A rename is atomic, so a reader never observes
+	// a partial chunk. (node/delta_persist.go uses the same pattern.)
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-chunk-*")
 	if err != nil {
 		return fmt.Errorf("storage: create temp chunk: %w", err)

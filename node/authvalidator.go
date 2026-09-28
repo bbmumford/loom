@@ -11,7 +11,7 @@ import (
 
 // DefaultAuthValidator returns the validator an RPC server uses when Config
 // carries none. It reads and stamps loom's own context keys, so it needs no
-// platform package and names no identity level.
+// composition-root package and names no identity level.
 //
 // It exists so a consumer can SAY it wants the default. Config.AuthValidator
 // may simply be left unset — SetAuthValidator ignores a nil, and the server is
@@ -20,7 +20,7 @@ import (
 // a later reader cannot tell which one a line meant. Passing this makes the
 // choice explicit and survives someone adding a nil check.
 //
-// It gates the same way the platform validator does: a handler that does not
+// It gates the way an injected Config.AuthValidator is expected to: a handler that does not
 // require auth passes; one that does needs an authenticated principal, a
 // permitted auth type, and every required scope. Because it reads loom's keys,
 // a caller whose authority was stamped somewhere else entirely produces a

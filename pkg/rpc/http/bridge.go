@@ -30,10 +30,10 @@ type IdentityInjector = func(r *http.Request, msg proto.Message)
 // in-flight dispatch goroutines.
 //
 // directoryAuth is per-Bridge (per-Registry) — NOT a package-level global
-// — so a process that mounts multiple registries (e.g. a user-tier proxy
+// — so a process that mounts multiple registries (e.g. a public-facing proxy
 // registry alongside a control-plane registry) picks its verbose-directory
-// gating per-registry. See finding rev-080 for the process-global race
-// and cross-registry bypass that motivated this design.
+// gating per-registry. A process-wide predicate would race across mounts
+// and let one registry inherit another's bypass.
 type Bridge struct {
 	registry         *rpc.Registry
 	identityInjector atomic.Pointer[IdentityInjector]
@@ -96,9 +96,8 @@ func (b *Bridge) loadInjector() IdentityInjector {
 // to revert to summary-only mode.
 //
 // Per-Bridge (per-Registry): each Bridge holds its own predicate. A
-// process that mounts a user-tier proxy registry alongside a control-
-// plane registry gates each independently. See finding rev-080 for
-// the prior package-global design and why it was unsafe.
+// process that mounts a public-facing proxy registry alongside a control-
+// plane registry gates each independently.
 func (b *Bridge) SetDirectoryAuth(check DirectoryAuthCheck) {
 	if check == nil {
 		b.directoryAuth.Store(nil)
@@ -134,15 +133,14 @@ func (b *Bridge) HandleDirectory() http.HandlerFunc {
 //
 // Special-cases the meta-path "_directory" (any HTTP method): returns
 // the same JSON manifest as the GET /rpc/_directory route mounted by
-// RegisterAll. Wildcard-routed gateways (app.orbtr.io and friends)
-// don't call RegisterAll, so without this special case they'd dispatch
-// "_directory" as a regular handler name and 404.
+// RegisterAll. Wildcard-routed gateways don't call RegisterAll, so without
+// this special case they'd dispatch "_directory" as a regular handler name
+// and 404.
 //
-// CRITICAL: HandleRPC now applies the per-handler Middleware chain around
-// the dispatch path. Prior versions bypassed Middleware entirely for the
-// wildcard route — every gateway endpoint that used /rpc/{handler} skipped
-// the auth/scope chain RegisterAll wires onto per-FQN routes. The fix
-// composes the chain at request time so wildcard parity matches per-route
+// CRITICAL: HandleRPC applies the per-handler Middleware chain around the
+// dispatch path. Without it every gateway endpoint that uses /rpc/{handler}
+// would skip the auth/scope chain RegisterAll wires onto per-FQN routes; the
+// chain is composed at request time so wildcard parity matches per-route
 // parity exactly.
 func (b *Bridge) HandleRPC(w http.ResponseWriter, r *http.Request) {
 	handlerName := chi.URLParam(r, "handler")
@@ -151,7 +149,7 @@ func (b *Bridge) HandleRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if handlerName == "_directory" {
-		// Per-Bridge auth (rev-080): the directory view is gated on THIS
+		// Per-Bridge auth: the directory view is gated on THIS
 		// bridge's SetDirectoryAuth predicate, NOT a package-level global.
 		// A wildcard-mounted bridge and a per-route mount on a sibling
 		// registry can therefore diverge in verbose/summary gating.
@@ -241,8 +239,8 @@ func (b *Bridge) dispatch(w http.ResponseWriter, r *http.Request, h *rpc.Handler
 // executeLocal runs the handler in-process. Returns the marshalled response
 // or an error wrapped via classifyHandlerError for the caller to map.
 //
-// Mirrors Registry.Dispatch's pre-handler guards (rpc/dispatch.go:36 +
-// rpc/dispatch.go:53-57) so the HTTP bridge enforces the same security
+// Mirrors Registry.Dispatch's pre-handler guards (its EnforceScope call and
+// its WebhookSignature check) so the HTTP bridge enforces the same security
 // surface as the mesh-side dispatcher:
 //
 //  1. EnforceScope fails closed on the handler's declared Scope or

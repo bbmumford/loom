@@ -1,6 +1,6 @@
-# Orbtr Storage Module (mesh/storage)
+# loom storage package (node/storage)
 
-Content-addressed storage primitives for the Orbtr mesh. This package provides
+Content-addressed storage primitives for the loom mesh. This package provides
 interfaces and helpers for chunking, publishing, and fetching immutable
 artifacts over the VL1 overlay while anchoring manifests in a blockchain or
 append-only control plane.
@@ -28,7 +28,7 @@ import (
     "context"
     "os"
 
-  storage "github.com/hstles/library/mesh/storage"
+    storage "github.com/bbmumford/loom/node/storage"
 )
 
 func publishFile(ctx context.Context, path string, node *storage.Node) error {
@@ -38,13 +38,13 @@ func publishFile(ctx context.Context, path string, node *storage.Node) error {
     }
     defer f.Close()
 
-    manifest, cid, err := node.Publish(ctx, f, storage.PublishOptions{ChunkSize: 4 << 20})
+    res, err := node.Publish(ctx, f, storage.PublishOptions{ChunkSize: 4 << 20})
     if err != nil {
         return err
     }
-    // Persist the manifest ID (cid) to LAD, task mesh, etc.
-    _ = manifest
-    _ = cid
+    // Persist the manifest ID (res.ManifestID) to LAD, task mesh, etc.
+    _ = res.Manifest
+    _ = res.ManifestID
     return nil
 }
 ```
@@ -59,7 +59,7 @@ cfg := storage.Config{
    Store: storage.StoreConfig{
       Provider: "disk",
       Disk: &storage.DiskStoreConfig{
-        Root:       "/var/lib/orbtr/chunks",
+        Root:       "/var/lib/chunks",
         ShardDepth: 2,
         DirMode:    "0755",
         FileMode:   "0644",
@@ -132,8 +132,8 @@ The module exposes lightweight hooks for metrics:
 
 The bundled disk backend shards chunks into nested hexadecimal directories to
 avoid hot folders and performs dedupe based on the content hash. It can be
-configured via `DiskStoreConfig` in code or YAML (`dir_mode`, `file_mode`, and
-`shard_depth`). Future providers (S3, libp2p-backed stores) will implement the
+configured via `DiskStoreConfig` in code or YAML (`dirMode`, `fileMode`, and
+`shardDepth`). Future providers (S3, libp2p-backed stores) will implement the
 same `StoreBackend` contract.
 
 ## Next Steps

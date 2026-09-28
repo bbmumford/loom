@@ -72,7 +72,7 @@ func (c *ladReconcileCodec) DecodeTable(body []byte) (*iblt.IBLT, whisper.Reconc
 	if uint64(len(body)) < uint64(17)+uint64(count)*reconcileCellSize {
 		return nil, 0, fmt.Errorf("reconcile: truncated cell stream")
 	}
-	// MESH-F10: k (the IBLT hash-function count) comes off the wire and is
+	// k (the IBLT hash-function count) comes off the wire and is
 	// passed straight into iblt.New, which may allocate proportional to it. A
 	// real table uses a small k (typically 3-4); reject implausible values.
 	if k == 0 || k > 16 {
@@ -80,7 +80,7 @@ func (c *ladReconcileCodec) DecodeTable(body []byte) (*iblt.IBLT, whisper.Reconc
 	}
 	tbl := iblt.New(int(count), int(k), seed)
 	cells := tbl.Cells()
-	// MESH-F10: the constructor may round/clamp the cell count; assert the copy
+	// The constructor may round/clamp the cell count; assert the copy
 	// loop stays within the allocated cells rather than indexing out of range.
 	if len(cells) < int(count) {
 		return nil, 0, fmt.Errorf("reconcile: iblt returned %d cells, need %d", len(cells), count)
@@ -122,11 +122,11 @@ func (c *ladReconcileCodec) DecodeReply(body []byte) ([][]byte, error) {
 		return nil, fmt.Errorf("reconcile: short reply")
 	}
 	count := binary.BigEndian.Uint32(body[0:4])
-	// MESH-F01: bound count against the body length BEFORE allocating, exactly
+	// Bound count against the body length BEFORE allocating, exactly
 	// as DecodeRequest does. Each record is at least 4 bytes (its length
 	// prefix), so a body of len(body) can hold at most (len(body)-4)/4 records.
-	// Without this a peer sending count=0xFFFFFFFF drove a ~103 GB slice-header
-	// allocation (4.29e9 × 24 B) before the per-record guard ever ran, OOM-
+	// Without this a peer sending count=0xFFFFFFFF drives a ~103 GB slice-header
+	// allocation (4.29e9 × 24 B) before the per-record guard ever runs, OOM-
 	// crashing the node.
 	if uint64(count) > uint64(len(body)-4)/4 {
 		return nil, fmt.Errorf("reconcile: reply count %d exceeds body capacity (%d bytes)", count, len(body))

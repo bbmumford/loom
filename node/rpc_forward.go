@@ -60,7 +60,7 @@ type runtimeForwarder struct {
 // the RPC. If no direct path exists, it forwards to any connected peer
 // (which will forward onward, up to MaxRPCHops).
 func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse, error) {
-	// Extract role from FQN: "hstles.tenant.CheckHealth" → "platform.tenant"
+	// Extract role from FQN: "orbtr.health.CheckHealth" → "orbtr.health"
 	// Uses last dot to split namespace.domain from Operation.
 	role := req.Handler
 	if dot := strings.LastIndexByte(req.Handler, '.'); dot > 0 {
@@ -243,12 +243,10 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 		}
 	}
 
-	// Use the shared scoreRoute helper (mesh/node/route_score.go) so
-	// the forwarder and FindRoutes can't drift on the scoring
-	// formula. Audit H6 — there were two independent copies of this
-	// math before, both with the same 5/20/40/1000 + RTT-override +
-	// 100ms/hop formula. Future tuning of one would silently miss
-	// the other.
+	// Use the shared scoreRoute helper (route_score.go) so the
+	// forwarder and FindRoutes can't drift on the scoring formula
+	// (5/20/40/1000 + RTT-override + 100ms/hop): with two copies,
+	// tuning one would silently miss the other.
 	pathScore := func(fc fwdCandidate) int64 {
 		// rttByPeer holds keyed-by-first-hop RTT in ms; if missing,
 		// scoreRoute falls back to its grade-derived synthetic.
@@ -351,10 +349,10 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 				// deadline is too tight for the forward hop's path, extend
 				// it via mergeCtxWithTimeout — that gives the call the
 				// full hop budget while STILL propagating probeCtx's
-				// first-win cancellation. The previous WithTimeout(
-				// context.Background(), minTimeout) rebuild orphaned the
+				// first-win cancellation. Rebuilding with WithTimeout(
+				// context.Background(), minTimeout) would orphan the
 				// goroutine from probeCtx, so a sibling probe winning
-				// couldn't stop it (H-Forward-CtxLoss).
+				// couldn't stop it.
 				fwdCtx := probeCtx
 				minTimeout := adaptiveRPCTimeout(fc.session)
 				var cancel context.CancelFunc
@@ -409,10 +407,10 @@ func (f *runtimeForwarder) callOverMeshSession(ctx context.Context, session aeth
 	//
 	// 🔑 WHY HERE AND NOWHERE ELSE. This function is the single funnel for
 	// every outbound RPC that crosses a peer session: both the BidiRPC branch
-	// below and the dynamic-stream fallback pass through it, and both Forward
-	// call sites (:86 fast path, :369 re-route probe) reach it. One call site
-	// keeps a single writer and makes it impossible for the two consumer
-	// counters to drift apart.
+	// below and the dynamic-stream fallback pass through it, and both of its
+	// call sites in Forward (the fast path and the re-route probe) reach it.
+	// One call site keeps a single writer and makes it impossible for the two
+	// consumer counters to drift apart.
 	//
 	// Recorded BEFORE the call, not after: the counters measure OFFERED load on
 	// this peer connection, which is what both consumers want. Sizing a

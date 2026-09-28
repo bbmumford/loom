@@ -5,26 +5,26 @@
 
 package ports
 
-// NodeID identifies a mesh node. Provisional loom-local type: aether.NodeID
-// is also a string kind, so boundary conversion is free — but the Phase-0
-// extraction must preserve type identity on the public Runtime surface
-// (Appendix A), so exported mesh APIs keep aether.NodeID and adapters
-// convert at the port boundary only.
+// NodeID identifies a mesh node. It is a loom-local type: aether.NodeID is
+// also a string kind, so boundary conversion is free, but the public Runtime
+// surface keeps aether.NodeID for type identity with its consumers, so
+// adapters convert at the port boundary only.
 type NodeID string
 
 // Topic is a partition-/network-scoped replicated-state topic string
-// (e.g. "fleet.peer", "role.secrets.auth", "agent.keys.<tenant>").
+// (e.g. "fleet.peer", "role.secrets.auth", "agent.keys.<partition>").
 type Topic string
 
 // HLC is a hybrid logical clock value in the swarm layout: 48-bit
 // milliseconds high / 16-bit counter low (swarm hlc.go). Raw remote HLCs
-// participate in winner comparison — Phase 0.5 requires far-future values
-// to be clamped/rejected BEFORE storage; the existing HLC.Observe clamp
-// protects only the local clock.
+// participate in winner comparison, so far-future values must be clamped or
+// rejected BEFORE storage; the HLC.Observe clamp protects only the local
+// clock.
 type HLC uint64
 
-// Watermark is a monotonic journal/stream position. Provisional: a scalar
-// sequence; the transitional adapter maps lad.CausalWatermark onto it.
+// Watermark is a monotonic journal/stream position: a scalar sequence. The LAD
+// projection derives it from a record's HLC, or from its timestamp when the
+// HLC is absent (directory/ladproject.go ladWatermark).
 // Consumers resume subscriptions from a Watermark — implementations must
 // guarantee no gap and no silent drop between history and live delivery.
 type Watermark uint64
@@ -39,13 +39,12 @@ type Watermark uint64
 // Provenance invariant: Body, AuthorPubKey, Signature, and Observer are the
 // owner's bytes VERBATIM. Replicas and the journal never re-encode or
 // re-sign them — the swarm Merkle leaf hashes SHA256(sig) over the received
-// signature bytes, and re-signing a remote owner's fact (the current LAD
-// bridge behaviour) destroys provenance and cannot pass the Phase-0.5
-// NodeID↔author policy.
+// signature bytes, and re-signing a remote owner's fact destroys provenance
+// and cannot pass the NodeID↔author binding TrustPolicy.VerifyNodeKey checks.
 //
-// 🛑 MEASURED LIMIT (#M-513): THIS ENVELOPE IS FAITHFUL FOR SWARM-SIGNED
-// RECORDS AND LOSSY FOR LAD-SIGNED ONES. §0.5.4 requires owner-signed
-// provenance to survive PROJECTION; it does for swarm, whose signable bytes
+// 🛑 MEASURED LIMIT: THIS ENVELOPE IS FAITHFUL FOR SWARM-SIGNED RECORDS AND
+// LOSSY FOR LAD-SIGNED ONES. Owner-signed provenance must survive
+// PROJECTION; it does for swarm, whose signable bytes
 // are fields carried here, and it does NOT for LAD. `lad.signatureContent`
 // additionally covers Partition, Seq, Timestamp, and ExpiresAt at NANOSECOND
 // precision — none of which exist here (ExpiresAtUnixMs is milliseconds).
@@ -54,12 +53,12 @@ type Watermark uint64
 // complete loss set (directory.TestLADSignedRecordDoesNotSurviveThePortEnvelope
 // pins it, with a positive control that the original record verified).
 //
-// ⇒ CONSEQUENCE FOR STAGE 2: `anchor.Generator.Generate([]lad.Record)` cannot
-// be fed from a DirectorySnapshot until this is resolved — every record's
-// signature would fail to verify. Resolving it means widening this type
-// (a shared-type change affecting other lanes) or leaving the anchor path
-// reading LAD directly, which §0.5.3 stage 1 forbids. That is an @R decision,
-// not an adapter detail.
+// ⇒ CONSEQUENCE: `anchor.Generator.Generate([]lad.Record)` cannot be fed
+// from a DirectorySnapshot — every record's signature would fail to verify.
+//
+// TODO: widen this type with those four fields, or keep the anchor path
+// reading LAD directly; either choice changes a shared type or the anchor
+// input, so it is not an adapter detail.
 type Record struct {
 	Topic  Topic
 	NodeID NodeID // owner of the (topic,node,key) slot — single writer
@@ -69,24 +68,21 @@ type Record struct {
 	// hold many records on one topic — a latency observation per observed
 	// peer, a record per content hash it serves.
 	//
-	// Key == "" is the classical single-slot-per-node form and is what every
-	// record carries today, so nothing changes for existing producers.
+	// Key == "" is the single-slot-per-node form.
 	//
 	// 🛑 EVERY slot-identity computation MUST include Key. Omitting it does
 	// not merely mis-project — `journal.slotKey` drives COMPACTION, so two
 	// records one node published under different keys would collapse to one
 	// slot and the older ones would be deleted from the durable journal.
-	// That is silent, permanent loss, and it is why this field exists here
-	// before the cutover wires anything.
+	// That is silent, permanent loss.
 	//
 	// (The per-observer latency topic convention — LatencyTopic() /
-	// "fleet.latency.<from>" — predates this field and exists only because a
-	// node could not previously hold multiple records on one topic. It stays
-	// correct; it is no longer the only option.)
+	// "fleet.latency.<from>" — gives each observer its own topic instead of a
+	// Key per observed peer on one topic. Both forms are correct.)
 	Key string
 
 	HLC     HLC
-	Lamport uint64 // split-brain LamportClock stamp — a WIRE field (no-drift list)
+	Lamport uint64 // split-brain LamportClock stamp — a WIRE field
 
 	Tombstone       bool
 	TombstoneReason string
@@ -98,7 +94,7 @@ type Record struct {
 
 	// Observer is the raw third-party attestation segment, if any, verbatim.
 	// Observer facts are never promoted to owner state; below-quorum
-	// attestations must remain forwardable/reconcilable (Phase-0.5 blocker 3).
+	// attestations must remain forwardable/reconcilable.
 	Observer []byte
 
 	// BlobCID references a content-addressed body for large payloads

@@ -113,7 +113,7 @@ func (pq *priorityQueue) Pop() interface{} {
 	return item
 }
 
-// DefaultMaxQueueDepth caps the number of tasks a TaskQueue holds (MESH-H05) so
+// DefaultMaxQueueDepth caps the number of tasks a TaskQueue holds so
 // producers plus timer-driven retries can't grow the heap without bound.
 const DefaultMaxQueueDepth = 10000
 

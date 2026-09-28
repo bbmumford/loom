@@ -11,7 +11,7 @@ import (
 )
 
 // Grade represents the quality tier of a transport connection.
-// Higher numeric value = better quality. HSTLES-specific — derived from
+// Higher numeric value = better quality. Loom-specific — derived from
 // aether.TransportCapabilities. Other Aether consumers define their own
 // quality models.
 type Grade int
@@ -76,18 +76,18 @@ func (g Grade) Weight() float64 {
 	}
 }
 
-// RTT/timeout helpers used to live on Grade. They moved to:
+// Grade carries no RTT or timeout helpers. Those live in:
 //
 //   - quality.RouteClass for expected-RTT bands (same-region /
 //     cross-region / inter-continental). Classifying paths by physical
-//     distance rather than transport tier means a healthy cross-region
-//     noise-udp path is no longer permanently demoted just for having
+//     distance rather than transport tier keeps a healthy cross-region
+//     noise-udp path from being permanently demoted just for having
 //     >30 ms RTT.
-//   - mesh/node.adaptiveKeepaliveInterval(session) for ping cadence:
+//   - node.adaptiveKeepaliveInterval(session) for ping cadence:
 //     clamp(2 × SRTT, 5s, 30s). Reads the session's own measured RTT.
-//   - mesh/node.adaptiveKeepaliveTimeout(rto) for the per-ping wait:
+//   - node.adaptiveKeepaliveTimeout(session, rto) for the per-ping wait:
 //     clamp(4 × RTO, 1s, 5s).
-//   - mesh/node.adaptiveRPCTimeout(session) for the default RPC
+//   - node.adaptiveRPCTimeout(session) for the default RPC
 //     deadline: clamp(20 × SRTT, 5s, 30s).
 
 func (g Grade) BetterThan(other Grade) bool { return g > other }
@@ -99,17 +99,16 @@ func (g Grade) IsConnected() bool           { return g > GradeF }
 // lower-grade session is useful only as a dormant fallback for a different
 // transport class.
 //
-// 🛑 REGISTRATION DOES NOT CONSULT THIS (#R-1576 ②). registerMeshSession's
-// lower-grade arm sits inside `newGrade < oldGrade`, which already implies the
-// grades differ — so calling this there was a tautology and the rejection it
-// guarded could never fire. That arm and its comment are gone; a strictly
-// lower grade is now unconditionally accepted as a dormant fallback.
+// 🛑 REGISTRATION DOES NOT CONSULT THIS. registerMeshSession's lower-grade arm
+// sits inside `newGrade < oldGrade`, which already implies the grades differ,
+// so a call there would be a tautology whose rejection could never fire; a
+// strictly lower grade is accepted unconditionally as a dormant fallback.
 //
-// It is retained because it is EXPORTED on a published module
-// (github.com/bbmumford/loom, tags v0.0.1-v0.0.3) with consumers pinned across
-// the estate: a workspace census bounds in-tree callers only and says nothing
-// about off-wire ones, and the module proxy caches by content permanently.
-// Deleting it would be a breaking change to an already-shipped API.
+// It stays because it is EXPORTED on a published module
+// (github.com/bbmumford/loom) whose consumers pin tagged versions: a
+// workspace census bounds in-tree callers only and says nothing about
+// off-tree ones, and the module proxy caches by content permanently.
+// Deleting it would be a breaking change to a shipped API.
 func (g Grade) CanCoexistWith(other Grade) bool { return g != other }
 
 func (g Grade) UpgradeTarget() Grade {

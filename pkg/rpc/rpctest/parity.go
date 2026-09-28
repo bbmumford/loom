@@ -64,7 +64,7 @@ import (
 //	}
 //
 // A nil *handlers.Handler is safe to pass because pointer-receiver method
-// values (h.LogEvent, h.CreateUser, …) construct fine on a nil receiver;
+// values (h.LogEvent, h.GetStatus, …) construct fine on a nil receiver;
 // the registry stores the bound function without invoking it.
 func AssertRegisterTypesParity(
 	t *testing.T,

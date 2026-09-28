@@ -11,12 +11,12 @@ import (
 
 // Call sends an RPC over the mesh with type-safe generics — UNLESS the
 // handler is hosted locally in this process, in which case it dispatches
-// in-process and skips the mesh entirely. Replaces all per-domain Mesh
-// structs and dispatch.CallProto.
+// in-process and skips the mesh entirely. A domain needs no per-domain mesh
+// client struct to call another domain through it.
 //
 // Usage:
 //
-//	resp, err := rpc.Call[*pb.CreateUserResponse](ctx, "hstles.identity.CreateUser", req)
+//	resp, err := rpc.Call[*pb.GetStatusResponse](ctx, "orbtr.status.GetStatus", req)
 func Call[Resp proto.Message](ctx context.Context, handler string, req proto.Message) (Resp, error) {
 	var zero Resp
 
@@ -28,8 +28,9 @@ func Call[Resp proto.Message](ctx context.Context, handler string, req proto.Mes
 	// Local-handler short-circuit: if this process hosts the handler,
 	// dispatch in-process. Avoids serializing twice, opening a stream,
 	// and round-tripping a payload that the calling node would have
-	// executed in zero hops. Mirrors the check the HTTP /rpc/ bridge
-	// already does (rpc/http/bridge.go:85).
+	// executed in zero hops. Mirrors the local-or-proxy choice the HTTP
+	// /rpc/ bridge makes (Bridge.dispatch runs executeLocal when the
+	// handler has a Func).
 	if respBytes, handled, lerr := tryLocalDispatch(ctx, handler, payload); handled {
 		if lerr != nil {
 			return zero, lerr

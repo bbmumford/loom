@@ -26,11 +26,11 @@ import (
 
 // maxGossipPayload caps the size of a single gossip message (1 MB).
 // With 11 nodes, typical exchanges are 15-50KB. 1MB provides generous headroom
-// while catching corrupted length headers (previously 16MB let garbage through).
+// while catching corrupted length headers (a 16MB cap lets garbage through).
 const maxGossipPayload = 1 << 20
 
 // deltaSyncClockSkewSlack widens the delta-sync watermark to tolerate a lagging
-// author clock (MESH-F08) — see the RecordWatermark call site.
+// author clock — see the RecordWatermark call site.
 const deltaSyncClockSkewSlack = 30 * time.Second
 
 // gossipMagic is the 2-byte prefix on all gossip frames for corruption detection.
@@ -61,9 +61,8 @@ const creditFullSyncFloor int64 = 256 * 1024
 // fleet run 1-40 KB; we picked 64 KB so a single peer-WINDOW_UPDATE round
 // trip is enough to recover, while still aborting the exchange if the credit
 // genuinely cannot fit the payload. Without this, a delta exchange entered
-// with ~1-22 KB of credit (real fleet symptom 2026-05-29) burns
-// ConsumeTimeout = 10 s waiting for grants that won't arrive in time, then
-// fails the gossip stream. Returning early lets the next tick attempt the
+// with ~1-22 KB of credit burns ConsumeTimeout = 10 s waiting for grants that
+// won't arrive in time, then fails the gossip stream. Returning early lets the next tick attempt the
 // exchange when grants have actually flowed.
 const creditDeltaFloor int64 = 64 * 1024
 
@@ -278,17 +277,17 @@ type RTTProvider interface {
 	AvgRTT() time.Duration
 }
 
-// RunGossipLoop runs periodic gossip exchanges over conn until ctx is cancelled
-// or the connection closes. onExchange is called after each successful exchange
-// (e.g., to publish latency records). The interval defaults to 30 seconds.
-// metaProvider, if non-nil, is called before each exchange to build ExchangeMeta
-// to include in the outbound gossip envelope (carries connection-count
-// signaling so the rebalancer can detect hotspots).
 // runGossipLoopInternal is the initiator-side gossip loop. conn carries
 // G1/G2/G3 traffic; reconcileConn is the dedicated wire used for G4 IBLT
-// reconciliation and G5 snapshot frames. Both must be non-nil — the
-// previous single-stream multiplexed mode caused abandoned-G4-read bytes
-// to corrupt G1's read path, and is no longer supported.
+// reconciliation and G5 snapshot frames. Both must be non-nil: multiplexing
+// both on one stream lets abandoned-G4-read bytes corrupt G1's read path.
+//
+// It runs periodic exchanges until ctx is cancelled or the connection closes.
+// onExchange is called after each successful exchange (e.g., to publish
+// latency records). An interval <= 0 selects 30 seconds. getMeta, if non-nil,
+// is called before each exchange to build the ExchangeMeta carried in the
+// outbound gossip envelope (connection-count signaling the rebalancer reads to
+// detect hotspots).
 func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net.Conn, c *cache.DirectoryCache, interval time.Duration, onExchange func(GossipResult), getMeta func() *ExchangeMeta, dt *DeltaTracker, peerNodeID string, bpMonitor *BackpressureMonitor, peerBackoff *PeerBackoff) {
 	dbgGossip.Printf("Gossip loop started: peerNodeID=%s, interval=%v, connType=%T", peerNodeID, interval, conn)
 	if interval <= 0 {
@@ -329,7 +328,7 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 		var since time.Time
 		if dt != nil && peerNodeID != "" && !dt.ShouldFullSync(peerNodeID) {
 			since = dt.RecordWatermark(peerNodeID)
-			// MESH-F08: the watermark is a LOCAL clock value, but DumpSince
+			// The watermark is a LOCAL clock value, but DumpSince
 			// selects records by the author's wall-clock Timestamp. If a peer's
 			// clock lags ours, its records fall just below `since` and are
 			// excluded from every delta until a full G4 reconcile heals it. Widen
@@ -350,7 +349,7 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 		// fresh redeploys.
 		//
 		// Falls back to G1 when:
-		//   - No reconcile driver registered (legacy / test paths)
+		//   - No reconcile driver registered (test paths)
 		//   - peerNodeID is empty (no per-peer state to track)
 		//   - G4 round itself errors at the wire layer
 		//
@@ -410,10 +409,10 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 		//   2. If the stream has < creditDeltaFloor (64 KB), skip the
 		//      exchange entirely — even a delta won't complete inside
 		//      ConsumeTimeout, so we'd just burn a goroutine for 10 s.
-		// Without (2), live fleet observed delta exchanges entered with
-		// 1-22 KB of credit and produced four cascaded `insufficient stream
-		// credit after 10s` failures per peer per minute on app.orbtr.io
-		// (2026-05-29). Skipping the tick lets WINDOW_UPDATE flow naturally.
+		// Without (2), delta exchanges entered with 1-22 KB of credit
+		// produce cascaded `insufficient stream credit after 10s` failures,
+		// several per peer per minute. Skipping the tick lets WINDOW_UPDATE
+		// flow naturally.
 		if ca, ok := conn.(interface{ AvailableCredit() int64 }); ok {
 			avail := ca.AvailableCredit()
 			// Treat ONLY -1 as the "no flow control / unbounded" sentinel.
@@ -458,7 +457,7 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 		if res.PeerMeta != nil && res.PeerMeta.CacheFingerprint != 0 &&
 			res.PeerMeta.CacheFingerprint != c.Fingerprint() {
 			if escErr := escalateBucketDigest(conn, c); escErr != nil {
-				// MESH-F04: actually tear the stream down, as the comment above
+				// Actually tear the stream down, as the comment above
 				// promises. escalateBucketDigest may have written its request but
 				// timed out on the reply, leaving that reply buffered on conn; the
 				// next cycle's G1 io.ReadFull would then decode those leftover
@@ -611,9 +610,9 @@ func runGossipResponderLoop(ctx context.Context, conn net.Conn, reconcileConn ne
 	// Gossip engine: G1 (record exchange) + G2 (digest probe).
 	// Reconcile/snapshot drivers are NOT attached here — they belong on
 	// the reconcile engine below so G4/G5 frames are only ever read
-	// from the reconcile stream. The rumor pump (G3) was retired in
-	// Phase 2; receivers no longer subscribe to a RumorPusher and the
-	// reach-freshness payload path was deleted alongside it.
+	// from the reconcile stream. No rumor pump (G3) is attached:
+	// receivers subscribe to no RumorPusher and carry no reach-freshness
+	// payload path.
 	gossipEngine := whisper.NewEngine(
 		whisper.WithDelta(dt),
 		whisper.WithFirstFrameGrace(500*time.Millisecond),

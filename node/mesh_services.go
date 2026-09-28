@@ -69,12 +69,11 @@ func StartMeshServices(ctx context.Context, connMgr *ConnectionManager) {
 	// (the consumers all guard against it).
 	connMgr.addressTracker = quality.NewAddressTracker()
 
-	// pprof activation has moved to each endpoint's own main.go (call
-	// debug.StartPprofIfEnabled() once after config is loaded). Owning
-	// it at the endpoint level keeps the Library free of process-global
-	// side effects and lets each endpoint decide whether it wants the
-	// debug port at all (e.g. low-memory thin apps may keep it off
-	// permanently regardless of DEBUG value).
+	// pprof is activated by the composition root, not here (it calls
+	// debug.StartPprofIfEnabled() once after config is loaded). That keeps
+	// loom free of process-global side effects and lets each composition
+	// root decide whether it wants the debug port at all (e.g. low-memory
+	// thin apps may keep it off permanently regardless of DEBUG value).
 
 	log.Printf("[AETHER] Services started: StreamGC, AdaptiveController, AddressTracker")
 }
@@ -96,16 +95,16 @@ func (m *ConnectionManager) RecordPathSuccess(nodeID string, proto Protocol, add
 		return
 	}
 	// 🔴 A SESSION CAN REACH HERE BEFORE ITS HEALTH MONITOR IS INSTALLED, and
-	// health.Monitor.RTT takes m.mu with NO nil-receiver guard — so the
-	// unguarded `session.Health().RTT()` this replaced was a nil dereference on
-	// the connect path, not a theoretical one. mesh_connection.go:790
-	// nil-checks the very same opts.Session that :456 passes in here unguarded,
+	// health.Monitor.RTT takes m.mu with NO nil-receiver guard — so an
+	// unguarded `session.Health().RTT()` would be a nil dereference on the
+	// connect path, not a theoretical one. AcceptMeshConnection's keepalive
+	// nil-checks Health() on the very same opts.Session it passes in here,
 	// and adaptive_timeouts_test.go's nilHealthSession exists for "the real
 	// race window between session construction and SetHealthMonitor".
 	//
 	// 🔑 REPORTING ABSENCE AS 0 IS SAFE HERE ONLY BECAUSE OF A GUARD IN ANOTHER
 	// MODULE: AddressTracker.RecordSuccess applies `if rtt > 0` before storing
-	// (aether@v0.0.111 quality/address_tracker.go:91), so a 0 credits the
+	// (aether's quality/address_tracker.go), so a 0 credits the
 	// success — resetting ConsecutiveFailures and clearing DeadUntil, which is
 	// the part that matters — without recording a 0ms path. If that guard ever
 	// goes, this becomes "absent sorts as best": an unmeasured path would rank

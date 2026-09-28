@@ -27,7 +27,7 @@ type ConnectionInfo struct {
 	ConnCount   int                // number of active connections to this peer
 	ConnectedAt time.Time          // when the connection was first established
 	State       PeerState          // peer lifecycle state
-	Priority    ConnectionPriority // tenant-aware connection priority (drives drain order and rebalance)
+	Priority    ConnectionPriority // priority from anchor status and recent RPC traffic (drives drain order and rebalance)
 	Purpose     ConnectionPurpose  // "gossip" or "gossip+dispatch"
 }
 

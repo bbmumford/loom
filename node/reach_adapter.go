@@ -30,7 +30,7 @@ func meshHTTPPort() string {
 
 // SetRoles atomically updates the runtime's role set and triggers an
 // immediate signed re-publish of the swarm PeerRecord. External callers
-// (AI/Quorum shim, runtime promotion logic) use this to surface role
+// (a composition root's role controller, runtime promotion logic) use this to surface role
 // changes to peers within the next gossip round.
 func (rt *Runtime) SetRoles(roles []string) {
 	rt.cfg.Roles = append([]string(nil), roles...)
@@ -68,8 +68,8 @@ func (rt *Runtime) SetServiceName(name string) {
 	}
 }
 
-// rolesJoined keeps the comma-joined form for legacy log lines that
-// still print the role set. Used at runtime startup only.
+// rolesJoined renders the comma-joined form for the log lines that
+// print the role set. Used at runtime startup only.
 func rolesJoined(roles []string) string {
 	return strings.Join(roles, ",")
 }

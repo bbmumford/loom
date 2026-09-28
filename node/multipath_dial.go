@@ -139,7 +139,7 @@ func pathProtos(mgr *multipath.Manager) map[Protocol]struct{} {
 }
 
 // unmapProtocol is the inverse of mapProtocol — converts an aether
-// transport protocol back to the Library's Protocol type. Both are
+// transport protocol back to the node Protocol type. Both are
 // numeric enums but defined in separate packages so the cast isn't
 // implicit.
 func unmapProtocol(p aether.Protocol) Protocol {
@@ -532,7 +532,7 @@ func (m *ConnectionManager) recordDialSuccess(peerID string, proto Protocol) {
 	// a success has to clear it or the gate latches: after enough cumulative
 	// failures over a peer's lifetime every subsequent single error would jump
 	// straight to the exponential ladder. Cleared here rather than only on a
-	// successful walker probe (upgrade_walker.go:423) because a completed dial
+	// successful walker probe (probeUpgrade) because a completed dial
 	// is the same class of evidence — this transport reached this peer.
 	m.clearConsecutiveStalls(peerID, proto)
 

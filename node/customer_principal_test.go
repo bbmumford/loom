@@ -85,7 +85,7 @@ func (customerPrincipalValidator) WithAuthenticatedPrincipal(
 	return rpcscope.WithAuthenticatedPrincipal(ctx, principal)
 }
 
-// AdmitPrincipal is a consumer admitter with the rule HSTLES applies: the
+// AdmitPrincipal is a consumer admitter with the rule a composition root applies: the
 // pinned axis a peer asserts must equal the transport partition it arrived on.
 // loom applies no rule of its own; this one lives in the consumer.
 func (customerPrincipalValidator) AdmitPrincipal(
@@ -207,12 +207,11 @@ func TestRPCServerRejectsPrincipalTamperingBeforeHandler(t *testing.T) {
 	}
 }
 
-// TestRPCServerAdmitsWithinTenantCustomerOrg is the no-over-pin proof: only the
-// platform-partition axis is transport-pinned, so a principal whose customer-org
-// axis is any value WITHIN the transport partition is admitted and round-trips
-// unchanged. Pinning the customer-org axis too would deny legitimate
-// within-partition multi-org traffic (the availability regression orb's stage-4
-// spec warns against).
+// The no-over-pin proof: only the transport-pinned axis is pinned, so a
+// principal whose within-transport axis is any value WITHIN the transport
+// partition is admitted and round-trips unchanged. Pinning the
+// within-transport axis too would deny legitimate within-partition traffic
+// that spans many values of that axis.
 func TestRPCServerAdmitsWithinTenantCustomerOrg(t *testing.T) {
 	registry := handlers.NewHandlerRegistry()
 	registry.SetPresencePolicy(customerScopePolicy())

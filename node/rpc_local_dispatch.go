@@ -16,9 +16,8 @@ import (
 
 // localDispatcherAdapter implements rpc.LocalDispatcher by delegating to
 // the node's HandlerRegistry. It exists to break what would otherwise be
-// a circular import — the `rpc` package can't depend on `mesh/node` /
-// `handlers` (which depend on broader Library state). So the rpc package
-// owns the interface; we own the adapter.
+// a circular import — the `rpc` package can't import `node`, because node
+// imports rpc. So the rpc package owns the interface; node owns the adapter.
 //
 // Installed once at runtime startup via rpc.SetLocalDispatcher; from that
 // point every rpc.Call / rpc.CallRaw consults the local registry FIRST
@@ -35,7 +34,7 @@ func (a *localDispatcherAdapter) HasHandler(name string) bool {
 	if !ok {
 		return false
 	}
-	// Audit critical fix #3: HandlerRegistry stores RPCHandler,
+	// HandlerRegistry stores RPCHandler,
 	// TaskHandler, and StreamHandler in the same map. DispatchBytes
 	// can only execute RPCHandler — the registry's Dispatch switch
 	// returns ErrUnsupportedMode for the other two. If HasHandler

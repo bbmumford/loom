@@ -25,8 +25,8 @@ import (
 // Without this wrapper the five bare lad.Record{...} Append sites
 // scattered through runtime.go + mesh_connection.go are silently
 // dropped by every peer's signedTopicACL — VerifyRecord short-circuits
-// false on empty AuthorPubKey/Signature, producing the residual
-// gossip sig-fail flood observed post-v0.0.371. Channelling every
+// false on empty AuthorPubKey/Signature, producing a gossip sig-fail
+// flood. Channelling every
 // signed-topic Append through one signing chokepoint also makes the
 // SignRecord field-ordering invariant easier to maintain — only one
 // caller needs to get the order right, not five.

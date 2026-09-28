@@ -7,7 +7,7 @@ package compose
 
 // FunctionID is the stable fully-qualified function id — the unified id
 // space across the reflection RPC registry and the mesh handler registry
-// (e.g. "hstles.auth.validate"). ≥2 dot segments (ExtractRole is strict).
+// (e.g. "orbtr.auth.Validate"). ≥2 dot segments (ExtractRole is strict).
 type FunctionID string
 
 // ResultKind is iii's 4-way function-result semantics.
@@ -15,7 +15,7 @@ type ResultKind int
 
 const (
 	// ResultSuccess — completed with a payload. The ONLY kind the RPC
-	// response cache may store (only Success is cached today; the compose
+	// response cache may store (only Success is cached; the compose
 	// layer must not widen that).
 	ResultSuccess ResultKind = iota
 

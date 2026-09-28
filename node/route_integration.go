@@ -29,7 +29,7 @@ const fleetRouteTopic = swarm.Topic("fleet.route")
 
 // RouteIntegration aggregates the route engine + the swarm topic
 // subscription + the dial-time path consult helpers. Runtime owns one
-// per fabric (HSTLES fleet here; the agent has its own integration).
+// per loom mesh fabric.
 type RouteIntegration struct {
 	Router    route.Router
 	publisher *swarmRoutePublisher
@@ -207,8 +207,8 @@ func ingestRouteRecord(r route.Router, rec swarm.Record) error {
 		}
 		if err := r.IngestAdvertisement(env.Advertisement); err != nil {
 			// Damping, loops, stale epochs and verification failures are
-			// expected operational conditions — log at debug only when
-			// the Library debug tag is enabled.
+			// expected operational conditions, not errors to propagate:
+			// the advert is logged and dropped.
 			log.Printf("[ROUTE] ingest advert: %v", err)
 		}
 	case "withdraw":

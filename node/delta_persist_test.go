@@ -13,36 +13,19 @@ import (
 	"github.com/bbmumford/whisper"
 )
 
-// COVERAGE of the delta-watermark persistence backend:
-// NewJSONDeltaPersistence (:42), Save (:53), Load (:88) — all at 0.0%.
+// These tests cover the delta-watermark persistence backend:
+// NewJSONDeltaPersistence, Save and Load.
 //
-// 🔴 CENSUS FIRST, AND IT IS THE FINDING. The chain is unwired END TO END in
-// this repo:
+// Nothing in loom outside tests calls NewJSONDeltaPersistence,
+// SharedDeltaTracker or whisper's DeltaTracker.AttachPersistence, so loom's
+// own Runtime attaches no persistence to the gossip delta tracker (the TODO on
+// sharedDeltaTracker in core/directory/gossip names the missing attach).
+// These are exported symbols on a published module and
+// NewJSONDeltaPersistence returns an interface, so a consumer outside loom
+// could construct and wire one; the census above covers loom only.
 //
-//	NewJSONDeltaPersistence   0 non-test callers (loom, _PACKAGES and ORBTR roots)
-//	SharedDeltaTracker()      0 non-test callers — only its own declaration
-//	AttachPersistence         0 CODE references in loom; it appears ONLY inside the
-//	                          comment at core/directory/gossip/stream_gossip.go:30.
-//	                          The method does exist upstream (whisper@v0.0.18, 2 hits)
-//	                          — loom simply never calls it.
-//
-// That comment asserts: "The Runtime wires a DeltaPersistence backend onto this
-// tracker via AttachPersistence so watermarks survive fly redeploys — without
-// persistence, every restart converts every peer's first exchange into a
-// full-snapshot, the convergence-burst pattern that historically drained stream
-// credit windows."
-//
-// ⇒ The Runtime does not. The comment names a mitigation for a specific,
-// historically-observed production failure, and that mitigation is not attached.
-//
-// ⚠ BOUND HONESTLY: unlike ConnectionMap, these ARE exported symbols on
-// a published module and NewJSONDeltaPersistence returns an interface, so an
-// out-of-repo consumer could construct and wire one. This census bounds THIS
-// repo. What it does establish regardless is the narrow claim the comment makes:
-// loom's own Runtime does not wire it.
-//
-// The implementation itself is correct — Save is genuinely atomic — so these
-// tests characterise a working component that has no producer.
+// The implementation itself is correct — Save is atomic — so these tests
+// characterise a working component that loom does not yet attach.
 
 func newTestPersistence(t *testing.T) (whisper.DeltaPersistence, string) {
 	t.Helper()

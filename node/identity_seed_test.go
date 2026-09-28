@@ -17,18 +17,18 @@ import (
 // TestIdentitySeedEnv_StableAcrossBoots is the regression guard for fleet-wide
 // ghost minting.
 //
-// THE BUG: node identity was persisted only to <DataDir>/node-key.json, and the
-// platform config defaults DataDir to "./data" — a RELATIVE path on the
-// container's ephemeral layer (platform/configs/mesh/validators.go). Half the
-// deployments mount no volume at all. So every deploy destroyed the seed,
-// GenerateIdentity minted a NEW NodeID, and the previous identity was orphaned
+// THE FAILURE IT GUARDS: with identity persisted only to
+// <DataDir>/node-key.json, and a composition root defaulting DataDir to
+// "./data" — a RELATIVE path on the container's ephemeral layer — a
+// deployment that mounts no volume destroys the seed on every deploy,
+// GenerateIdentity mints a NEW NodeID, and the previous identity is orphaned
 // into the mesh roster as a ghost.
 //
 // Ghosts are not inert. A dead NodeID still resolves to a LIVE machine, which
 // correctly refuses to answer to it: noise-UDP dials hang to msg2 timeout,
-// WebSocket dials get 401/404 and fall back to TLS. Measured on the live fleet:
-// ~100 disconnects/hour, 95 of them C->F, 782 tombstones against 11 real nodes.
-// One ephemeral seed produced fleet-wide transport churn.
+// WebSocket dials get 401/404 and fall back to TLS, and tombstones pile up
+// against the few real nodes. One ephemeral seed produces fleet-wide
+// transport churn.
 //
 // MESH_IDENTITY_SEED makes identity a deployment property rather than a
 // filesystem property: same seed => same NodeID, across restarts, deploys, and

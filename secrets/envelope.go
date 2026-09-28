@@ -14,7 +14,7 @@ import (
 )
 
 // TopicPrefix is the swarm topic family carrying sealed role config bundles,
-// alongside the existing agent.keys.<partition> / agent.network-psk.<partition>.<epoch>
+// alongside the agent.keys.<partition> / agent.network-psk.<partition>.<epoch>
 // taxonomy.
 const TopicPrefix = "role.secrets."
 
@@ -41,7 +41,7 @@ func ClaimTopic(role string) ports.Topic { return ports.Topic(ClaimTopicPrefix +
 // from the wrap layer.
 type RecipientWrap = dscrypto.RecipientWrappedDataKey
 
-// Envelope is the record BODY published on role.secrets.<role> (plan §1.1).
+// Envelope is the record BODY published on role.secrets.<role>.
 // It rides inside a normal signed swarm record — the swarm merge/merkle/sig
 // keys (topic, nodeID, HLC, tombstone, pubkey) stay cleartext and untouched;
 // only this body is opaque.

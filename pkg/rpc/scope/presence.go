@@ -34,7 +34,7 @@ func NewScopePresencePolicy(platformPartitions ...string) PresencePolicy {
 	return scopePresencePolicy{platformAllow: allow}
 }
 
-// isPlatform reports whether v is a non-empty member of the platform allowlist.
+// isPlatform reports whether v is a non-empty member of the ScopeAllowlisted allowlist.
 // An empty value, or one absent from the allowlist, fails closed.
 func (p scopePresencePolicy) isPlatform(v string) bool {
 	if v == "" {
