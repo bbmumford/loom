@@ -6,6 +6,8 @@ package rpc
 
 import (
 	"context"
+	"errors"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -197,6 +199,58 @@ func TestRegistryShimExecuteTaskDelegates(t *testing.T) {
 	}
 	if got.Value != "hello-task" {
 		t.Errorf("Value = %q, want hello-task", got.Value)
+	}
+}
+
+// TestRegistryShimRefusesAHandlerWithNoFunc: a shim runs its handler while the
+// handler carries a Func, and once the Func is cleared on the stored handler
+// it answers ExecuteRPC with ErrProxyDispatchLocal and ExecuteTask with a
+// failed result, without calling the nil Func.
+func TestRegistryShimRefusesAHandlerWithNoFunc(t *testing.T) {
+	h := &Handler{
+		Namespace: "test",
+		Domain:    "shim",
+		Operation: "Echo",
+		Func: func(ctx context.Context, req proto.Message) (proto.Message, error) {
+			return req, nil
+		},
+		Request:  (*wrapperspb.StringValue)(nil),
+		Response: (*wrapperspb.StringValue)(nil),
+		Scope:    ScopeNone,
+	}
+	shim := newRegistryShim(h)
+	payload, err := proto.Marshal(&wrapperspb.StringValue{Value: "hello"})
+	if err != nil {
+		t.Fatalf("proto.Marshal: %v", err)
+	}
+
+	resp, err := shim.ExecuteRPC(context.Background(), &handlers.RPCRequest{Payload: payload})
+	if err != nil || resp == nil || !resp.Success {
+		t.Fatalf("ExecuteRPC with a Func = (%+v, %v), want success", resp, err)
+	}
+
+	h.Func = nil
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("the shim called a nil Func: %v", r)
+		}
+	}()
+	resp, err = shim.ExecuteRPC(context.Background(), &handlers.RPCRequest{Payload: payload})
+	if !errors.Is(err, ErrProxyDispatchLocal) {
+		t.Errorf("ExecuteRPC with no Func: error = %v, want %v", err, ErrProxyDispatchLocal)
+	}
+	if resp != nil && resp.Success {
+		t.Errorf("ExecuteRPC with no Func reported success")
+	}
+	result, err := shim.ExecuteTask(context.Background(), &handlers.Task{
+		ID: "task-1", Handler: h.FQN(), Payload: payload,
+	})
+	if err != nil {
+		t.Fatalf("ExecuteTask with no Func: %v", err)
+	}
+	if result.Status != handlers.TaskStatusFailed || !strings.Contains(result.Error, ErrProxyDispatchLocal.Error()) {
+		t.Errorf("ExecuteTask with no Func = (%q, %q), want %q naming %v",
+			result.Status, result.Error, handlers.TaskStatusFailed, ErrProxyDispatchLocal)
 	}
 }
 
