@@ -201,12 +201,12 @@ func (e *Executor) shouldBid(offer meshtask.TaskOffer) bool {
 }
 
 // getHandlerName extracts the RPC handler name from task metadata
-// Format: task.Tags[0] should contain handler name (e.g., "identity.getUser")
+// Format: task.Tags[0] should contain handler name (e.g., "files.read")
 func (e *Executor) getHandlerName(task *meshtask.Task) string {
 	if len(task.Tags) > 0 {
 		return task.Tags[0]
 	}
-	// Fallback: role.type (e.g., "identity.getUser")
+	// Fallback: role.type (e.g., "files.read")
 	return fmt.Sprintf("%s.%s", task.Role, task.Type)
 }
 

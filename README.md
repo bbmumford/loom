@@ -30,7 +30,7 @@ triggerable, and observable.
   deterministic snapshot fingerprint.
 - **Durable journal** — a crash-consistent, append-only record of accepted
   state with gap-free replay and point-in-time snapshots.
-- **Trust policy** — fail-closed authorization (NodeID↔key binding, tenant /
+- **Trust policy** — fail-closed authorization (NodeID↔key binding, partition /
   topic / role / observer / secret-recipient gates) enforced before any
   record can affect state.
 - **Encrypted role secrets** — per-role config bundles sealed with
@@ -88,10 +88,10 @@ correct UDP bind and origin detection).
 | Package | What it is |
 |---|---|
 | `node` | the runtime — `Runtime`, `Config`, RPC server, sessions, directory, health, role activation, composition bridge |
-| `core` | directory/gossip codecs, well-known streams, the distributed task framework, per-tenant transport manager |
+| `core` | directory/gossip codecs, well-known streams, the distributed task framework, per-partition transport manager |
 | `grade` | connection quality grades and operation classes |
 | `contracts/pb` | mesh transport protobufs |
-| `pkg/rpc` | reflection RPC registry (`Call`, `Registry`, HTTP bridge, tenant scopes) |
+| `pkg/rpc` | reflection RPC registry (`Call`, `Registry`, HTTP bridge, partition scopes) |
 | `pkg/dispatch` | local-dispatch short-circuit and mesh-caller wiring |
 | `pkg/trace` | e2e trace-ID context propagation |
 | `pkg/obshealth` | subsystem-health registry |

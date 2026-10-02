@@ -61,8 +61,8 @@ type TargetedCaller interface {
 }
 
 // ─── Global Caller Registry ─────────────────────────────────────────────────
-// Replaces Library/clients/registry — endpoints call SetCaller() at boot,
-// domain dispatch packages call GetCaller() to obtain a Caller.
+// Endpoints call SetCaller() at boot; domain dispatch packages call
+// GetCaller() to obtain a Caller.
 
 var (
 	globalCaller Caller

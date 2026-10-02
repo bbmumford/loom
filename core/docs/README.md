@@ -1,14 +1,13 @@
-# HSTLES Mesh Network Documentation
+# Loom Mesh Network Documentation
 
 > **Status**: Active / Production-Ready
 > **Protocol Version**: VL1 (Virtual Layer 1)
-> **Last Updated**: December 15, 2025
 
-> **Current implementation review (2026-07-18):** See [Mesh, Swarm, and Ledger Review Findings](../../MESH-SWARM-LEDGER-REVIEW-FINDINGS-2026-07-18.md) for verified connection-lifecycle, trust, convergence, persistence, and staged directory-cutover blockers. The production-ready label above describes the intended capability set and should not be used as a release-readiness assertion until those findings are reconciled.
+> The production-ready label above describes the intended capability set; it is not a release-readiness assertion.
 
 ## Overview
 
-The **HSTLES Mesh** is a secure, self-organizing overlay network that provides connectivity, service discovery, and distributed state management for the HSTLES platform. It abstracts away the underlying network topology (cloud, edge, local) and presents a flat, secure address space for all services.
+The **loom mesh** is a secure, self-organizing overlay network that provides connectivity, service discovery, and distributed state management for the services composed on it. It abstracts away the underlying network topology (cloud, edge, local) and presents a flat, secure address space for all services.
 
 ### Core Components
 
@@ -24,7 +23,7 @@ The **HSTLES Mesh** is a secure, self-organizing overlay network that provides c
     *   Serves as the "DNS" and "Routing Table" of the mesh.
 
 3.  **MeshDB**: The control plane.
-    *   A distributed SQL database (SQLite/libraryQL) built on top of the mesh.
+    *   A distributed SQL database (SQLite/libSQL) built on top of the mesh.
     *   Uses **Raft** consensus for strong consistency.
     *   Manages platform configuration, sessions, and critical state.
 
@@ -38,7 +37,7 @@ The **HSTLES Mesh** is a secure, self-organizing overlay network that provides c
 
 ### Node Identity
 Every node is identified by a **NodeID**, which is derived from its Ed25519 public key.
-*   **Identity**: `library/mesh/runtime/node/identity.go`
+*   **Identity**: `node/identity.go`
 *   **Format**: `node_<base32_hash>`
 
 ### Security Model
@@ -75,7 +74,7 @@ Nodes only need to know the **Bootstrap Hosts** (Gateways).
 
 ```text
 [ NEW NODE ]                                          [ BOOTSTRAP GATEWAY ]
-     |                                                        (Login/API)
+     |                                                          (service)
      | 1. LOAD CONFIG                                              |
      |    - BootstrapHosts (Source: Config)                        |
      |    - Network Key (Source: Config)                           |
@@ -120,7 +119,7 @@ Nodes only need to know the **Bootstrap Hosts** (Gateways).
 
 ```text
 [ NEW NODE ]                                          [ BOOTSTRAP GATEWAY ]
-     |                                                        (Login/API)
+     |                                                          (service)
      | 1. REQUEST SNAPSHOT (HTTPS)                                 |
      |    GET /mesh/snapshot                                       |
      |    Header: X-Mesh-Auth: ...            -------------------> |
@@ -165,16 +164,18 @@ Nodes only need to know the **Bootstrap Hosts** (Gateways).
 ## Package Structure
 
 ```
-library/mesh/
-├── control/        # MeshDB (Raft + Turso)
-├── directory/      # LAD (Ledger, Cache, Gossip)
-├── docs/           # Documentation
-├── rpc/            # Internal RPC framework
-├── runtime/        # Node lifecycle & Bootstrap logic
-│   ├── node/       # Main Runtime implementation
-│   └── handlers/   # RPC Handlers
-├── task/           # Distributed Task Execution
-└── transport/      # VL1 (UDP + Noise)
+loom/
+├── node/           # Node runtime: lifecycle, bootstrap, mesh RPC server
+│   └── handlers/   # Mesh handler registry and scope validation
+├── core/
+│   ├── directory/  # Gossip sync over the ledger (core/directory/gossip)
+│   ├── task/       # Distributed task execution
+│   └── transport/  # Transport manager (UDP + Noise)
+├── directory/      # Live directory adapters
+├── pkg/
+│   ├── rpc/        # RPC registry, scope tags, HTTP bridge
+│   └── dispatch/   # Caller-side dispatch (HWPCaller)
+└── contracts/      # Mesh protobuf contracts
 ```
 
 ## Configuration Reference
@@ -183,7 +184,7 @@ library/mesh/
 
 | Field | Description |
 | :--- | :--- |
-| `ServiceName` | Logical name of the service (e.g., "login"). |
+| `ServiceName` | Logical name of the service (e.g., "svc-a"). |
 | `NetworkKeys` | List of PSKs for authorization. |
 | `BootstrapHosts` | Comma-separated list of bootstrap gateways (e.g., `gateway-a.example.com`). |
 | `Anchor.PublicKey` | Ed25519 Public Key for verifying snapshots. |

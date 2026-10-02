@@ -16,7 +16,7 @@ import (
 //
 // Usage:
 //
-//	resp, err := rpc.Call[*pb.GetStatusResponse](ctx, "orbtr.status.GetStatus", req)
+//	resp, err := rpc.Call[*pb.GetStatusResponse](ctx, "example.status.GetStatus", req)
 func Call[Resp proto.Message](ctx context.Context, handler string, req proto.Message) (Resp, error) {
 	var zero Resp
 

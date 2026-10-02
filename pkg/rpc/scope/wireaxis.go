@@ -15,9 +15,10 @@ package scope
 // identity level: they are the vocabulary a producer stamps and a consumer reads
 // by, and both sides must agree on the string.
 const (
-	// AxisTransportPinned is the axis the reference presence policy reads and
-	// node/handlers validateScope reconciles against the transport binding;
-	// WithTransportPartition stamps it from the server-resolved value.
+	// AxisTransportPinned is the axis node/handlers validateScope reconciles
+	// against the transport binding; WithTransportPartition stamps it from the
+	// server-resolved value. The reference presence policy does not read it; it
+	// reads the identity's partition.
 	AxisTransportPinned = "transport_pinned"
 
 	// AxisWithinTransport is the within-transport axis: it is deliberately NOT

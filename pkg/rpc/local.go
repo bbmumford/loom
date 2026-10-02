@@ -34,9 +34,8 @@ func LocalDispatcherInstance() LocalDispatcher {
 	return sharedDispatch.LocalDispatcherInstance()
 }
 
-// tryLocalDispatch is kept as a package-private wrapper that delegates
-// to dispatch.TryLocalDispatch so call sites in this package read
-// identically to the pre-consolidation version.
+// tryLocalDispatch is this package's name for dispatch.TryLocalDispatch,
+// used by Call and CallRaw.
 func tryLocalDispatch(ctx context.Context, name string, payload []byte) (out []byte, handled bool, err error) {
 	return sharedDispatch.TryLocalDispatch(ctx, name, payload)
 }

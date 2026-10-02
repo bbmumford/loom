@@ -1,20 +1,23 @@
 go 1.25.0
 
-// Local dev bridge: loom/go.mod pins swarm v0.0.8, but the Phase-0.5
-// swarm hardening (TrustCheck, RequireNodeKeyBinding, inbound gate) it needs
-// is unpublished in the ../swarm working tree. Resolve swarm locally until that
-// hardening is published and loom bumps its pin. Consumers replace both in
-// their own go.work (see io/go.work).
+// Local dev bridge: loom/go.mod pins a swarm release whose Node interface
+// names the partition rebind SetTenant, but the stubSwarmNode in
+// node/lad_reach_bridge_ingest_test.go implements swarm.Node with
+// SetPartition, which exists only in the unpublished ../swarm working tree.
+// Resolve swarm locally until it is published and loom bumps its pin.
+// Consumers replace loom and swarm in their own go.work.
 use .
 use ../swarm
 
-// Local dev bridge: loom/go.mod pins aether v0.0.117, but the agnostic wire
-// (AuthenticatedPrincipal opaque ScopeAxis axes, no named tenant/org fields) it
-// now sends/receives is unpublished in the ../aether working tree. Resolve
-// aether locally until that wire is published and loom bumps its pin.
+// Local dev bridge: loom/go.mod pins an aether release that lacks the
+// AuthenticatedPrincipal Subject, Partition and opaque ScopeAxis Axes fields
+// pkg/dispatch sends and node/rpc.go reads, and the NoiseTransportConfig
+// PartitionKeyResolver core/transport/manager sets; both exist only in the
+// unpublished ../aether working tree. Resolve aether locally until they are
+// published and loom bumps its pin.
 use ../aether
 
-// Local dev bridge: loom/go.mod pins ledger v0.0.20 and reach v0.0.14, but
+// Local dev bridge: loom/go.mod pins ledger and reach releases, but
 // the directory code reads ledger.Record.Partition and calls
 // storage.RequirePartitionColumn, which exist only in the unpublished
 // ../ledger working tree. reach is resolved locally with it because the
@@ -25,7 +28,7 @@ use ../ledger
 
 use ../reach
 
-// loom/go.mod pins tursoraft v0.0.6, but node/meshdb_transport.go implements
+// loom/go.mod pins a tursoraft release, but node/meshdb_transport.go implements
 // tursoraft's mesh.Mesh contract and node/runtime.go passes it as
 // ManagerConfig.Mesh; both exist only in the unpublished ../tursoraft
 // working tree. tursoraft resolves go-libsql and policypool through its own

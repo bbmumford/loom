@@ -9,7 +9,7 @@
 // has.
 //
 //   - REGISTERED — a mesh RPC handler IS a Function (stable FQN id like
-//     "orbtr.<domain>.<Op>"). The reflection rpc.Registry is the
+//     "example.<domain>.<Op>"). The reflection rpc.Registry is the
 //     FunctionsRegistry; the two-registry bridge (rpc.Registry ↔
 //     handlers.HandlerRegistry via the adapter registryShim) must be
 //     respected, not collapsed.

@@ -7,7 +7,7 @@ package compose
 
 // FunctionID is the stable fully-qualified function id — the unified id
 // space across the reflection RPC registry and the mesh handler registry
-// (e.g. "orbtr.auth.Validate"). ≥2 dot segments (ExtractRole is strict).
+// (e.g. "example.auth.Validate"): at least two dots (ExtractRole is strict).
 type FunctionID string
 
 // ResultKind is iii's 4-way function-result semantics.

@@ -56,23 +56,26 @@ const (
 	// caller is. scopePresencePolicy evaluates exactly these; a consumer policy
 	// may read them differently, but loom itself assigns them no identity.
 
-	// ScopeAllowlisted requires the transport-pinned axis to carry a value the
-	// consumer's policy admits. It is the narrowest tag: the policy decides
-	// membership, loom only reports that the axis was present and consulted.
+	// ScopeAllowlisted: the reference policy admits an identity whose partition
+	// is in the allowlist passed to NewScopePresencePolicy. It is the narrowest
+	// tag: the policy decides membership, and an empty allowlist admits no
+	// identity.
 	ScopeAllowlisted ScopeTag = "allowlisted"
 
-	// ScopePartition requires a non-empty transport-pinned axis and nothing
-	// more — the caller reached us over a transport that established a
-	// partition, whatever that partition denotes to the consumer.
+	// ScopePartition: the reference policy admits an identity with a non-empty
+	// partition and asks nothing more, whatever that partition denotes to the
+	// consumer.
 	ScopePartition ScopeTag = "partition"
 
-	// ScopeWithinPartition requires the transport-pinned axis AND the
-	// within-transport axis, i.e. a caller located inside the established
-	// partition rather than merely inside its transport.
+	// ScopeWithinPartition: the reference policy evaluates it as
+	// ScopePartition, because the identity carries one partition and which
+	// partition a handler may act on is the handler's own selector. A consumer
+	// policy that reads the within-transport axis separately can require more.
 	ScopeWithinPartition ScopeTag = "within_partition"
 
-	// ScopeSubject requires the transport-pinned axis AND an authenticated
-	// subject, i.e. an individual principal rather than only a partition.
+	// ScopeSubject: the reference policy admits an identity with a non-empty
+	// partition and a non-empty authenticated subject, i.e. an individual
+	// principal rather than only a partition.
 	ScopeSubject ScopeTag = "subject"
 
 	// ScopeUnknown is the fail-closed sentinel for a scope that arrived as

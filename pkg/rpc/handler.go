@@ -16,8 +16,10 @@ import (
 // distinguish grade failures from transport failures.
 var ErrGradeTooLow = errors.New("connection grade too low for operation")
 
-// OperationClass categorizes RPC operations by their transport requirements.
-// Defined here (not in mesh/node) to avoid import cycles.
+// OperationClass is the class a Handler declares for its transport
+// requirements. node's grade gate uses grade.OperationClass
+// (node/grade_alias.go) and reads the "opClass" context hint set by
+// dispatch.WithOpClass, not this value; nothing converts between the two.
 type OperationClass int
 
 const (
@@ -33,7 +35,7 @@ const (
 type Middleware = func(http.Handler) http.Handler
 
 // ScopeTag controls scope enforcement at the handler dispatch level: an opaque
-// label the handlers package (mesh/node/handlers) aliases to the SAME underlying
+// label the handlers package (node/handlers) aliases to the SAME underlying
 // rpc/scope type, so a scope value round-trips between the two surfaces without
 // drift. loom carries the tag opaquely; a consumer's PresencePolicy decides what
 // each tag requires. See rpc/scope/scopetag.go.
@@ -47,18 +49,18 @@ const (
 	ScopeNone = scope.ScopeNone // Opts out of scope enforcement
 
 	// The declarable tags, each naming what must be present on the identity.
-	ScopeAllowlisted     = scope.ScopeAllowlisted     // pinned axis the policy admits
-	ScopePartition       = scope.ScopePartition       // pinned axis present
-	ScopeWithinPartition = scope.ScopeWithinPartition // pinned + within-transport axes
-	ScopeSubject         = scope.ScopeSubject         // pinned axis + authenticated subject
+	ScopeAllowlisted     = scope.ScopeAllowlisted     // partition the policy admits
+	ScopePartition       = scope.ScopePartition       // partition present
+	ScopeWithinPartition = scope.ScopeWithinPartition // partition present (evaluated as ScopePartition)
+	ScopeSubject         = scope.ScopeSubject         // partition + authenticated subject
 
 	// ScopeUnknown is the fail-closed sentinel for a scope that arrived as
-	// something the scope package does not recognise. It is not declarable and
-	// EnforceScope denies it, so a tag that decayed to it reaches nothing.
+	// something the scope package does not recognise. It is not declarable:
+	// registration refuses it, and EnforceScope hands it to the PresencePolicy,
+	// which denies it when the policy is nil or the reference policy.
 	//
-	// Nothing produces it today — no caller-supplied value is converted into a
-	// scope tag anywhere — so the only way to hold it is to set it, which the
-	// refusals exist to catch.
+	// No code converts a caller-supplied value into a scope tag, so the only
+	// way to hold it is to set it, which the refusals exist to catch.
 	ScopeUnknown = scope.ScopeUnknown
 )
 
@@ -79,7 +81,7 @@ type HandlerFunc func(ctx context.Context, req proto.Message) (proto.Message, er
 //	    },
 //	}
 type Handler struct {
-	Namespace        string                  // FQN prefix before Domain (one or more dot-separated segments), e.g. "orbtr"
+	Namespace        string                  // FQN prefix before Domain (one or more dot-separated segments), e.g. "example"
 	Domain           string                  // "identity", "device", "policy"
 	Operation        string                  // "GetStatus", "ListDevices"
 	Func             HandlerFunc             // The handler function (nil for proxy — dispatched over mesh)
@@ -88,8 +90,8 @@ type Handler struct {
 	Middleware       []Middleware            // HTTP middleware chain applied before handler (auth, rate limit, etc.)
 	Scope            ScopeTag                // opaque scope label a PresencePolicy evaluates at mesh dispatch
 	Requirement      *scope.Requirement      // two-arm authorization; when set it supersedes Scope at the enforcement seam. nil = fall back to Scope/PresencePolicy.
-	Tags             []string                // Classification: "users", "write", "feature:policy.full"
-	OpClass          OperationClass          // minimum grade requirement for mesh forwarding (default: OpStandard)
+	Tags             []string                // Classification: "status", "write", "feature:policy.full"
+	OpClass          OperationClass          // declared operation class (zero value: OpBulk); loom does not read it, a caller forwards a class as the opClass hint via dispatch.WithOpClass
 	WebhookSignature *WebhookSignatureConfig // optional: declare this handler is a webhook-class receiver; the registry runs signature verification pre-dispatch
 }
 

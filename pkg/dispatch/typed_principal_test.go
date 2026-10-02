@@ -28,14 +28,14 @@ func principalAxis(p *pb.AuthenticatedPrincipal, name string) string {
 func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing.T) {
 	identity := rpcscope.AuthenticatedIdentity{
 		Scopes: []rpcscope.ScopeValue{
-			{Name: rpcscope.AxisTransportPinned, Value: "orbtr"},
-			{Name: rpcscope.AxisWithinTransport, Value: "org-A"},
+			{Name: rpcscope.AxisTransportPinned, Value: "p-pinned"},
+			{Name: rpcscope.AxisWithinTransport, Value: "p-1"},
 		},
 		Subject: "user-A",
-	}.WithPartition("org-A")
+	}.WithPartition("p-1")
 	principal, err := rpcscope.NewAuthenticatedPrincipal(
 		identity,
-		[]string{"orbtr.io.plugins.read", "orbtr.io.plugins.publish"},
+		[]string{"example.plugins.read", "example.plugins.publish"},
 	)
 	if err != nil {
 		t.Fatal(err)
@@ -44,8 +44,8 @@ func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing
 
 	req := buildRPCRequestCtx(
 		ctx,
-		"orbtr.io.plugins",
-		"orbtr.io.plugins.List",
+		"example.plugins",
+		"example.plugins.List",
 		nil,
 		time.Second,
 	)
@@ -53,28 +53,28 @@ func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing
 	if req.Principal == nil {
 		t.Fatal("typed principal omitted from RPC envelope")
 	}
-	if got := principalAxis(req.Principal, rpcscope.AxisTransportPinned); got != "orbtr" {
-		t.Fatalf("platform tenant axis = %q", got)
+	if got := principalAxis(req.Principal, rpcscope.AxisTransportPinned); got != "p-pinned" {
+		t.Fatalf("pinned axis = %q", got)
 	}
-	if got := principalAxis(req.Principal, rpcscope.AxisWithinTransport); got != "org-A" {
-		t.Fatalf("customer org axis = %q", got)
+	if got := principalAxis(req.Principal, rpcscope.AxisWithinTransport); got != "p-1" {
+		t.Fatalf("within-transport axis = %q", got)
 	}
 	if got := req.Principal.Subject; got != "user-A" {
 		t.Fatalf("subject = %q", got)
 	}
-	if got := req.Principal.GetPartition(); got != "org-A" {
-		t.Fatalf("partition = %q, want org-A", got)
+	if got := req.Principal.GetPartition(); got != "p-1" {
+		t.Fatalf("partition = %q, want p-1", got)
 	}
 	if got := req.Principal.Scopes; len(got) != 2 ||
-		got[0] != "orbtr.io.plugins.read" ||
-		got[1] != "orbtr.io.plugins.publish" {
+		got[0] != "example.plugins.read" ||
+		got[1] != "example.plugins.publish" {
 		t.Fatalf("scopes = %v", got)
 	}
 	if _, ok := req.Context["orgId"]; ok {
-		t.Fatalf("customer authority leaked into mutable camel context: %v", req.Context)
+		t.Fatalf("principal axis leaked into mutable camel context: %v", req.Context)
 	}
 	if _, ok := req.Context["org_id"]; ok {
-		t.Fatalf("customer authority leaked into mutable snake context: %v", req.Context)
+		t.Fatalf("principal axis leaked into mutable snake context: %v", req.Context)
 	}
 }
 
@@ -85,7 +85,7 @@ func TestBuildRPCRequestCtxCarriesThePinnedAxisVerbatim(t *testing.T) {
 	identity := rpcscope.AuthenticatedIdentity{
 		Scopes: []rpcscope.ScopeValue{
 			{Name: rpcscope.AxisTransportPinned, Value: "foreign-platform"},
-			{Name: rpcscope.AxisWithinTransport, Value: "org-A"},
+			{Name: rpcscope.AxisWithinTransport, Value: "p-1"},
 		},
 		Subject: "user-A",
 	}

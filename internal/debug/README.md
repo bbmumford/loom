@@ -1,11 +1,11 @@
 # Debug Logging Package
 
-Centralized, flag-deterministic debug logging for HSTLES platform.
+Centralized, flag-deterministic debug logging for loom.
 
 ## Features
 
 - **Flag-deterministic**: Controlled via `DEBUG` environment variable or `Configure()` call
-- **Namespaced**: Debug logs tagged by component (e.g., `mesh.vl1`, `mesh.lad`, `endpoint.login`)
+- **Namespaced**: Debug logs tagged by component (e.g., `mesh.vl1`, `mesh.lad`, `endpoint.<name>`)
 - **Zero overhead when disabled**: No-op when debug flag is false
 - **Thread-safe**: Concurrent logging from multiple goroutines
 - **Flexible output**: Configurable output destination (default: stderr)
@@ -66,8 +66,8 @@ func MyFunction() {
 - `mesh.rpc` - RPC executor
 - `mesh.task` - Task executor
 - `mesh.relay` - Relay fallback
-- `endpoint.login` - Login endpoint
-- `endpoint.api` - API endpoint
+- `endpoint.a` - endpoint `a`
+- `endpoint.b` - endpoint `b`
 - `handler.auth` - Auth handlers
 
 ### Performance Tracking
@@ -102,7 +102,7 @@ func ComplexFlow() {
 
 ```
 2026/01/07 22:15:30.123456 [DEBUG:mesh.vl1] Connection established to node abc123
-2026/01/07 22:15:30.456789 [DEBUG:mesh.rpc] Executing handler login.auth (request_id=xyz789)
+2026/01/07 22:15:30.456789 [DEBUG:mesh.rpc] Executing handler files.read (request_id=xyz789)
 2026/01/07 22:15:31.111111 [DEBUG:mesh.vl1] [BENCHMARK] Dial took 1.234s
 2026/01/07 22:15:31.222222 [DEBUG:mesh.lad] [TRACE] → SyncDirectory
 2026/01/07 22:15:31.333333 [DEBUG:mesh.lad] [TRACE] ← SyncDirectory (duration: 111ms)
@@ -148,7 +148,7 @@ func main() {
     // Configure debug from app config
     debug.SetEnabled(cfg.App.LogLevel == "debug")
     
-    dbg := debug.New("endpoint.login")
+    dbg := debug.New("endpoint.a")
     dbg.Printf("Starting endpoint: %s", cfg.App.Name)
     
     // ... rest of initialization ...
@@ -184,7 +184,7 @@ fmt.Println(info)
 //   - mesh.vl1: enabled=true
 //   - mesh.lad: enabled=true
 //   - mesh.rpc: enabled=true
-//   - endpoint.login: enabled=true
+//   - endpoint.a: enabled=true
 //   - handler.auth: enabled=true
 ```
 
@@ -247,7 +247,7 @@ dbg.Printf("Debug info: %v", data)
 
 Run tests:
 ```bash
-cd Library/platform/debug
+cd internal/debug
 go test -v
 go test -bench=. -benchmem
 ```

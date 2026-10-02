@@ -92,16 +92,11 @@ const (
 	// performs scheduled remote probes.
 	SubsystemUptimeRunner SubsystemID = "uptime.runner"
 
-	// Device-agent PolicyEngine post-commit appliers. Each
-	// identifier corresponds to a single applyOrLog site inside
-	// PolicyEngine.PullAndApply: a bundle has already been committed by
-	// the time these run, so failure is a soft-degradation reflected here
-	// (fail-observably) rather than a rollback. The agent maintains its
-	// own DegradedSubsystems() map for local heartbeat surfacing; when
-	// wired via PolicyEngine.SetHealthRegistry, every Mark / Clear is
-	// mirrored to this Registry so the platform /api/monitoring/subsystems
-	// surface sees the same events. Identifier stems match the internal
-	// applyOrLog name so mesh-side and agent-side surfacing stay 1:1.
+	// Endpoint-agent policy appliers. Each identifier corresponds to one
+	// applier site that runs after a policy bundle is committed, so a
+	// failure is a soft degradation recorded here rather than a rollback.
+	// An agent that mirrors its own degraded set into this Registry uses
+	// the same identifiers, so both report one name per applier.
 
 	// SubsystemPolicyLocalStore — SavePolicyBundle to agent_local.db.
 	SubsystemPolicyLocalStore SubsystemID = "policy.localStore"

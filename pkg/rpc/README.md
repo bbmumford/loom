@@ -1,39 +1,43 @@
 # rpc — Namespace-Qualified Reflection Dispatch
 
-Zero-codegen RPC dispatch for the HSTLES platform. Handlers self-register at startup with namespace-qualified names. A single generic HTTP bridge and mesh dispatcher replace all per-domain generated code.
+Zero-codegen RPC dispatch: handlers self-register with namespace-qualified names; one generic HTTP bridge and mesh dispatcher serve every domain.
 
 ## Architecture
 
 ```
 Handler Registration (startup):
-  monitoring.Register(registry)  →  "hstles.monitoring.GetOverallStatus" → handler func
+  monitoring.Register(registry)  →  "example.monitoring.GetOverallStatus" → handler func
 
 HTTP Request:
-  POST /rpc/platform.monitoring.GetOverallStatus {json body}
-    → Global middleware (Recovery, Logging, SecurityHeaders, Session)
-    → Per-handler middleware (RequireAuth, RateLimit, RequireDeviceMJT, etc.)
-    → Generic bridge: lookup handler → protojson.Unmarshal → call func → protojson.Marshal
+  POST /rpc/example.monitoring.GetOverallStatus {json body}
+    → Router middleware the endpoint installs (recovery, logging, security headers, session)
+    → Per-handler middleware (RequireAuth, RateLimit, RequireDeviceToken, etc.)
+    → Generic bridge: lookup handler → protojson.Unmarshal → EnforceScope → call func (or forward over the mesh) → protojson.Marshal
 
 Mesh RPC:
-  rpc.Call[*pb.Resp](ctx, "hstles.monitoring.GetOverallStatus", req)
-    → proto.Marshal → HWPCaller.Call(ctx, "platform.monitoring", FQN, bytes)
-    → RPCServer → Registry.Dispatch → proto.Unmarshal → call func → proto.Marshal
+  rpc.Call[*pb.Resp](ctx, "example.monitoring.GetOverallStatus", req)
+    → proto.Marshal
+    → in-process dispatch when this process hosts the handler, otherwise
+      dispatch.GetCaller().Call(ctx, "example.monitoring", FQN, bytes) (an HWPCaller on a mesh node)
+    → RPCServer → HandlerRegistry (filled by Registry.ExportToHandlerRegistry)
+    → scope check → proto.Unmarshal → webhook check (handlers that declare WebhookSignature) → call func → proto.Marshal
 
 LAD Discovery:
-  node.hstles.com publishes: roles=["platform.identity", "platform.auth", ...]
-  node.orbtr.io publishes:   roles=["app.device", "app.policy", ...]
-  help.orbtr.io publishes:   roles=["app.monitoring"]  ← no collision
+  node-a.example.com publishes: roles=["example.identity", "example.monitoring", ...]
+  node-b.example.com publishes: roles=["example.device", "example.policy", ...]
+  node-c.example.com publishes: roles=["sample.monitoring"]  ← distinct from example.monitoring
 ```
 
 ## Namespace Convention
 
 ```
 {namespace}.{domain}.{Operation}
-
-platform.*  = HSTLES core domains (identity, auth, billing, platform, support, notify, monitoring, storage, admin)
-app.*       = ORBTR-specific domains (device, policy, job, authentication, remote_access, etc.)
-custom.*    = Future: tenant-specific extensions
 ```
+
+The consumer chooses the namespace, and it may have more than one dot-separated
+segment. The role a node publishes and routes by is `{namespace}.{domain}`
+(everything before the last dot, see `ExtractRole`), so two namespaces can each
+host a domain of the same name without their roles colliding.
 
 ## Handler Registration
 
@@ -44,7 +48,7 @@ package monitoring
 
 func Register(reg *rpc.Registry) error {
     return reg.RegisterAll([]rpc.Handler{
-        {Namespace: "hstles", Domain: "monitoring", Operation: "GetOverallStatus",
+        {Namespace: "example", Domain: "monitoring", Operation: "GetOverallStatus",
             Func: rpc.Wrap(handlers.GetOverallStatus),
             Request: (*pb.GetOverallStatusRequest)(nil),
             Response: (*pb.GetOverallStatusResponse)(nil),
@@ -53,21 +57,25 @@ func Register(reg *rpc.Registry) error {
 }
 ```
 
-ORBTR handlers use struct receivers:
+A domain whose handlers are methods takes the receiver:
 
 ```go
 package device
 
 func Register(reg *rpc.Registry, h *handlers.Handler) error {
     return reg.RegisterAll([]rpc.Handler{
-        {Namespace: "orbtr", Domain: "device", Operation: "Heartbeat",
+        {Namespace: "example", Domain: "device", Operation: "Heartbeat",
             Func: rpc.Wrap(h.Heartbeat),
             Request: (*pb.HeartbeatRequest)(nil),
             Response: (*pb.HeartbeatResponse)(nil),
-            Scope: rpc.ScopeTenant},
+            Scope: rpc.ScopePartition},
     })
 }
 ```
+
+A gateway that serves an operation another node executes registers the same
+list with `Func` stripped through `Registry.RegisterProxy`; `rpctest.AssertRegisterTypesParity`
+checks that a domain's `Register` and `Types` lists agree.
 
 ## Security: Middleware Chain (No Fixed Tiers)
 
@@ -77,16 +85,18 @@ not at handler registration time.
 
 ### Why no fixed tiers?
 
-HSTLES has 4 auth types (Public, Session, Service, Mixed). ORBTR adds Device (MJT).
-Future apps may add PatientConsent, APIKeyScoped, etc. Fixed enums don't scale.
+Each consumer has its own auth types (session, service token, device token, API
+key, ...). A fixed enum in a shared module would have to name every one of them;
+a middleware chain lets each composition root attach the checks it owns.
 
 ### How it works
 
-**Library (register.go)** — declares handler logic only, no security:
+**Domain package (register.go)** — declares handler logic and its scope tag, no middleware:
 ```go
 rpc.Handler{
-    Namespace: "orbtr", Domain: "device", Operation: "Heartbeat",
+    Namespace: "example", Domain: "device", Operation: "Heartbeat",
     Func: rpc.Wrap(h.Heartbeat),
+    Scope: rpc.ScopePartition,
     // No Middleware — added by endpoint at boot time
 }
 ```
@@ -97,102 +107,123 @@ reg := rpc.NewRegistry()
 device.Register(reg, deviceHandler)
 
 // Apply middleware by namespace.domain pattern:
-for _, h := range reg.ByRole("app.device") {
+for _, h := range reg.ByRole("example.device") {
     h.Middleware = []rpc.Middleware{
-        orbtr.RequireDeviceMJT(resolver),
+        devicemw.RequireDeviceToken(resolver),
     }
 }
-for _, h := range reg.ByNamespace("platform") {
+for _, h := range reg.ByNamespace("sample") {
     h.Middleware = []rpc.Middleware{
-        hstles.RequireAuth("session", "bearer"),
+        authmw.RequireAuth("session", "bearer"),
     }
 }
 
 // Register all handlers with their middleware on the HTTP router:
-rpchttp.RegisterAll(reg, securityRoutes)
+rpchttp.RegisterAll(reg, router)
 ```
 
-**HTTP bridge** — wraps each handler with its middleware chain:
+**HTTP routes** — wrap each handler with its middleware chain:
 ```go
-// For each handler:
-var wrapped http.Handler = bridge.HandleRPC
-for i := len(h.Middleware) - 1; i >= 0; i-- {
-    wrapped = h.Middleware[i](wrapped)
-}
-sr.Public.Handle("/rpc/"+h.FQN(), wrapped)
+// For each handler (pkg/rpc/http/routes.go):
+final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+    bridge.dispatch(w, r, handler)
+})
+wrapped := composeMiddleware(handler.Middleware, final)
+router.Method("POST", "/rpc/"+handler.FQN(), wrapped)
 ```
 
 ### Example middleware compositions
 
 ```go
-// HSTLES: session-authenticated user endpoint
+// Session-authenticated endpoint
 h.Middleware = []rpc.Middleware{
-    middleware.RequireAuth("session", "bearer"),
-    middleware.RequireScopes("identity.write"),
-    middleware.RateLimit(middleware.RateLimitOptions{ConfigName: "strict"}),
+    authmw.RequireAuth("session", "bearer"),
+    authmw.RequireScopes("identity.write"),
+    authmw.RateLimit(authmw.RateLimitOptions{ConfigName: "strict"}),
 }
 
-// ORBTR: device/agent endpoint (MJT auth)
+// Device/agent endpoint
 h.Middleware = []rpc.Middleware{
-    orbtr.RequireDeviceMJT(resolver),
+    devicemw.RequireDeviceToken(resolver),
 }
 
-// ORBTR: user endpoint with feature gate
+// Authenticated endpoint behind a feature gate
 h.Middleware = []rpc.Middleware{
-    middleware.RequireAuth("session", "bearer"),
-    orbtr.RequireUserIdentity(),
+    authmw.RequireAuth("session", "bearer"),
+    authmw.RequireSubject(),
     features.RequireFeature("policy.full"),
 }
 
 // Public (no auth) — empty middleware
 h.Middleware = nil  // or []rpc.Middleware{}
 
-// Future app with custom auth
+// A consumer with its own auth type
 h.Middleware = []rpc.Middleware{
-    careledger.RequirePatientConsent(),
-    middleware.RequireAuth("bearer"),
+    consentmw.RequireConsent(),
+    authmw.RequireAuth("bearer"),
 }
 ```
 
 ## Type-Safe Caller
 
-Replaces all per-domain `dispatch.NewMesh(caller).Method(ctx, req)` patterns:
-
 ```go
-// Before (generated):
-svc := identityDispatch.NewMesh(meshCaller)
-resp, err := svc.CreateUser(ctx, req)
-
-// After (generic, zero codegen):
-resp, err := rpc.Call[*pb.CreateUserResponse](ctx, "hstles.identity.CreateUser", req)
+resp, err := rpc.Call[*pb.GetOverallStatusResponse](ctx, "example.monitoring.GetOverallStatus", req)
 ```
 
-## Tenant Scope
+`Call` and `CallRaw` dispatch in-process when this process hosts the handler and
+over the mesh otherwise. `CallNode` and `CallNodeRaw` send to one named node and
+never short-circuit locally.
 
-Handler-level tenant isolation, enforced at mesh dispatch:
+## Scope tiers
 
-| Scope | Meaning |
-|-------|---------|
-| `ScopeNone` | No tenant restriction (health checks, public data) |
-| `ScopePlatform` | HSTLES internal only (tenant management, key rotation) |
-| `ScopeTenant` | Requires valid tenant_id in RPC context |
-| `ScopeOrg` | Requires tenant + org membership |
-| `ScopeUser` | Requires tenant + own user data only |
+Each handler declares a `Scope` tag. `EnforceScope` judges it at the HTTP
+bridge and in `Registry.Dispatch`. At mesh dispatch the `node/handlers`
+registry judges the exported copy the same way with its own policy, and also
+reconciles the transport-pinned axis against the transport binding.
 
-Platform tenant ("orbtr", "hstles") is propagated via `HWPCaller.SetPlatformTenant()`.
-Org ID is in the proto request payload (separate channel, no cross-contamination).
+loom treats a tag as an opaque label: the `PresencePolicy` installed on the
+registry (`Registry.SetPresencePolicy` here) decides what it requires, and a
+registry with no policy denies every handler above `ScopeNone`.
+`scope.NewScopePresencePolicy` is the reference policy:
+
+| Tag | The reference policy admits |
+|-----|-----------------------------|
+| `ScopeNone` | every caller; `EnforceScope` admits it without consulting a policy (liveness, public data) |
+| `ScopeAllowlisted` | an identity whose partition is in the allowlist passed to `NewScopePresencePolicy` |
+| `ScopePartition` | an identity with a non-empty partition |
+| `ScopeWithinPartition` | evaluated as `ScopePartition` |
+| `ScopeSubject` | an identity with a non-empty partition and a non-empty authenticated subject |
+
+`ScopeUnset` (the zero value) and `ScopeUnknown` are refused at registration;
+`EnforceScope` fails `ScopeUnset` closed and the reference policy denies
+`ScopeUnknown`.
+
+A handler that declares a `Requirement` (`scope.Open()`, `scope.Capability(cap)`,
+`scope.Nexus()`) is judged by the registry's authorizer
+(`Registry.SetAuthzPolicy` here) instead of its `Scope` tag.
+
+`EnforceScope` reads only the typed identity a trusted transport adapter stamps
+with `WithAuthenticatedScopeIdentity`. Request bodies and the `WithRPCContext`
+map are never read as scope authority.
 
 ## Package Structure
 
 ```
-Library/rpc/
-├── handler.go      — Handler struct, Middleware type, Wrap[Req,Resp] generic
-├── registry.go     — Thread-safe Registry with namespace-qualified lookup
-├── dispatch.go     — Generic proto reflection dispatch, ExtractRole
-├── call.go         — Type-safe Call[Resp] + CallRaw for mesh RPC
-├── adapter.go      — Bridge to existing HandlerRegistry (RPCServer compat)
-├── registry_test.go
+pkg/rpc/
+├── handler.go      — Handler struct, Middleware type, Scope* tags, Wrap[Req,Resp] generic
+├── registry.go     — Thread-safe Registry with namespace-qualified lookup, RegisterProxy, StripFuncs
+├── dispatch.go     — Registry.Dispatch (scope, unmarshal, webhook check, handler), ExtractRole
+├── scope.go        — EnforceScope and the typed scope identity on the context
+├── call.go         — Call[Resp], CallRaw, CallNode, CallNodeRaw
+├── local.go        — the in-process short-circuit Call and CallRaw take
+├── webhook_sig.go  — webhook-class signature verification
+├── adapter.go      — exports handlers into node/handlers.HandlerRegistry
+├── scope/          — ScopeTag, identity axes, PresencePolicy, Requirement
+├── rpctest/        — AssertRegisterTypesParity for domain Register/Types tests
+├── registrycheck/  — go/analysis pass that reports a discarded registration error
 └── http/
-    ├── bridge.go   — Single generic HTTP handler (protojson, body limits)
-    └── routes.go   — Auto-registration with per-handler middleware wrapping
+    ├── bridge.go    — Single generic HTTP handler (protojson, body limits)
+    ├── routes.go    — Auto-registration with per-handler middleware wrapping
+    ├── directory.go — GET /rpc/_directory handler listing
+    └── errmap.go    — mesh-dispatch error → HTTP status mapping
 ```

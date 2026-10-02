@@ -35,8 +35,8 @@ const deltaSyncClockSkewSlack = 30 * time.Second
 
 // gossipMagic is the 2-byte prefix on all gossip frames for corruption detection.
 // Wire format: [2-byte magic 0x4731][4-byte big-endian length][JSON payload]
-// If the magic doesn't match, the frame is corrupted (e.g., from WS proxy
-// frame reassembly errors on Fly.io). The reader logs and closes the connection.
+// If the magic doesn't match, the frame is corrupted (e.g., from a WebSocket
+// proxy's frame reassembly errors). The reader logs and closes the connection.
 const gossipMagic uint16 = 0x4731 // "G1"
 const gossipHeaderSize = 6        // 2 (magic) + 4 (length)
 
@@ -143,8 +143,9 @@ func GossipOverConn(ctx context.Context, conn net.Conn, c *cache.DirectoryCache,
 	// (non-blocking). The writeLoop flushes within 1ms. The responder reads
 	// first then writes — so there's no deadlock.
 	//
-	// This replaces the previous concurrent goroutine model which leaked
-	// read goroutines on timeout, permanently starving the stream's recvCh.
+	// No reader goroutine is started here: one left blocked on a timed-out read
+	// would consume the next frame from the stream's recvCh and starve the next
+	// exchange on that stream.
 	if _, err := conn.Write(hdr); err != nil {
 		return result, fmt.Errorf("gossip: write header: %w", err)
 	}
@@ -525,12 +526,11 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 	timer := time.NewTimer(cadBase)
 	defer timer.Stop()
 
-	// NOTE: Gossip-level keepalive pings removed. They wrote zero-length frames to
-	// stream 0 (gossip) which interleaved with exchange reads on muxed connections,
-	// causing the reader to consume the ping as an exchange header and orphaning the
-	// real exchange data in the buffer (eventually filling the 256-slot buffer).
-	// Connection liveness is now handled by mux-level keepalive on stream 2 (15s
-	// interval, 3 missed → close). RTT is measured from exchange header timing.
+	// No gossip-level keepalive: a zero-length frame on stream 0 would interleave
+	// with exchange reads on a muxed connection and be consumed as an exchange
+	// header, orphaning the exchange data in the 256-slot buffer. Liveness comes
+	// from the mux-level keepalive on stream 2 (15s interval, 3 missed → close);
+	// RTT is measured from exchange header timing.
 
 	for {
 		select {

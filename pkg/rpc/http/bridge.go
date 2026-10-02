@@ -22,8 +22,7 @@ import (
 // session cookie or bearer). Bridges that don't need this leave it nil.
 type IdentityInjector = func(r *http.Request, msg proto.Message)
 
-// Bridge provides a single HTTP handler for all RPC operations.
-// Replaces all per-domain generated http_bridge.go files.
+// Bridge provides a single HTTP handler for every RPC operation in a Registry.
 //
 // Concurrency: identityInjector and directoryAuth are held in
 // atomic.Pointers so callers can rotate them under load without racing
@@ -237,20 +236,24 @@ func (b *Bridge) dispatch(w http.ResponseWriter, r *http.Request, h *rpc.Handler
 }
 
 // executeLocal runs the handler in-process. Returns the marshalled response
-// or an error wrapped via classifyHandlerError for the caller to map.
+// or a *bridgeError carrying the HTTP status (classifyHandlerStatus for scope,
+// webhook and handler errors; 500 for a response marshal failure), for the
+// caller to write.
 //
 // Mirrors Registry.Dispatch's pre-handler guards (its EnforceScope call and
 // its WebhookSignature check) so the HTTP bridge enforces the same security
-// surface as the mesh-side dispatcher:
+// surface as Registry.Dispatch:
 //
 //  1. EnforceScope fails closed on the handler's declared Scope or
 //     Requirement when the authenticated principal on ctx does not
 //     satisfy it, so a handler reached through /rpc/{handler} or a
-//     per-FQN route is judged exactly as it is on the mesh.
+//     per-FQN route is judged by the same presence and requirement checks
+//     the mesh registry runs (the mesh also reconciles the transport-pinned
+//     axis).
 //  2. verifyWebhookSignature runs the webhook-class pre-dispatch hook
-//     before handler.Func sees an unauthenticated event. We run this on
-//     the LOCAL execution path only; the proxy path delegates to the
-//     destination's Registry.Dispatch which always runs the same hook.
+//     before handler.Func sees an unauthenticated event. The bridge runs
+//     it on this local execution path only; executeProxy leaves it to the
+//     destination, where registryShim.ExecuteRPC runs it.
 //
 // classifyHandlerStatus maps ErrScopeDenied → 403 and
 // ErrWebhookSignatureInvalid / ErrWebhookSecretUnset → 401, keeping
@@ -285,12 +288,13 @@ func (b *Bridge) executeLocal(r *http.Request, h *rpc.Handler, req proto.Message
 // gateway that proxies handlers declaring a scope MUST install a PresencePolicy
 // (typically one that defers the axis-bearing tags to the destination while
 // still validating the wire-stamped presence it can see); with a nil policy
-// EnforceScope denies every non-None handler rather than silently forwarding an
-// unevaluated call — the fail-OPEN carve-out for the allowlisted/nil-set case
-// is deliberately gone. Webhook-signature verification is still deferred
-// to the destination (the gateway typically doesn't carry the secret env var;
-// running it here would fail-closed on every signed event passing through a
-// thin gateway), which always runs Registry.Dispatch and always enforces.
+// EnforceScope denies every non-None handler rather than forwarding an
+// unevaluated call. Webhook-signature verification is not run here: a thin
+// gateway typically lacks the secret env var, and running it would fail closed
+// on every signed event passing through. The destination runs it: its mesh RPC
+// server reaches a handler exported through ExportToHandlerRegistry via
+// registryShim.ExecuteRPC (pkg/rpc/adapter.go), which verifies the signature
+// before calling Func, as rpc.Registry.Dispatch and executeLocal do.
 func (b *Bridge) executeProxy(r *http.Request, h *rpc.Handler, req proto.Message) ([]byte, error) {
 	if h != nil {
 		if err := rpc.EnforceScope(r.Context(), h, b.registry.PresencePolicy(), b.registry.AuthzPolicy()); err != nil {

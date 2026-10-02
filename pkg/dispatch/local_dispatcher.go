@@ -67,9 +67,8 @@ func LocalDispatcherInstance() LocalDispatcher {
 // when local dispatch errored. Callers use the bool to decide whether
 // to fall through to mesh dispatch.
 //
-// Exported (vs. the original rpc.tryLocalDispatch which was package-
-// private) so dispatch.CallJSON / CallProto and rpc.Call / CallRaw
-// can share one impl rather than each defining a private copy.
+// Exported so dispatch.CallJSON / CallProto and rpc.Call / CallRaw
+// share one implementation.
 func TryLocalDispatch(ctx context.Context, name string, payload []byte) (out []byte, handled bool, err error) {
 	d := LocalDispatcherInstance()
 	if d == nil {

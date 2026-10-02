@@ -1,6 +1,5 @@
-# HSTLES Mesh Package Structure & Execution Flow
+# Loom Mesh Package Structure & Execution Flow
 
-**Last Updated**: December 15, 2025
 **Status**: ✅ Active / Production-Ready
 
 ---
@@ -94,12 +93,12 @@ mesh/
     └── transport.go  # Transport interface, Session, Manager
 ```
 
-## Execution Flow: node.hstles.com Startup → Request Handling
+## Execution Flow: Node Startup → Request Handling
 
 ### Phase 1: Initialization (main.go → runtime/node)
 
 ```
-node.hstles.com/main.go
+<composition root>/main.go
     │
     ├─► Load Configs (apps, platform, mesh, auth, session, smtp, encryption)
     │
@@ -109,7 +108,7 @@ node.hstles.com/main.go
     │   ├─► Identity: Ed25519 keys
     │   ├─► Network: Listen address, UDP port
     │   ├─► Security: Network Keys (PSK), Anchor Keys (Ed25519)
-    │   ├─► Bootstrap: LADBootstrapHosts (e.g., login.hstles.com)
+    │   ├─► Bootstrap: LAD.BootstrapHosts (e.g., gateway-a.example.com)
     │   └─► Components: VL1, LAD, MeshDB, Audit
     │
     └─► node.Initialize(nodeCfg)  ──┐
@@ -219,4 +218,4 @@ domain/auth/handlers/login.go::LoginHandler.ExecuteRPC()
 - **Key Feature**: Unified binary entry point.
 
 ---
-Maintainer: HSTLES Platform Team
+Maintainer: loom maintainers
