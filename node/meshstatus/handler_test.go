@@ -37,50 +37,59 @@ func corsHeader(t *testing.T, h http.HandlerFunc, method, origin string) (string
 	return rr.Header().Get("Access-Control-Allow-Origin"), rr.Code
 }
 
-// TestNewHandler_DefaultOriginsAdmitExactlyBuiltInPair pins the behaviour of
-// a handler built with no Option: the two built-in origins are echoed, on GET
-// and on the OPTIONS preflight, and no other origin — including near-misses
-// on scheme, port and suffix — is.
-func TestNewHandler_DefaultOriginsAdmitExactlyBuiltInPair(t *testing.T) {
+// TestNewHandler_NoOptionAdmitsOnlyTheBuiltInOrigin pins the behaviour of a
+// handler built with no Option: the built-in origin https://localhost:8080 is
+// echoed on GET and on the OPTIONS preflight, and no other origin is, including
+// a monitoring page's origin and near-misses of the built-in one on scheme and
+// port. The preflight still answers 204 and GET still serves the status.
+func TestNewHandler_NoOptionAdmitsOnlyTheBuiltInOrigin(t *testing.T) {
 	h := NewHandler(stubProvider{}, ports.DevPlatform(), time.Now())
 
-	for _, origin := range []string{"https://help.orbtr.io", "https://localhost:8080"} {
-		if got, code := corsHeader(t, h, http.MethodGet, origin); got != origin || code != http.StatusOK {
-			t.Fatalf("GET Origin=%q: Access-Control-Allow-Origin = %q, status %d; want echo and 200", origin, got, code)
-		}
-		if got, code := corsHeader(t, h, http.MethodOptions, origin); got != origin || code != http.StatusNoContent {
-			t.Fatalf("OPTIONS Origin=%q: Access-Control-Allow-Origin = %q, status %d; want echo and 204", origin, got, code)
-		}
+	const builtIn = "https://localhost:8080"
+	if got, code := corsHeader(t, h, http.MethodGet, builtIn); got != builtIn || code != http.StatusOK {
+		t.Fatalf("GET Origin=%q: Access-Control-Allow-Origin = %q, status %d; want echo and 200", builtIn, got, code)
+	}
+	if got, code := corsHeader(t, h, http.MethodOptions, builtIn); got != builtIn || code != http.StatusNoContent {
+		t.Fatalf("OPTIONS Origin=%q: Access-Control-Allow-Origin = %q, status %d; want echo and 204", builtIn, got, code)
 	}
 	for _, origin := range []string{
-		"",
+		"https://help.orbtr.io",
 		"https://node.example.com",
-		"http://help.orbtr.io",
-		"https://help.orbtr.io.example.com",
 		"http://localhost:8080",
 		"https://localhost:8081",
 		"null",
+		"",
 	} {
-		if got, _ := corsHeader(t, h, http.MethodGet, origin); got != "" {
-			t.Fatalf("Origin=%q admitted by the default list: Access-Control-Allow-Origin = %q", origin, got)
+		if got, code := corsHeader(t, h, http.MethodGet, origin); got != "" || code != http.StatusOK {
+			t.Fatalf("GET Origin=%q: Access-Control-Allow-Origin = %q, status %d; want none and 200", origin, got, code)
+		}
+		if got, code := corsHeader(t, h, http.MethodOptions, origin); got != "" || code != http.StatusNoContent {
+			t.Fatalf("OPTIONS Origin=%q: Access-Control-Allow-Origin = %q, status %d; want none and 204", origin, got, code)
 		}
 	}
 }
 
-// TestNewHandler_WithAllowedOriginsReplacesDefault shows WithAllowedOrigins
-// replaces the built-in pair rather than adding to it, that calling it with
-// no origins admits nothing, that the last option wins, and that the handler
-// keeps the list it was built with when the caller's slice changes.
-func TestNewHandler_WithAllowedOriginsReplacesDefault(t *testing.T) {
+// TestNewHandler_WithAllowedOriginsAdmitsExactlyTheList shows
+// WithAllowedOrigins admits exactly the listed origins, byte-for-byte, in place
+// of the built-in one, that calling it with no origins admits nothing, that the
+// last option wins, and that the handler keeps the list it was built with when
+// the caller's slice changes.
+func TestNewHandler_WithAllowedOriginsAdmitsExactlyTheList(t *testing.T) {
 	configured := []string{"https://node.example.com", ""}
 	h := NewHandler(stubProvider{}, ports.DevPlatform(), time.Now(), WithAllowedOrigins(configured...))
 
 	if got, _ := corsHeader(t, h, http.MethodGet, "https://node.example.com"); got != "https://node.example.com" {
 		t.Fatalf("configured origin: Access-Control-Allow-Origin = %q, want echo", got)
 	}
-	for _, origin := range []string{"https://help.orbtr.io", "https://localhost:8080", ""} {
+	for _, origin := range []string{
+		"",
+		"http://node.example.com",
+		"https://node.example.com.example.org",
+		"https://node.example.com:8443",
+		"https://localhost:8080",
+	} {
 		if got, _ := corsHeader(t, h, http.MethodGet, origin); got != "" {
-			t.Fatalf("Origin=%q admitted although WithAllowedOrigins replaces the default: %q", origin, got)
+			t.Fatalf("Origin=%q admitted although it is not in the list: %q", origin, got)
 		}
 	}
 
@@ -90,7 +99,7 @@ func TestNewHandler_WithAllowedOriginsReplacesDefault(t *testing.T) {
 	}
 
 	none := NewHandler(stubProvider{}, ports.DevPlatform(), time.Now(), WithAllowedOrigins())
-	for _, origin := range []string{"https://help.orbtr.io", "https://localhost:8080", "https://node.example.com"} {
+	for _, origin := range []string{"https://localhost:8080", "https://node.example.com"} {
 		if got, _ := corsHeader(t, none, http.MethodGet, origin); got != "" {
 			t.Fatalf("WithAllowedOrigins() admitted Origin=%q: %q", origin, got)
 		}
@@ -109,14 +118,19 @@ func TestNewHandler_WithAllowedOriginsReplacesDefault(t *testing.T) {
 }
 
 // TestNewHandlerFromRuntime_PassesOptions shows the convenience constructor
-// keeps the built-in default with no Option and forwards WithAllowedOrigins
-// to NewHandler.
+// admits only the built-in origin with no Option and forwards
+// WithAllowedOrigins to NewHandler.
 func TestNewHandlerFromRuntime_PassesOptions(t *testing.T) {
 	metrics := func() map[string]interface{} { return map[string]interface{}{} }
 
 	def := NewHandlerFromRuntime(aether.NodeID("vl1_test"), metrics, nil, "node.example.com", nil, time.Now())
-	if got, _ := corsHeader(t, def, http.MethodGet, "https://help.orbtr.io"); got != "https://help.orbtr.io" {
-		t.Fatalf("default: Access-Control-Allow-Origin = %q, want the built-in origin echoed", got)
+	if got, _ := corsHeader(t, def, http.MethodGet, "https://localhost:8080"); got != "https://localhost:8080" {
+		t.Fatalf("no Option: Access-Control-Allow-Origin = %q, want the built-in origin echoed", got)
+	}
+	for _, origin := range []string{"https://help.orbtr.io", "https://node.example.com"} {
+		if got, _ := corsHeader(t, def, http.MethodGet, origin); got != "" {
+			t.Fatalf("no Option: Origin=%q echoed as %q, want none", origin, got)
+		}
 	}
 
 	configured := NewHandlerFromRuntime(aether.NodeID("vl1_test"), metrics, nil, "node.example.com", nil, time.Now(),
@@ -124,7 +138,9 @@ func TestNewHandlerFromRuntime_PassesOptions(t *testing.T) {
 	if got, _ := corsHeader(t, configured, http.MethodGet, "https://node.example.com"); got != "https://node.example.com" {
 		t.Fatalf("configured: Access-Control-Allow-Origin = %q, want echo", got)
 	}
-	if got, _ := corsHeader(t, configured, http.MethodGet, "https://help.orbtr.io"); got != "" {
-		t.Fatalf("configured: built-in origin still admitted: %q", got)
+	for _, origin := range []string{"https://other.example.com", "https://localhost:8080"} {
+		if got, _ := corsHeader(t, configured, http.MethodGet, origin); got != "" {
+			t.Fatalf("configured: unlisted Origin=%q admitted: %q", origin, got)
+		}
 	}
 }

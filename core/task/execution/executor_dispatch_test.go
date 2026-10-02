@@ -22,13 +22,13 @@ import (
 	"github.com/bbmumford/loom/ports"
 )
 
-type executorTenantKey struct{}
+type executorPartitionKey struct{}
 type executorPrincipalKey struct{}
 
-// newExecutorRegistry builds a handler registry with a CONSUMER-side reference
-// PresencePolicy that admits a partition-bound identity. loom no longer contains
-// presence semantics; the executor's DispatchTaskWithAuth delegates to this
-// policy, and a nil policy would fail closed on the tenant-scoped probes.
+// newExecutorRegistry builds a handler registry with a consumer-side
+// PresencePolicy that admits an identity carrying a transport-pinned value. The
+// executor's DispatchTaskWithAuth delegates presence to this policy, and a nil
+// policy would fail closed on the partition-scoped probes.
 func newExecutorRegistry() *handlers.HandlerRegistry {
 	reg := handlers.NewHandlerRegistry()
 	reg.SetPresencePolicy(scope.PresencePolicyFunc(
@@ -46,24 +46,24 @@ func newExecutorRegistry() *handlers.HandlerRegistry {
 }
 
 type executorPrincipal struct {
-	owner      ports.ExecutionPartitionKey
-	tenant     string
-	authorized int
+	partitionKey       ports.ExecutionPartitionKey
+	transportPartition string
+	authorized         int
 }
 
-func (p *executorPrincipal) PartitionKey() ports.ExecutionPartitionKey { return p.owner }
+func (p *executorPrincipal) PartitionKey() ports.ExecutionPartitionKey { return p.partitionKey }
 
 func (p *executorPrincipal) AuthorizeExecution(
 	ctx context.Context,
 ) (context.Context, func(), error) {
 	p.authorized++
 	ctx = context.WithValue(ctx, executorPrincipalKey{}, ports.ExecutionPrincipal(p))
-	if p.tenant != "" {
-		ctx = context.WithValue(ctx, executorTenantKey{}, p.tenant)
+	if p.transportPartition != "" {
+		ctx = context.WithValue(ctx, executorPartitionKey{}, p.transportPartition)
 		ctx = scope.WithAuthenticatedIdentity(
 			ctx,
 			scope.AuthenticatedIdentity{Scopes: []scope.ScopeValue{
-				{Name: scope.AxisTransportPinned, Value: p.tenant},
+				{Name: scope.AxisTransportPinned, Value: p.transportPartition},
 			}},
 		)
 	}
@@ -71,15 +71,15 @@ func (p *executorPrincipal) AuthorizeExecution(
 }
 
 type leasedExecutorPrincipal struct {
-	owner       ports.ExecutionPartitionKey
-	tenant      string
-	calls       atomic.Int32
-	released    chan struct{}
-	releaseOnce sync.Once
+	partitionKey       ports.ExecutionPartitionKey
+	transportPartition string
+	calls              atomic.Int32
+	released           chan struct{}
+	releaseOnce        sync.Once
 }
 
 func (p *leasedExecutorPrincipal) PartitionKey() ports.ExecutionPartitionKey {
-	return p.owner
+	return p.partitionKey
 }
 
 func (p *leasedExecutorPrincipal) AuthorizeExecution(
@@ -91,11 +91,11 @@ func (p *leasedExecutorPrincipal) AuthorizeExecution(
 		executorPrincipalKey{},
 		ports.ExecutionPrincipal(p),
 	)
-	ctx = context.WithValue(ctx, executorTenantKey{}, p.tenant)
+	ctx = context.WithValue(ctx, executorPartitionKey{}, p.transportPartition)
 	ctx = scope.WithAuthenticatedIdentity(
 		ctx,
 		scope.AuthenticatedIdentity{Scopes: []scope.ScopeValue{
-			{Name: scope.AxisTransportPinned, Value: p.tenant},
+			{Name: scope.AxisTransportPinned, Value: p.transportPartition},
 		}},
 	)
 	return ctx, func() {
@@ -105,36 +105,36 @@ func (p *leasedExecutorPrincipal) AuthorizeExecution(
 	}, nil
 }
 
-func newExecutorPrincipal(t *testing.T, canonical, tenant string) *executorPrincipal {
+func newExecutorPrincipal(t *testing.T, canonical, transportPartition string) *executorPrincipal {
 	t.Helper()
-	owner, err := ports.NewExecutionPartitionKey(canonical)
+	partitionKey, err := ports.NewExecutionPartitionKey(canonical)
 	if err != nil {
 		t.Fatalf("NewExecutionPartitionKey: %v", err)
 	}
-	return &executorPrincipal{owner: owner, tenant: tenant}
+	return &executorPrincipal{partitionKey: partitionKey, transportPartition: transportPartition}
 }
 
 type executorAuthProbe struct {
-	wantTenant string
-	validated  int
-	stamped    int
+	wantPartition string
+	validated     int
+	stamped       int
 }
 
 func (a *executorAuthProbe) ValidateExecutionAuth(ctx context.Context, _ ports.SecureHandler) error {
 	a.validated++
-	if got, _ := ctx.Value(executorTenantKey{}).(string); got != a.wantTenant {
-		return fmt.Errorf("private tenant = %q, want %q", got, a.wantTenant)
+	if got, _ := ctx.Value(executorPartitionKey{}).(string); got != a.wantPartition {
+		return fmt.Errorf("private tenant = %q, want %q", got, a.wantPartition)
 	}
 	return nil
 }
 
 func (a *executorAuthProbe) WithPartitionID(ctx context.Context, partitionID string) context.Context {
 	a.stamped++
-	return context.WithValue(ctx, executorTenantKey{}, partitionID)
+	return context.WithValue(ctx, executorPartitionKey{}, partitionID)
 }
 
 func (a *executorAuthProbe) ExecutionPartitionID(ctx context.Context) (string, bool) {
-	partitionID, ok := ctx.Value(executorTenantKey{}).(string)
+	partitionID, ok := ctx.Value(executorPartitionKey{}).(string)
 	return partitionID, ok && partitionID != ""
 }
 
@@ -189,7 +189,7 @@ func (h *executorTaskProbe) ExecuteTask(
 	task *handlers.Task,
 ) (*handlers.TaskResult, error) {
 	*h.events = append(*h.events, "handler")
-	if got, _ := ctx.Value(executorTenantKey{}).(string); got == "" {
+	if got, _ := ctx.Value(executorPartitionKey{}).(string); got == "" {
 		return nil, fmt.Errorf("private tenant missing in handler")
 	}
 	return &handlers.TaskResult{
@@ -229,7 +229,7 @@ func TestExecutorUsesCanonicalTaskDispatchPipeline(t *testing.T) {
 	if err := reg.RegisterTask(h); err != nil {
 		t.Fatalf("RegisterTask: %v", err)
 	}
-	auth := &executorAuthProbe{wantTenant: "orbtr"}
+	auth := &executorAuthProbe{wantPartition: "orbtr"}
 	executor := &Executor{
 		nodeID:   "node-test",
 		registry: reg,
@@ -270,7 +270,7 @@ func TestExecutorUsesCanonicalTaskDispatchPipeline(t *testing.T) {
 	}
 }
 
-func TestExecutorDoesNotTreatMutableTaskTenantAsOwnerIdentity(t *testing.T) {
+func TestExecutorDoesNotTreatMutableTaskPartitionAsExecutionIdentity(t *testing.T) {
 	var events []string
 	reg := newExecutorRegistry()
 	reg.Use(&executorMiddlewareProbe{events: &events})
@@ -278,7 +278,7 @@ func TestExecutorDoesNotTreatMutableTaskTenantAsOwnerIdentity(t *testing.T) {
 	if err := reg.RegisterTask(h); err != nil {
 		t.Fatalf("RegisterTask: %v", err)
 	}
-	auth := &executorAuthProbe{wantTenant: "platform-app"}
+	auth := &executorAuthProbe{wantPartition: "platform-app"}
 	executor := &Executor{nodeID: "node-test", registry: reg, auth: auth}
 	principal := newExecutorPrincipal(
 		t,
@@ -317,7 +317,7 @@ func TestExecutorRejectsMissingExecutionPrincipalBeforePipeline(t *testing.T) {
 	if err := reg.RegisterTask(h); err != nil {
 		t.Fatalf("RegisterTask: %v", err)
 	}
-	auth := &executorAuthProbe{wantTenant: "platform-app"}
+	auth := &executorAuthProbe{wantPartition: "platform-app"}
 	executor := &Executor{nodeID: "node-test", registry: reg, auth: auth}
 
 	result := executor.executeTask(context.Background(), &meshtask.Task{
@@ -342,12 +342,12 @@ func TestExecutorRejectsMissingExecutionPrincipalBeforePipeline(t *testing.T) {
 	}
 }
 
-type executorAuthWithoutTenantReader struct {
+type executorAuthWithoutPartitionReader struct {
 	validated int
 	stamped   int
 }
 
-func (a *executorAuthWithoutTenantReader) ValidateExecutionAuth(
+func (a *executorAuthWithoutPartitionReader) ValidateExecutionAuth(
 	context.Context,
 	ports.SecureHandler,
 ) error {
@@ -355,12 +355,12 @@ func (a *executorAuthWithoutTenantReader) ValidateExecutionAuth(
 	return nil
 }
 
-func (a *executorAuthWithoutTenantReader) WithPartitionID(
+func (a *executorAuthWithoutPartitionReader) WithPartitionID(
 	ctx context.Context,
 	partitionID string,
 ) context.Context {
 	a.stamped++
-	return context.WithValue(ctx, executorTenantKey{}, partitionID)
+	return context.WithValue(ctx, executorPartitionKey{}, partitionID)
 }
 
 func TestExecutorRejectsValidatorWithoutExecutionPrincipalReader(t *testing.T) {
@@ -371,7 +371,7 @@ func TestExecutorRejectsValidatorWithoutExecutionPrincipalReader(t *testing.T) {
 	if err := reg.RegisterTask(h); err != nil {
 		t.Fatalf("RegisterTask: %v", err)
 	}
-	auth := &executorAuthWithoutTenantReader{}
+	auth := &executorAuthWithoutPartitionReader{}
 	executor := &Executor{
 		nodeID:   "node-test",
 		registry: reg,
@@ -379,7 +379,7 @@ func TestExecutorRejectsValidatorWithoutExecutionPrincipalReader(t *testing.T) {
 	}
 
 	result := executor.executeTask(
-		context.WithValue(context.Background(), executorTenantKey{}, "orbtr"),
+		context.WithValue(context.Background(), executorPartitionKey{}, "orbtr"),
 		&meshtask.Task{
 			ID:        "task-no-reader",
 			Partition: "orbtr",
@@ -414,7 +414,7 @@ func TestExecutorCarriesExactGatewayPrincipalFromBackgroundContext(t *testing.T)
 		t.Fatalf("RegisterTask: %v", err)
 	}
 
-	auth := &executorAuthProbe{wantTenant: "hstles"}
+	auth := &executorAuthProbe{wantPartition: "hstles"}
 	gw, err := gateway.NewGateway(
 		gateway.GatewayConfig{ID: "executor-authority-test"},
 		gateway.WithExecutionPrincipalReader(auth),
@@ -554,7 +554,7 @@ func TestExecutorRetainsAuthorizationLeaseThroughHandlerDispatch(t *testing.T) {
 	if err := reg.RegisterTask(handler); err != nil {
 		t.Fatalf("RegisterTask: %v", err)
 	}
-	auth := &executorAuthProbe{wantTenant: "hstles"}
+	auth := &executorAuthProbe{wantPartition: "hstles"}
 	gw, err := gateway.NewGateway(
 		gateway.GatewayConfig{ID: "executor-lease-test"},
 		gateway.WithExecutionPrincipalReader(auth),
@@ -571,16 +571,16 @@ func TestExecutorRetainsAuthorizationLeaseThroughHandlerDispatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewExecutor: %v", err)
 	}
-	owner, err := ports.NewExecutionPartitionKey(
+	partitionKey, err := ports.NewExecutionPartitionKey(
 		"realm=hstles|tenant=hstles|org=-|kind=service|id=lease|space=platform",
 	)
 	if err != nil {
 		t.Fatal(err)
 	}
 	principal := &leasedExecutorPrincipal{
-		owner:    owner,
-		tenant:   "hstles",
-		released: make(chan struct{}),
+		partitionKey:       partitionKey,
+		transportPartition: "hstles",
+		released:           make(chan struct{}),
 	}
 	task := &meshtask.Task{
 		ID:        "lease-through-dispatch",

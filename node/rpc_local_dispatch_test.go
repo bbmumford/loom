@@ -162,11 +162,11 @@ func TestTheNilGuardsFailClosed(t *testing.T) {
 // semantics as remote ones". That holds ONLY because DispatchBytes goes through
 // registry.Dispatch, which runs validateScope. Type-asserting to
 // RPCHandler and calling ExecuteRPC directly would be faster, identical on the
-// happy path, and would silently drop tenant enforcement for every local call.
+// happy path, and would silently drop partition enforcement for every local call.
 //
 // This is the same asymmetry I found in compose_bridge's task branch,
 // which does exactly that — so it is not hypothetical in this codebase.
-func TestDispatchBytesEnforcesTenantScopeJustLikeARemoteCall(t *testing.T) {
+func TestDispatchBytesEnforcesPartitionScopeJustLikeARemoteCall(t *testing.T) {
 	reg := handlers.NewHandlerRegistry()
 	h := &rpcOnlyHandler{name: "orbtr.io.x.TenantScoped", scope: handlers.ScopePartition}
 	if err := reg.RegisterRPC(h); err != nil {
@@ -174,7 +174,7 @@ func TestDispatchBytesEnforcesTenantScopeJustLikeARemoteCall(t *testing.T) {
 	}
 	a := &localDispatcherAdapter{registry: reg}
 
-	// No tenant in context ⇒ a tenant-scoped handler must be refused.
+	// No partition in context ⇒ a partition-scoped handler must be refused.
 	_, err := a.DispatchBytes(context.Background(), "orbtr.io.x.TenantScoped", []byte(`{}`))
 	if err == nil {
 		t.Fatal("a TENANT-SCOPED handler executed through the local short circuit " +

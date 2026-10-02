@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package hstles.mesh.transport.v1;
+package loom.mesh.transport.v1;
 
-option go_package = "github.com/hstles/library/mesh/contracts/pb";
+option go_package = "github.com/bbmumford/loom/contracts/pb";
 
 // NOTE: This file is named mesh_transport.proto (not transport.proto) to
 // avoid a protobuf global-registry collision with aether/grpc/pb's own

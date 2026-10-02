@@ -35,13 +35,13 @@ func (h *registrationScopeHandler) HandleStream(context.Context, MessageStream) 
 	return nil
 }
 
-// TestHandlerRegistryRejectsSentinelTenantScopeBeforeMutation proves the
+// TestHandlerRegistryRejectsSentinelScopeBeforeMutation proves the
 // HandlerRegistry registration path refuses ONLY the two non-declarable
 // sentinels (the scope.ScopeUnset zero value and ScopeUnknown) before mutating
 // the handler map — matching the rpc.Registry path. A consumer-defined opaque
 // tag is admitted (see TestHandlerRegistryAcceptsOpaqueConsumerAxis):
 // registerMeta checks scope.IsDeclared and enumerates no fixed ladder.
-func TestHandlerRegistryRejectsSentinelTenantScopeBeforeMutation(t *testing.T) {
+func TestHandlerRegistryRejectsSentinelScopeBeforeMutation(t *testing.T) {
 	registrars := []struct {
 		name string
 		call func(*HandlerRegistry, *registrationScopeHandler) error
@@ -109,7 +109,7 @@ func TestHandlerRegistryAcceptsOpaqueConsumerAxis(t *testing.T) {
 	}
 }
 
-func TestHandlerRegistryAcceptsExplicitTenantScopeNone(t *testing.T) {
+func TestHandlerRegistryAcceptsExplicitScopeNone(t *testing.T) {
 	reg := NewHandlerRegistry()
 	h := &registrationScopeHandler{name: "public.health", scope: ScopeNone}
 	if err := reg.RegisterRPC(h); err != nil {

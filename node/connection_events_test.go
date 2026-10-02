@@ -10,18 +10,16 @@ import (
 	"time"
 )
 
-// COVERAGE of the connection event log, all 0.0%: Append, Events,
-// EventsSince, Count and prune.
+// COVERAGE of the connection event log: Append, Events, EventsSince, Count and
+// prune.
 //
-// Censused first. This
-// surface IS driven: Append from connection_scaling.go:331, EventsSince from
-// peer_reputation.go:118 (it feeds reputation scoring), and Events from
-// ORBTR io/endpoints/help.orbtr.io/monitoring_api.go:292 — a live consumer on
-// the deployment surface.
+// This surface is driven: Append from connection_scaling.go:331, EventsSince
+// from peer_reputation.go:118 (it feeds reputation scoring), and Events from
+// a monitoring client outside this module.
 //
-// ⚠ NOT COVERED HERE, DELIBERATELY: Recent and Summary have ZERO non-test
-// callers across all three roots. These are not tests that
-// make an unwired surface look supported. Reported separately.
+// ⚠ NOT COVERED HERE: Recent, which has no non-test caller, so these tests do
+// not make an unwired surface look supported; and Summary, which
+// metrics_export.go reads.
 
 // eventAt builds an event with an explicit timestamp. Reason is the field
 // consumers group by, so it doubles as the identity in assertions.

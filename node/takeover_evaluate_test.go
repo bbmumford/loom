@@ -26,34 +26,21 @@ var errTestNotEntitled = errors.New("not entitled to this role")
 // errTestPublishRefused stands in for a transient gossip publish failure.
 var errTestPublishRefused = errors.New("gossip publish refused")
 
-// COVERAGE of evaluateRole (:443), which was 0.0% — the §1.3/§1.4 state
-// machine, and the single largest uncovered surface in this file.
+// COVERAGE of evaluateRole, the role-takeover state machine: each claim the
+// engine's design makes about it is a statement about evaluateRole:
 //
-// 🔴 WHY THIS IS THE MOST OVERDUE FILE IN THE SLICE. Earlier this lane
-// verdicted the design MATCHES, and every conjunct of that verdict was a statement
-// about evaluateRole:
+//	(a) "arms only after the corroboration window"
+//	(b) "claims once, then waits for the settle"
+//	(c) "a node that does not win withdraws without activating"
 //
-//	(a) "arms only after the corroboration window"      → :471-480
-//	(b) "claims once, then waits for the settle"        → :495-503
-//	(c) "a node that does not win withdraws without
-//	     activating"                                    → :516-520
-//
-// evaluateRole had ZERO test coverage when that verdict was published and
-// still had zero when the verdict was withdrawn. Three claims about an
-// unexercised function — "a passing test is not a tested path", filed by the
-// lane that keeps committing it. This file supplies the missing measurement.
-//
-// WHAT THIS FILE DOES NOT PROVE: StartTakeover has no non-test caller in loom,
-// ORBTR or HSTLES, so evaluateRole does not run in any deployment. These tests
-// bound the MECHANISM, not the deployment.
-// That distinction is exactly what the withdrawn verdict got wrong, so it is
-// recorded here rather than left for a reader to infer.
+// WHAT THIS FILE DOES NOT PROVE: evaluateRole runs in a deployment only when a
+// composition root sets Config.RoleTakeover, which armRoleTakeover turns into
+// StartTakeover. These tests bound the MECHANISM, not the deployment.
 //
 // Every test here stops at or before the ranking decision, and the engine's
-// opener is deliberately left NIL: the winner path calls opener.Open at :523,
-// so a test that ever reached it would panic on the nil rather than quietly
-// decrypt. That boundary is enforced by the fixture rather than by care in
-// writing each test.
+// opener is deliberately left NIL: the winner path calls opener.Open, so a test
+// that ever reached it would panic on the nil rather than quietly decrypt. That
+// boundary is enforced by the fixture rather than by care in writing each test.
 
 // evalNode counts what reached the mesh, so a test can assert on the claim
 // lifecycle rather than on internal maps alone.
@@ -383,20 +370,18 @@ func TestAnAlreadyActiveRoleIsNotReClaimed(t *testing.T) {
 
 // ─── the loop that drives all of it ──────────────────────────────────────
 
-// 🔴 THE LAST UNMEASURED LINK. Every test above calls evaluateRole directly.
-// That measures the state machine and says NOTHING about whether the engine
-// ever calls it — the same gap, one level up, that made the the design
-// verdict wrong: a mechanism measured in isolation and assumed to be driven.
+// Every test above calls evaluateRole directly, which says nothing about
+// whether the engine ever calls it: a mechanism tested in isolation is not
+// shown to be driven.
 //
 // run is the only thing that drives evaluateRole, and it is reached only
 // through StartTakeover's rt.Go. This test walks tick → evaluateRole → claim
 // on the wire, and then walks the teardown: cancelling the runtime context
 // must unwind the subscriptions via the deferred stopSubs.
 //
-// ⚠ SCOPE, STATED RATHER THAN IMPLIED: this proves the ticker drives the state
-// machine. It does NOT make the engine reachable in a deployment —
-// measured zero non-test callers of StartTakeover in loom, ORBTR and HSTLES,
-// and nothing in this file changes that.
+// ⚠ SCOPE: this proves the ticker drives the state machine. StartTakeover runs
+// in a deployment only when Config.RoleTakeover is set (armRoleTakeover), and
+// nothing in this file changes that.
 func TestTheTickerActuallyDrivesEvaluateRoleAndUnwindsOnContextCancel(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	node := &loopNode{stubSwarmNode: &stubSwarmNode{}, claims: make(chan swarm.Topic, 4)}

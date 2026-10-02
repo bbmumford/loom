@@ -478,13 +478,12 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	//
 	// A RoleTable entry has exactly one removal path: an inbound tombstone on
 	// fleet.peer (RoleTable.onRecord). No TTL, no expiry. So an entry dies only
-	// by the owner's graceful tombstone — never emitted when a deploy destroys
+	// by the node's own graceful tombstone — never emitted when a deploy destroys
 	// the machine — or by an observer tombstone, whose other publisher is
 	// sweepZombieSessions, a sweep over dead SESSIONS that is structurally
-	// blind to a peer this process never held a session with.
-	// Every machine replaced by a deploy landed in that gap and became
-	// immortal: measured 40 entries against 11 real machines, with the LAD
-	// directory (which HAS a TTL) sitting clean at 8 beside it.
+	// blind to a peer this process never held a session with. A machine
+	// replaced by a deploy falls in that gap, and its entry would otherwise
+	// outlive it while the LAD directory (which HAS a TTL) drops it.
 	//
 	// This sweep is the missing witness. It observes the corpses the session
 	// sweep cannot see and attests to them; the K-of-N quorum turns K

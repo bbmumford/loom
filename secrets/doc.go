@@ -30,7 +30,7 @@
 //
 // Use a FRESH nonce per seal — random, or derived from a hash of the sealed
 // content + recipient set. NEVER a fixed nonce per (topic,node,epoch): the
-// owner re-sealing after a config change or a recipient-roster change
+// author re-sealing after a config change or a recipient-roster change
 // without bumping epoch would reuse the nonce across two distinct
 // plaintexts — an AEAD/NaCl-box nonce-reuse failure. Bump Epoch OR bind the
 // nonce to content+recipients so distinct plaintexts never share one.

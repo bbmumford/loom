@@ -246,19 +246,15 @@ func (m *ConnectionManager) dialAdditionalPath(ctx context.Context, mgr *multipa
 		m.mu.Unlock()
 		return nil, 0, "", nil
 	}
-	// Deterministic dial ownership governs the multipath dialer too: only
-	// the lower-nodeID side of a pair dials extra paths; the higher-nodeID
-	// side accepts them. connectPeer/scanAndConnect is already
-	// ownership-gated (dialOwned) — but EnsureK was not, so the higher
-	// side's multipath dialer kept racing the lower side's dials into
-	// cross-initiator session pairs. registerMeshSession then has to
-	// tie-break each pair, and the loser is closed — its peer-end sees the
-	// close, redials, and the race repeats. Whenever a (cross-region) WS
-	// session drops, that loop re-ignites fleet churn. Gating EnsureK here
-	// closes the last unowned dial path: the higher-nodeID side now purely
-	// accepts, the lower side dials every path, so no cross-initiator pair
-	// is ever created. The grace fallback inside dialOwned still lets the
-	// higher side take over if the owner is genuinely gone.
+	// The deterministic dial claim governs the multipath dialer as dialOwned
+	// governs connectPeer and scanAndConnect: only the lower-nodeID side of a
+	// pair dials extra paths, and the higher-nodeID side accepts them. A
+	// higher side that dialled too would race the lower side's dials into
+	// cross-initiator session pairs; registerMeshSession keeps one session of
+	// such a pair and closes the other, whose peer end then redials, so the
+	// race would repeat each time a cross-region WS session drops. The grace
+	// fallback inside dialOwned lets the higher side dial when the lower side
+	// is gone.
 	if !m.dialOwned(peer, time.Now()) {
 		m.mu.Unlock()
 		return nil, 0, "", nil

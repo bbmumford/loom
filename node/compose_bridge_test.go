@@ -933,7 +933,7 @@ func TestComposeInvokeTaskUsesHandlerResolvedBeforeAdmission(t *testing.T) {
 	}
 }
 
-func TestComposeInvokeTaskUsesRegistryTenantScopeGate(t *testing.T) {
+func TestComposeInvokeTaskUsesRegistryPartitionScopeGate(t *testing.T) {
 	h := &composeTaskProbe{
 		name:  "compose.tenant-task",
 		scope: handlers.ScopePartition,
@@ -1193,7 +1193,7 @@ func TestComposeInvokeRequiresOpaqueExecutionPrincipal(t *testing.T) {
 	}
 }
 
-func TestComposeInvokeReservesGlobalAndPerOwnerCapacityAtomically(t *testing.T) {
+func TestComposeInvokeReservesGlobalAndPerPartitionCapacityAtomically(t *testing.T) {
 	h := &composeMultiBlockingProbe{started: make(chan string, 2)}
 	rt := composeRuntimeFixture(t, h)
 	rt.cfg.ComposeTaskMaxInFlight = 2
@@ -1250,7 +1250,7 @@ func TestComposeInvokeReservesGlobalAndPerOwnerCapacityAtomically(t *testing.T) 
 	}
 }
 
-func TestComposeCompletionLookupReauthorizesExactOwnerAndHidesExistence(t *testing.T) {
+func TestComposeCompletionLookupReauthorizesExactPartitionAndHidesExistence(t *testing.T) {
 	h := &composeTaskProbe{
 		name:  "compose.partitionKey-completion",
 		scope: handlers.ScopeNone,
@@ -1326,11 +1326,11 @@ func TestComposeCompletionLookupReauthorizesExactOwnerAndHidesExistence(t *testi
 	}
 }
 
-func TestComposeCompletionRetentionIsBoundedPerOwner(t *testing.T) {
+func TestComposeCompletionRetentionIsBoundedPerPartition(t *testing.T) {
 	rt := &Runtime{}
 	rt.cfg.ComposeTaskCompletionRetentionPerPartition = 1
-	ownerA := newComposeTestPrincipal("retention-partitionKey-a").PartitionKey()
-	ownerB := newComposeTestPrincipal("retention-partitionKey-b").PartitionKey()
+	partitionKeyA := newComposeTestPrincipal("retention-partitionKey-a").PartitionKey()
+	partitionKeyB := newComposeTestPrincipal("retention-partitionKey-b").PartitionKey()
 	store := func(handle string, partitionKey ports.ExecutionPartitionKey) {
 		rt.recordComposeTaskCompletion(
 			context.Background(),
@@ -1347,9 +1347,9 @@ func TestComposeCompletionRetentionIsBoundedPerOwner(t *testing.T) {
 			nil,
 		)
 	}
-	store("a-1", ownerA)
-	store("b-1", ownerB)
-	store("a-2", ownerA)
+	store("a-1", partitionKeyA)
+	store("b-1", partitionKeyB)
+	store("a-2", partitionKeyA)
 
 	if _, ok := rt.lookupComposeTaskCompletion("a-1"); ok {
 		t.Fatal("oldest partitionKey-A completion was not evicted")

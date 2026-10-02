@@ -13,7 +13,7 @@ import (
 	"github.com/bbmumford/loom/node/handlers"
 )
 
-func TestTenantScopeHasInvalidZeroAndExplicitNone(t *testing.T) {
+func TestScopeTagHasInvalidZeroAndExplicitNone(t *testing.T) {
 	var unset ScopeTag
 	if unset == ScopeNone {
 		t.Fatalf("zero ScopeTag and ScopeNone are the same value %q; omission must differ from deliberate public opt-out", unset)
@@ -98,7 +98,7 @@ func TestRegistryAcceptsOpaqueConsumerAxis(t *testing.T) {
 	}
 }
 
-func TestRegistryAcceptsExplicitTenantScopeNone(t *testing.T) {
+func TestRegistryAcceptsExplicitScopeNone(t *testing.T) {
 	reg := NewRegistry()
 	h := Handler{
 		Namespace: "test",
@@ -118,7 +118,7 @@ func TestRegistryAcceptsExplicitTenantScopeNone(t *testing.T) {
 	}
 }
 
-func TestRegistryExportPreservesExplicitTenantScopeNone(t *testing.T) {
+func TestRegistryExportPreservesExplicitScopeNone(t *testing.T) {
 	source := NewRegistry()
 	h := Handler{
 		Namespace: "test",

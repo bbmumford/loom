@@ -63,11 +63,11 @@ func (v recordingAdmitterValidator) AdmitPrincipal(
 	return nil
 }
 
-func servePrincipalRequest(t *testing.T, v ports.AuthValidator) (*pb.RPCResponse, *customerPrincipalProbe) {
+func servePrincipalRequest(t *testing.T, v ports.AuthValidator) (*pb.RPCResponse, *typedPrincipalProbe) {
 	t.Helper()
 	registry := handlers.NewHandlerRegistry()
-	registry.SetPresencePolicy(customerScopePolicy())
-	probe := &customerPrincipalProbe{}
+	registry.SetPresencePolicy(typedPrincipalScopePolicy())
+	probe := &typedPrincipalProbe{}
 	if err := registry.RegisterRPC(probe); err != nil {
 		t.Fatal(err)
 	}
@@ -75,7 +75,7 @@ func servePrincipalRequest(t *testing.T, v ports.AuthValidator) (*pb.RPCResponse
 	server.SetAuthValidator(v)
 
 	ctx := handlers.WithTransportPartition(context.Background(), "orbtr")
-	return server.handleRequest(ctx, customerPrincipalRequest()), probe
+	return server.handleRequest(ctx, typedPrincipalRequest()), probe
 }
 
 // A mesh principal is every field its sending peer asserted, so it is installed
@@ -89,7 +89,7 @@ func servePrincipalRequest(t *testing.T, v ports.AuthValidator) (*pb.RPCResponse
 // admitter and not to an unrelated setup failure that would deny anything.
 func TestRPCServerInstallsAMeshPrincipalOnlyThroughTheAdmitter(t *testing.T) {
 	t.Run("positive control: an accepting admitter admits", func(t *testing.T) {
-		resp, probe := servePrincipalRequest(t, customerPrincipalValidator{})
+		resp, probe := servePrincipalRequest(t, typedPrincipalValidator{})
 		if !resp.Success {
 			t.Fatalf("control denied, so the denials below prove nothing about the admitter: %s", resp.Error)
 		}

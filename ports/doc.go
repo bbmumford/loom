@@ -34,7 +34,7 @@
 //     Swarm↔LAD feedback loop.
 //   - Authorization happens before a record can affect roles, reachability,
 //     routing, handlers, anchor snapshots, or secret recipients.
-//   - Owner-signed provenance survives gossip, persistence, snapshot,
+//   - Author-signed provenance survives gossip, persistence, snapshot,
 //     recovery, and projection verbatim; observer facts remain explicitly
 //     third-party attestations.
 //   - Tombstones are retained until causal stability / acknowledged journal

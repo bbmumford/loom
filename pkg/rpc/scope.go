@@ -17,10 +17,10 @@ import (
 // writes it; loom's receive path does not copy the wire request map into it.
 type rpcContextKey struct{}
 
-// WithRPCContext stamps an in-process string map onto ctx. The readers in this
-// package (RPCContextValue, OpClassFromContext and the identity accessors
-// below) read it. Nothing copies it onto an outgoing mesh request: identity
-// crosses the hop only as the sealed principal.
+// WithRPCContext stamps an in-process string map onto ctx. RPCContextValue and
+// OpClassFromContext in this package read it. Nothing copies it onto an
+// outgoing mesh request: identity crosses the hop only as the sealed principal,
+// read through AuthenticatedScopeIdentityFromContext.
 //
 // This map is caller/wire data, not scope authority. EnforceScope deliberately
 // ignores it and reads only the typed identity installed through
@@ -68,27 +68,6 @@ func RPCContextValue(ctx context.Context, key string) (string, bool) {
 	}
 	v, ok := m[key]
 	return v, ok
-}
-
-// TenantFromContext returns the value an in-process writer stamped via
-// WithRPCContext under the map key read below, or "". It is never taken from
-// the wire, and it names the node's transport-pinned value, not a data
-// partition.
-//
-// Deprecated: select data on AuthenticatedScopeIdentityFromContext(ctx).Partition(),
-// and gate an operation that needs more than partition presence on an explicit
-// capability the caller holds, not on this value.
-func TenantFromContext(ctx context.Context) string {
-	return rpcContextMap(ctx)["tenantId"]
-}
-
-// UserFromContext returns the subject value an in-process writer stamped via
-// WithRPCContext under the map key read below, or "". It is never taken from
-// the wire.
-//
-// Deprecated: read AuthenticatedScopeIdentityFromContext(ctx).Subject.
-func UserFromContext(ctx context.Context) string {
-	return rpcContextMap(ctx)["userId"]
 }
 
 // AuthenticatedScopeIdentity is the typed, server-established identity used by

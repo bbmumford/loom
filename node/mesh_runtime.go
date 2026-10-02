@@ -112,6 +112,7 @@ func (rt *Runtime) AcceptIncomingMeshSession(ctx context.Context, conn net.Conn,
 			BootstrapHost: bootstrapHost,
 			ServiceName:   serviceName,
 			Roles:         roles,
+			Partition:     transportPartitionOf(conn),
 		})
 	}
 }
@@ -148,7 +149,7 @@ func (rt *Runtime) DialAndAcceptMesh(ctx context.Context, conn net.Conn,
 		// on setup failure reset it so scanAndConnect re-dials rather than
 		// leaving it wedged in PeerConnecting forever.
 		//
-		// Gated on ownership because resetConnectingState checks the STATE, not
+		// Gated on the dial claim because resetConnectingState checks the STATE, not
 		// who established it. A walker probe, hole punch or multipath dial that
 		// fails while connectPeer has concurrently marked the same peer
 		// PeerConnecting would otherwise clear a live connect attempt's state,
@@ -226,6 +227,7 @@ func (rt *Runtime) DialAndAcceptMesh(ctx context.Context, conn net.Conn,
 			BootstrapHost: bootstrapHost,
 			ServiceName:   serviceName,
 			Roles:         roles,
+			Partition:     transportPartitionOf(conn),
 		})
 	}
 }

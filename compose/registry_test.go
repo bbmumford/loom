@@ -612,7 +612,7 @@ func TestCloseTearsDownAllAndRejectsNew(t *testing.T) {
 func TestScopeTracker(t *testing.T) {
 	tr := NewTracker()
 
-	// Two concurrent owners must not bleed.
+	// Two concurrent scopes must not bleed into each other.
 	tr.Begin("role:auth")
 	tr.Begin("role:billing")
 	tr.Note("role:auth", "hstles.auth.validate")

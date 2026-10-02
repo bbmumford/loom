@@ -49,6 +49,12 @@ type PeerInfo struct {
 	// while saturated.
 	Saturated    bool
 	BackoffUntil int64
+
+	// DialPartition is the transport partition the peer's record names as the
+	// one it accepts dials under (the dialPartitionMetaKey tag). dialPartitionFor
+	// reads it for a peer this node holds no session partition for. "" when the
+	// record carries no such tag.
+	DialPartition string
 }
 
 // RoleTable indexes PeerRecords by role for RPC dispatch lookup. It
@@ -175,7 +181,7 @@ func (t *RoleTable) PruneStale(cutoff time.Time) int {
 //
 // WHY THIS EXISTS: a RoleTable entry has exactly one removal path — an inbound
 // tombstone on fleet.peer (see onRecord). There is no TTL and no expiry. So an
-// entry survives only two possible deaths: the owner's own graceful tombstone
+// entry survives only two possible deaths: the node's own graceful tombstone
 // (never emitted when a deploy destroys the machine) or an observer tombstone.
 // One publisher of those is ConnectionManager.sweepZombieSessions — a sweep
 // over dead SESSIONS, structurally blind to a node this process never held a
@@ -405,6 +411,8 @@ func peerRecordToInfo(pr *swarmpb.PeerRecord, nodeIDStr string) PeerInfo {
 				info.ServiceName = v
 			case "region":
 				info.Region = v
+			case dialPartitionMetaKey:
+				info.DialPartition = v
 			}
 		}
 		info.Saturated, info.BackoffUntil = parseSaturationTags(pr.Capabilities.Tags)

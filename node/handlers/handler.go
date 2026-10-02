@@ -587,7 +587,7 @@ func (r *HandlerRegistry) UnregisterExact(handle RegistrationHandle) bool {
 	return false
 }
 
-// OpenRegistrationScope creates a causal ownership scope for one exact role
+// OpenRegistrationScope creates a causal attribution scope for one exact role
 // activation generation.
 func (r *HandlerRegistry) OpenRegistrationScope(
 	role string,
@@ -641,7 +641,7 @@ func (r *HandlerRegistry) PublishRegistrationScope(
 		entry := handle.entry
 		if entry == nil || r.pendingHandlers[entry.name] != entry {
 			// Exact unregister before publication is a valid withdrawal. Do
-			// not resurrect it from the ownership history.
+			// not resurrect it from the attribution history.
 			continue
 		}
 		if _, exists := r.handlers[entry.name]; exists {
@@ -720,7 +720,7 @@ func (r *HandlerRegistry) CloseRegistrationScope(
 		// An unpublished scope has no public registrations to preserve. Release
 		// all exact reservations atomically with retirement so a failed
 		// activation cannot strand names even if its caller ignores the
-		// returned ownership snapshot.
+		// returned attribution snapshot.
 		for _, handle := range state.registered {
 			entry := handle.entry
 			if entry != nil && r.pendingHandlers[entry.name] == entry {
@@ -900,15 +900,16 @@ func (r *HandlerRegistry) validateScope(ctx context.Context, h HandlerMeta) erro
 
 // reconcileTransportPartition denies a session that arrived on a
 // partition-bound transport (dedicated, or shared via the preamble) carrying an
-// identity pinned to a different partition. The "default" transport is the
-// unbound fallback and admits any partition. It does not interpret any scope
-// tag or requirement; it compares the transport binding that
+// identity pinned to a different partition. A session bound to no partition
+// ("") has nothing to compare and is not denied here; every other value is a
+// partition and is compared, whatever it is called. It does not interpret any
+// scope tag or requirement; it compares the transport binding that
 // WithTransportPartition established against the identity's pinned axis, both
 // resolved server-side from the same value.
 func reconcileTransportPartition(ctx context.Context, identity scope.AuthenticatedIdentity, handler string) error {
 	partitionID := identity.Scope(scope.AxisTransportPinned)
 	transportPartition := TransportPartitionFromContext(ctx)
-	if transportPartition != "" && transportPartition != "default" && partitionID != "" {
+	if transportPartition != "" && partitionID != "" {
 		if transportPartition != partitionID {
 			return fmt.Errorf("%w: transport/authenticated partition mismatch: transport=%q identity=%q for handler %s",
 				scope.ErrDenied,
@@ -1068,7 +1069,7 @@ func (h ResolvedHandler) dispatchRPC(
 	if err := h.registry.validateScope(ctx, h.meta); err != nil {
 		return &RPCResponse{
 			Success: false,
-			Error:   fmt.Sprintf("tenant restriction: %v", err),
+			Error:   fmt.Sprintf("scope denied: %v", err),
 		}, nil
 	}
 
@@ -1195,7 +1196,7 @@ func (h ResolvedHandler) DispatchTaskWithAuth(
 		return &TaskResult{
 			TaskID: task.ID,
 			Status: TaskStatusFailed,
-			Error:  fmt.Sprintf("tenant restriction: %v", err),
+			Error:  fmt.Sprintf("scope denied: %v", err),
 		}, nil
 	}
 
@@ -1300,7 +1301,7 @@ func (r *HandlerRegistry) DispatchStream(ctx context.Context, handlerName string
 	// Partition scope enforcement: validateScope judges the declared
 	// Requirement or presence tier against the authenticated identity.
 	if err := r.validateScope(ctx, h); err != nil {
-		return fmt.Errorf("tenant restriction: %w", err)
+		return fmt.Errorf("scope denied: %w", err)
 	}
 
 	// Run middleware Before hooks
@@ -1381,8 +1382,11 @@ type transportPartitionCtxKey struct{}
 // (node/rpc.go) and the runtime's listener accept loop (node/runtime.go) call it
 // for every accepted session, with the partition the session carries or, when
 // it carries none, the listener's fallback: a dedicated listener's own
-// partition, "default" on the unpartitioned listener, "" on a shared preamble
-// listener.
+// partition, or "" on the shared preamble listener and the unpartitioned one.
+//
+// "" binds no partition and stamps no axis: scope.WithAuthenticatedScope
+// refuses an empty value, so the identity is left with no axis and any identity
+// or principal already on ctx is cleared rather than carried onto the session.
 func WithTransportPartition(ctx context.Context, partition string) context.Context {
 	ctx = context.WithValue(ctx, transportPartitionCtxKey{}, partition)
 	return scope.WithAuthenticatedScope(ctx, scope.AxisTransportPinned, partition)
@@ -1390,12 +1394,11 @@ func WithTransportPartition(ctx context.Context, partition string) context.Conte
 
 // TransportPartitionFromContext returns the partition WithTransportPartition
 // bound onto ctx, or "" when nothing bound one (an in-process dispatch) or the
-// bound value was "". For a session accepted on the unpartitioned listener it
-// returns "default", and loom's readers treat that value as unbound, exactly as
-// they treat "": reconcileTransportPartition skips its comparison,
+// session is bound to no partition. loom's readers treat "" alone as unbound:
+// reconcileTransportPartition skips its comparison,
 // RPCServer.handleRequest skips WithPartitionID and
-// RPCServer.bindAuthenticatedPrincipal refuses a mesh principal. A configured
-// partition whose ID is "default" is read the same way.
+// RPCServer.bindAuthenticatedPrincipal refuses a mesh principal. Any other
+// value is a partition, whatever its name.
 func TransportPartitionFromContext(ctx context.Context) string {
 	if v, ok := ctx.Value(transportPartitionCtxKey{}).(string); ok {
 		return v

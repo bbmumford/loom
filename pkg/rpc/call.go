@@ -80,7 +80,7 @@ func CallRaw(ctx context.Context, handler string, payload []byte) ([]byte, error
 
 // CallNode sends an RPC to ONE NAMED NODE, or fails. It is the targeted
 // counterpart of Call, for callers that have already decided WHICH peer must
-// serve the request — a placement, a shard owner, a specific runtime — and for
+// serve the request — a placement, a shard's holder, a specific runtime — and for
 // whom reaching a different node serving the same role is a wrong answer rather
 // than a degraded one.
 //

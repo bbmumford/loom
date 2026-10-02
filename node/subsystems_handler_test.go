@@ -217,42 +217,43 @@ func subsystemsCORSHeader(t *testing.T, h http.HandlerFunc, method, origin strin
 	return rr.Header().Get("Access-Control-Allow-Origin"), rr.Code
 }
 
-// TestSubsystemsHandler_DefaultOriginsAdmitExactlyBuiltInPair pins the
-// behaviour of a Config that leaves SubsystemsAllowedOrigins nil: the two
-// built-in origins are echoed, on GET and on the OPTIONS preflight, and no
-// other origin — including near-misses on scheme, port and suffix — is.
-func TestSubsystemsHandler_DefaultOriginsAdmitExactlyBuiltInPair(t *testing.T) {
+// TestSubsystemsHandler_NilOriginsAdmitOnlyTheBuiltInOrigin pins the behaviour
+// of a Config that leaves SubsystemsAllowedOrigins nil: the built-in origin
+// https://localhost:8080 is echoed on GET and on the OPTIONS preflight, and no
+// other origin is, including a monitoring page's origin and near-misses of the
+// built-in one on scheme and port.
+func TestSubsystemsHandler_NilOriginsAdmitOnlyTheBuiltInOrigin(t *testing.T) {
 	rt := &Runtime{healthRegistry: health.New(health.AllowedSubsystems())}
 	h := rt.SubsystemsHandler()
 
-	for _, origin := range []string{"https://help.orbtr.io", "https://localhost:8080"} {
-		for _, method := range []string{http.MethodGet, http.MethodOptions} {
-			got, _ := subsystemsCORSHeader(t, h, method, origin)
-			if got != origin {
-				t.Fatalf("%s Origin=%q: Access-Control-Allow-Origin = %q, want %q", method, origin, got, origin)
-			}
+	const builtIn = "https://localhost:8080"
+	for _, method := range []string{http.MethodGet, http.MethodOptions} {
+		if got, _ := subsystemsCORSHeader(t, h, method, builtIn); got != builtIn {
+			t.Fatalf("%s Origin=%q: Access-Control-Allow-Origin = %q, want %q", method, builtIn, got, builtIn)
 		}
 	}
 	for _, origin := range []string{
-		"",
+		"https://help.orbtr.io",
 		"https://node.example.com",
-		"http://help.orbtr.io",
-		"https://help.orbtr.io.example.com",
 		"http://localhost:8080",
 		"https://localhost:8081",
 		"null",
+		"",
 	} {
-		if got, _ := subsystemsCORSHeader(t, h, http.MethodGet, origin); got != "" {
-			t.Fatalf("Origin=%q admitted by the default list: Access-Control-Allow-Origin = %q", origin, got)
+		for _, method := range []string{http.MethodGet, http.MethodOptions} {
+			if got, _ := subsystemsCORSHeader(t, h, method, origin); got != "" {
+				t.Fatalf("%s Origin=%q: Access-Control-Allow-Origin = %q, want none", method, origin, got)
+			}
 		}
 	}
 }
 
-// TestSubsystemsHandler_ConfiguredOriginsReplaceDefault shows a non-nil
-// SubsystemsAllowedOrigins replaces the built-in pair rather than adding to
-// it, that an empty non-nil list admits nothing, and that the handler keeps
-// the list it was built with when the caller's slice changes afterwards.
-func TestSubsystemsHandler_ConfiguredOriginsReplaceDefault(t *testing.T) {
+// TestSubsystemsHandler_ConfiguredOriginsAdmitExactlyTheList shows a non-nil
+// SubsystemsAllowedOrigins admits exactly the listed origins, byte-for-byte, in
+// place of the built-in one, that an empty non-nil list admits nothing, and that
+// the handler keeps the list it was built with when the caller's slice changes
+// afterwards.
+func TestSubsystemsHandler_ConfiguredOriginsAdmitExactlyTheList(t *testing.T) {
 	configured := []string{"https://node.example.com", ""}
 	rt := &Runtime{
 		healthRegistry: health.New(health.AllowedSubsystems()),
@@ -263,9 +264,15 @@ func TestSubsystemsHandler_ConfiguredOriginsReplaceDefault(t *testing.T) {
 	if got, code := subsystemsCORSHeader(t, h, http.MethodOptions, "https://node.example.com"); got != "https://node.example.com" || code != http.StatusNoContent {
 		t.Fatalf("configured origin preflight: Access-Control-Allow-Origin = %q, status %d; want echo and 204", got, code)
 	}
-	for _, origin := range []string{"https://help.orbtr.io", "https://localhost:8080", ""} {
+	for _, origin := range []string{
+		"",
+		"http://node.example.com",
+		"https://node.example.com.example.org",
+		"https://node.example.com:8443",
+		"https://localhost:8080",
+	} {
 		if got, _ := subsystemsCORSHeader(t, h, http.MethodGet, origin); got != "" {
-			t.Fatalf("Origin=%q admitted although the configured list replaces the default: %q", origin, got)
+			t.Fatalf("Origin=%q admitted although it is not in the list: %q", origin, got)
 		}
 	}
 
@@ -282,7 +289,7 @@ func TestSubsystemsHandler_ConfiguredOriginsReplaceDefault(t *testing.T) {
 		cfg:            Config{SubsystemsAllowedOrigins: []string{}},
 	}
 	hn := none.SubsystemsHandler()
-	for _, origin := range []string{"https://help.orbtr.io", "https://localhost:8080", "https://node.example.com"} {
+	for _, origin := range []string{"https://localhost:8080", "https://node.example.com"} {
 		if got, _ := subsystemsCORSHeader(t, hn, http.MethodGet, origin); got != "" {
 			t.Fatalf("empty non-nil list admitted Origin=%q: %q", origin, got)
 		}

@@ -10,7 +10,7 @@ import (
 	"testing"
 )
 
-func customerIdentity() AuthenticatedIdentity {
+func withinTransportIdentity() AuthenticatedIdentity {
 	return AuthenticatedIdentity{
 		Scopes: []ScopeValue{
 			{Name: AxisTransportPinned, Value: "orbtr"},
@@ -22,7 +22,7 @@ func customerIdentity() AuthenticatedIdentity {
 
 func TestAuthenticatedPrincipalIsDefensivelyCopied(t *testing.T) {
 	inputScopes := []string{"orbtr.io.plugins.read", "orbtr.io.plugins.publish"}
-	identity := customerIdentity()
+	identity := withinTransportIdentity()
 	principal, err := NewAuthenticatedPrincipal(identity, inputScopes)
 	if err != nil {
 		t.Fatalf("NewAuthenticatedPrincipal: %v", err)
@@ -70,7 +70,7 @@ func TestAuthenticatedPrincipalRejectsNonCanonicalGrants(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if _, err := NewAuthenticatedPrincipal(customerIdentity(), tc.grants); err == nil {
+			if _, err := NewAuthenticatedPrincipal(withinTransportIdentity(), tc.grants); err == nil {
 				t.Fatal("NewAuthenticatedPrincipal unexpectedly accepted non-canonical grants")
 			}
 		})
@@ -78,7 +78,7 @@ func TestAuthenticatedPrincipalRejectsNonCanonicalGrants(t *testing.T) {
 }
 
 func TestAuthenticatedPrincipalReplacementDoesNotMergeAxes(t *testing.T) {
-	customer, err := NewAuthenticatedPrincipal(customerIdentity(), []string{"org.read"})
+	withinTransport, err := NewAuthenticatedPrincipal(withinTransportIdentity(), []string{"org.read"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,7 @@ func TestAuthenticatedPrincipalReplacementDoesNotMergeAxes(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	ctx := WithAuthenticatedPrincipal(context.Background(), customer)
+	ctx := WithAuthenticatedPrincipal(context.Background(), withinTransport)
 	ctx = WithAuthenticatedPrincipal(ctx, platformOnly)
 
 	got, ok := AuthenticatedPrincipalFromContext(ctx)

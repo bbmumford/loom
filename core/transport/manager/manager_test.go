@@ -167,7 +167,7 @@ func TestDial_RoutesToCorrectTransport(t *testing.T) {
 	}
 }
 
-func TestDial_UnknownTenant(t *testing.T) {
+func TestDial_UnknownPartition(t *testing.T) {
 	mgr := New()
 	target := aether.Target{NodeID: "vl1_test"}
 
@@ -189,7 +189,7 @@ func TestDial_TransportError(t *testing.T) {
 	}
 }
 
-func TestListTenants(t *testing.T) {
+func TestListPartitions(t *testing.T) {
 	mgr := New()
 	mgr.Register("alpha", &mockTransport{})
 	mgr.Register("beta", &mockTransport{})
@@ -401,7 +401,7 @@ func TestRotateKey_UnsupportedTransport(t *testing.T) {
 	}
 }
 
-func TestRotateKey_UnknownTenant(t *testing.T) {
+func TestRotateKey_UnknownPartition(t *testing.T) {
 	mgr := New()
 
 	err := mgr.RotateKey("nonexistent", []byte("key"))

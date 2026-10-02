@@ -268,7 +268,7 @@ func (a *AddressTable) onRecord(r swarm.Record) error {
 	// proactive upgrade walker needs to drop its 30s tick latency to
 	// "next select iteration". Peers of another origin don't carry Scope=
 	// "private" addresses (their 6PN ULAs are not routable across the
-	// Fly.io organisation boundary) so the trigger is naturally scoped to
+	// boundary of their Fly.io private network) so the trigger is naturally scoped to
 	// the same-origin upgrade case.
 	//
 	// We only wake when a NEW Tier-0 address appears (set-difference,

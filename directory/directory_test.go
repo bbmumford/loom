@@ -34,7 +34,7 @@ func peerRecord(t *testing.T, id ports.NodeID, pub ed25519.PublicKey, hlc uint64
 		NodeId: pub,
 		Capabilities: &swarmpb.Capabilities{
 			Roles: roles,
-			Tags:  []string{"service=" + service, "region=syd", "tenant=hstles"},
+			Tags:  []string{"service=" + service, "region=syd", "partition=hstles"},
 		},
 		RpcHandlers: []string{"hstles." + service + ".ping"},
 		Addresses: []*swarmpb.Address{
@@ -56,15 +56,15 @@ func peerRecord(t *testing.T, id ports.NodeID, pub ed25519.PublicKey, hlc uint64
 	}
 }
 
-// peerBodyWithTenant builds a PeerRecord body on an explicit partition, so tests
+// peerBodyWithPartition builds a PeerRecord body on an explicit partition, so tests
 // can construct multi-partition state.
-func peerBodyWithTenant(t *testing.T, pub ed25519.PublicKey, roles []string, service, partition string) []byte {
+func peerBodyWithPartition(t *testing.T, pub ed25519.PublicKey, roles []string, service, partition string) []byte {
 	t.Helper()
 	pr := &swarmpb.PeerRecord{
 		NodeId: pub,
 		Capabilities: &swarmpb.Capabilities{
 			Roles: roles,
-			Tags:  []string{"service=" + service, "region=syd", "tenant=" + partition},
+			Tags:  []string{"service=" + service, "region=syd", "partition=" + partition},
 		},
 		RpcHandlers: []string{"hstles." + service + ".ping"},
 		Addresses: []*swarmpb.Address{
@@ -101,19 +101,19 @@ func TestSwarmDirectoryProjectionAndViews(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	members, _ := d.Members(ctx, testTenantID)
+	members, _ := d.Members(ctx, testPartitionID)
 	if len(members) != 1 || members[0].ServiceName != "auth-svc" || members[0].PartitionID != "hstles" {
 		t.Fatalf("members = %+v", members)
 	}
-	nodes, _ := d.NodesByRole(ctx, testTenantID, "auth")
+	nodes, _ := d.NodesByRole(ctx, testPartitionID, "auth")
 	if len(nodes) != 1 || nodes[0] != idA {
 		t.Fatalf("auth nodes = %v", nodes)
 	}
-	reach, _ := d.Reach(ctx, testTenantID, idA)
+	reach, _ := d.Reach(ctx, testPartitionID, idA)
 	if len(reach) != 2 || reach[0].Protocol != "noise-udp" || reach[1].Protocol != "ws" {
 		t.Fatalf("reach (priority order broken) = %+v", reach)
 	}
-	adverts, _ := d.HandlersByName(ctx, testTenantID, "hstles.auth-svc.ping")
+	adverts, _ := d.HandlersByName(ctx, testPartitionID, "hstles.auth-svc.ping")
 	if len(adverts) != 1 || adverts[0].NodeID != idA {
 		t.Fatalf("handler adverts = %+v", adverts)
 	}
@@ -123,10 +123,10 @@ func TestSwarmDirectoryProjectionAndViews(t *testing.T) {
 	if err := d.Ingest(ctx, tomb); err != nil {
 		t.Fatal(err)
 	}
-	if members, _ := d.Members(ctx, testTenantID); len(members) != 0 {
+	if members, _ := d.Members(ctx, testPartitionID); len(members) != 0 {
 		t.Fatalf("tombstoned member still present: %+v", members)
 	}
-	if adverts, _ := d.HandlersByName(ctx, testTenantID, "hstles.auth-svc.ping"); len(adverts) != 0 {
+	if adverts, _ := d.HandlersByName(ctx, testPartitionID, "hstles.auth-svc.ping"); len(adverts) != 0 {
 		t.Fatalf("tombstoned handlers still present: %+v", adverts)
 	}
 }
@@ -164,7 +164,7 @@ func TestSwarmDirectoryRestartReproducesState(t *testing.T) {
 	if fp1 != fp2 {
 		t.Fatal("restart did not reproduce the projection fingerprint")
 	}
-	members, _ := d2.Members(ctx, testTenantID)
+	members, _ := d2.Members(ctx, testPartitionID)
 	if len(members) != 1 || members[0].NodeID != idA {
 		t.Fatalf("restart members = %+v", members)
 	}
@@ -285,7 +285,7 @@ func TestShadowParity(t *testing.T) {
 		}
 	}
 
-	rep, err := CompareDirectories(ctx, auth, shadow, testTenantID, []string{"auth", "billing"})
+	rep, err := CompareDirectories(ctx, auth, shadow, testPartitionID, []string{"auth", "billing"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -302,7 +302,7 @@ func TestShadowParity(t *testing.T) {
 	if err := shadow.Ingest(ctx, tomb); err != nil {
 		t.Fatal(err)
 	}
-	rep2, err := CompareDirectories(ctx, auth, shadow, testTenantID, []string{"auth", "billing"})
+	rep2, err := CompareDirectories(ctx, auth, shadow, testPartitionID, []string{"auth", "billing"})
 	if err != nil {
 		t.Fatal(err)
 	}

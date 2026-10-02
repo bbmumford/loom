@@ -95,23 +95,23 @@ func TestRoleAdvertsAgreesAcrossBothImplementations(t *testing.T) {
 	if err := sd.Ingest(ctx, peerRecord(t, id, pub, 1, roles, "svc")); err != nil {
 		t.Fatal(err)
 	}
-	swarmAdverts, err := sd.RoleAdverts(ctx, fixtureTenant)
+	swarmAdverts, err := sd.RoleAdverts(ctx, fixturePartition)
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	ld := ladDirWithRecords(t, func(c *ladcache.DirectoryCache) {
 		rb, _ := json.Marshal(lad.RoleRecord{
-			Partition: string(fixtureTenant), NodeID: string(id), Roles: roles, Updated: time.Now(),
+			Partition: string(fixturePartition), NodeID: string(id), Roles: roles, Updated: time.Now(),
 		})
 		if err := c.Apply(lad.Record{
-			Topic: lad.TopicRole, Partition: string(fixtureTenant), NodeID: string(id),
+			Topic: lad.TopicRole, Partition: string(fixturePartition), NodeID: string(id),
 			Body: rb, Timestamp: time.Now(),
 		}); err != nil {
 			t.Fatal(err)
 		}
 	})
-	ladAdverts, err := ld.RoleAdverts(ctx, fixtureTenant)
+	ladAdverts, err := ld.RoleAdverts(ctx, fixturePartition)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -160,7 +160,7 @@ func TestRoleAdvertsIsOrderedByNodeID(t *testing.T) {
 		}
 	}
 
-	adverts, err := sd.RoleAdverts(ctx, fixtureTenant)
+	adverts, err := sd.RoleAdverts(ctx, fixturePartition)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -7,7 +7,7 @@ package ports
 
 import "testing"
 
-func TestExecutionOwnerKeyIsOpaqueStableAndNonzero(t *testing.T) {
+func TestExecutionPartitionKeyIsOpaqueStableAndNonzero(t *testing.T) {
 	first, err := NewExecutionPartitionKey("realm=hstles|tenant=orbtr|org=acme|kind=service|id=worker-7|space=ops")
 	if err != nil {
 		t.Fatalf("NewExecutionPartitionKey(first): %v", err)

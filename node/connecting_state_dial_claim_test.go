@@ -39,7 +39,7 @@ func TestTheOwningDialClearsItsOwnConnectingState(t *testing.T) {
 	}
 }
 
-// 🔴 THE OWNERSHIP GATE. A borrowing path must not reach the reset at all. This
+// 🔴 THE DIAL-CLAIM GATE. A borrowing path must not reach the reset at all. This
 // asserts the gate at the only place it can be observed without a live dial:
 // the constants that select it must be distinct, and only the connectPeer call
 // site may carry the owning one.
@@ -56,7 +56,7 @@ func TestOnlyTheConnectPeerCallSiteOwnsTheConnectingState(t *testing.T) {
 }
 
 // A peer that is NOT connecting must be untouched whoever asks, so the guard
-// stays the last line of defence even when ownership is granted.
+// stays the last line of defence even for a dial that owns the connecting state.
 func TestResetLeavesAPeerThatIsNotConnectingAlone(t *testing.T) {
 	for _, st := range []PeerState{PeerConnected, PeerDisconnected, PeerDiscovered, PeerReconnecting} {
 		m := connectingPeer(t, st)
@@ -93,6 +93,6 @@ func TestResetForAnUnknownPeerIsHarmless(t *testing.T) {
 // inside the adapter instead of erroring. Forcing a clean setup failure needs a
 // transport that can be made to fail, which is an integration fixture.
 //
-// So the gate is covered by construction review and by W2/W3-style mutation of
-// the constants, and its branch is not unit-covered. Stated rather than papered
+// So the gate is covered by construction review and by mutating the
+// constants, and its branch is not unit-covered. Stated rather than papered
 // over.

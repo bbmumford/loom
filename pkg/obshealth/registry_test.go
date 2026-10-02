@@ -291,13 +291,11 @@ func TestNew_EmptyAllowlist_IsFailClosed(t *testing.T) {
 	}
 }
 
-// TestAllowedSubsystems_IncludesORBTRPolicy asserts every policy.*
-// subsystem the ORBTR agent PolicyEngine reflects into the shared
-// Registry (rev-054) is present in AllowedSubsystems(). If a new
-// applyOrLog call site is added to PolicyEngine.PullAndApply, its
-// mapped SubsystemID MUST be added to allowlist.go in the same commit
-// or the Mark will fail-closed at runtime.
-func TestAllowedSubsystems_IncludesORBTRPolicy(t *testing.T) {
+// TestAllowedSubsystems_IncludesPolicySubsystems asserts every policy.*
+// subsystem a policy engine marks in the shared Registry is present in
+// AllowedSubsystems(). A policy subsystem a caller marks that is missing
+// from allowlist.go makes that Mark fail closed at runtime.
+func TestAllowedSubsystems_IncludesPolicySubsystems(t *testing.T) {
 	want := []SubsystemID{
 		SubsystemPolicyLocalStore,
 		SubsystemPolicyOSFirewall,

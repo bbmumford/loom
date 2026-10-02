@@ -44,30 +44,30 @@ func scopeRefPolicy(platforms ...string) rpcscope.PresencePolicyFunc {
 		}
 	}
 	return func(declared Scope, id rpcscope.AuthenticatedIdentity) (bool, string) {
-		tenant := id.Scope(rpcscope.AxisTransportPinned)
+		pinned := id.Scope(rpcscope.AxisTransportPinned)
 		switch declared {
 		case ScopeNone:
 			return true, ""
 		case ScopeAllowlisted:
-			if tenant == "" {
+			if pinned == "" {
 				return false, "authenticated platform access required"
 			}
-			if _, ok := allow[tenant]; !ok {
+			if _, ok := allow[pinned]; !ok {
 				return false, "tenant not in platform allowlist"
 			}
 		case ScopePartition:
-			if tenant == "" {
+			if pinned == "" {
 				return false, "authenticated platform tenant context required"
 			}
 		case ScopeWithinPartition:
-			if tenant == "" {
+			if pinned == "" {
 				return false, "authenticated platform tenant context required"
 			}
 			if id.Scope(rpcscope.AxisWithinTransport) == "" {
 				return false, "authenticated organisation context required"
 			}
 		case ScopeSubject:
-			if tenant == "" {
+			if pinned == "" {
 				return false, "authenticated platform tenant context required"
 			}
 			if id.Subject == "" {
@@ -90,13 +90,13 @@ func newScopedRegistry(platforms ...string) *HandlerRegistry {
 
 // scopeIdentity builds an opaque identity from the deployed axes, omitting any
 // empty axis (an absent axis must stay absent).
-func scopeIdentity(tenant, org, user string) rpcscope.AuthenticatedIdentity {
+func scopeIdentity(pinned, within, user string) rpcscope.AuthenticatedIdentity {
 	id := rpcscope.AuthenticatedIdentity{Subject: user}
-	if tenant != "" {
-		id.Scopes = append(id.Scopes, rpcscope.ScopeValue{Name: rpcscope.AxisTransportPinned, Value: tenant})
+	if pinned != "" {
+		id.Scopes = append(id.Scopes, rpcscope.ScopeValue{Name: rpcscope.AxisTransportPinned, Value: pinned})
 	}
-	if org != "" {
-		id.Scopes = append(id.Scopes, rpcscope.ScopeValue{Name: rpcscope.AxisWithinTransport, Value: org})
+	if within != "" {
+		id.Scopes = append(id.Scopes, rpcscope.ScopeValue{Name: rpcscope.AxisWithinTransport, Value: within})
 	}
 	return id
 }
@@ -107,11 +107,11 @@ func ctxWithRPC(m map[string]interface{}) context.Context {
 	return context.WithValue(context.Background(), "rpc_context", m)
 }
 
-// TestValidateTenantScope_Profile_MissingTenantFailsClosed asserts that a
+// TestValidateScope_Profile_MissingPartitionFailsClosed asserts that a
 // ScopePartition handler denies a request whose identity carries no
 // transport-pinned partition, so a declared tier never falls through to
 // admission when the partition is absent.
-func TestValidateTenantScope_Profile_MissingTenantFailsClosed(t *testing.T) {
+func TestValidateScope_Profile_MissingPartitionFailsClosed(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "billing.getProfile", scope: ScopePartition}
 
@@ -124,11 +124,11 @@ func TestValidateTenantScope_Profile_MissingTenantFailsClosed(t *testing.T) {
 	}
 }
 
-// TestValidateTenantScope_Profile_WithTenantPasses asserts a ScopePartition
+// TestValidateScope_Profile_WithPartitionPasses asserts a ScopePartition
 // handler admits a caller whose authenticated identity carries a partition.
 // validateScope checks only that the partition is present; which records the
 // caller may act on is decided by the handler or its middleware.
-func TestValidateTenantScope_Profile_WithTenantPasses(t *testing.T) {
+func TestValidateScope_Profile_WithPartitionPasses(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "billing.getProfile", scope: ScopePartition}
 
@@ -139,11 +139,11 @@ func TestValidateTenantScope_Profile_WithTenantPasses(t *testing.T) {
 	}
 }
 
-// TestValidateTenantScope_Unknown_FailsClosed asserts the explicit Unknown
+// TestValidateScope_Unknown_FailsClosed asserts the explicit Unknown
 // sentinel rejects every dispatch attempt. This mirrors rpc.EnforceScope's
 // ScopeUnknown branch — a handler bound to this scope is structurally invalid
 // and MUST NOT be dispatched.
-func TestValidateTenantScope_Unknown_FailsClosed(t *testing.T) {
+func TestValidateScope_Unknown_FailsClosed(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "misconfigured.op", scope: ScopeUnknown}
 
@@ -161,11 +161,11 @@ func TestValidateTenantScope_Unknown_FailsClosed(t *testing.T) {
 	}
 }
 
-// TestValidateTenantScope_GarbageScope_FailsClosed asserts the policy's
+// TestValidateScope_GarbageScope_FailsClosed asserts the policy's
 // default arm rejects any scope value that is not one of the recognised
 // constants, so a mis-typed scope value ("tennant") admits no caller,
 // anonymous or authenticated.
-func TestValidateTenantScope_GarbageScope_FailsClosed(t *testing.T) {
+func TestValidateScope_GarbageScope_FailsClosed(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "typo.op", scope: Scope("tennant")}
 
@@ -180,10 +180,10 @@ func TestValidateTenantScope_GarbageScope_FailsClosed(t *testing.T) {
 	}
 }
 
-// TestValidateTenantScope_None_Passes documents that ScopeNone still opts
+// TestValidateScope_None_Passes documents that ScopeNone still opts
 // the handler out of enforcement — this is the sole "anyone goes" tier and
 // is used for liveness, /heartbeat, and OAuth init.
-func TestValidateTenantScope_None_Passes(t *testing.T) {
+func TestValidateScope_None_Passes(t *testing.T) {
 	r := NewHandlerRegistry()
 	h := &stubMeta{name: "public.heartbeat", scope: ScopeNone}
 
@@ -192,7 +192,7 @@ func TestValidateTenantScope_None_Passes(t *testing.T) {
 	}
 }
 
-func TestValidateTenantScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing.T) {
+func TestValidateScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing.T) {
 	h := &stubMeta{name: "platform.op", scope: ScopeAllowlisted}
 	identity := func(partitionID string) context.Context {
 		return rpcscope.WithAuthenticatedIdentity(
@@ -231,18 +231,18 @@ func TestValidateTenantScope_PlatformUsesCanonicalFailClosedAllowlist(t *testing
 	}
 }
 
-// TestValidateTenantScope_LegacyScopes_StillEnforce asserts each tier that
+// TestValidateScope_PartitionTiers_DenyWithoutPartition asserts each tier that
 // requires a partition (ScopePartition, ScopeWithinPartition, ScopeSubject)
 // denies a request with no authenticated partition, wrapping ErrDenied.
-func TestValidateTenantScope_LegacyScopes_StillEnforce(t *testing.T) {
+func TestValidateScope_PartitionTiers_DenyWithoutPartition(t *testing.T) {
 	cases := []struct {
 		name  string
 		scope Scope
 		want  string // substring expected in error
 	}{
-		{name: "Tenant", scope: ScopePartition, want: "tenant context"},
-		{name: "Org", scope: ScopeWithinPartition, want: "tenant context"},
-		{name: "User", scope: ScopeSubject, want: "tenant context"},
+		{name: "Partition", scope: ScopePartition, want: "tenant context"},
+		{name: "WithinPartition", scope: ScopeWithinPartition, want: "tenant context"},
+		{name: "Subject", scope: ScopeSubject, want: "tenant context"},
 	}
 	r := newScopedRegistry()
 	for _, c := range cases {
@@ -262,12 +262,12 @@ func TestValidateTenantScope_LegacyScopes_StillEnforce(t *testing.T) {
 	}
 }
 
-// TestTenantScopeConstants_AgreeWithRPC pins the string values of the
+// TestScopeConstants_AgreeWithRPC pins the string values of the
 // handlers.Scope* constants so they cannot drift from rpc.Scope*.
 // If the two ever disagree, a value round-tripped between packages would
 // silently degrade to an unset or unknown scope. Both fail closed, but the
 // failure surface should be the constant contract, not runtime dispatch.
-func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
+func TestScopeConstants_AgreeWithRPC(t *testing.T) {
 	// These literal expectations are intentionally hard-coded rather than
 	// imported from rpc — that would introduce a test-scope import of the
 	// rpc package, which is imported by handlers' dependents. Any change
@@ -297,7 +297,7 @@ func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 	}
 }
 
-// TestValidateTenantScope_TransportReconcile locks the
+// TestValidateScope_TransportReconcile locks the
 // transport/authenticated-identity reconciliation. On a partition-bound
 // transport the aether session's partition is stamped by WithTransportPartition;
 // a later authenticated identity that disagrees is rejected. Mutable request
@@ -308,33 +308,34 @@ func TestTenantScopeConstants_AgreeWithRPC(t *testing.T) {
 // reconcileTransportPartition runs only after the presence policy admits, so
 // these cases drive a ScopePartition handler (partition present) straight
 // into it.
-func TestValidateTenantScope_TransportReconcile(t *testing.T) {
-	const reqTenant = "acme"
+func TestValidateScope_TransportReconcile(t *testing.T) {
+	const reqPartition = "acme"
 	cases := []struct {
 		name      string
 		transport string // value stamped by WithTransportPartition (ignored if noStamp)
 		noStamp   bool   // if true, stamp no transport partition at all
 		wantErr   string // "" => expect pass
 	}{
-		// Tenant-specific transport: authenticated partition matches the envelope.
+		// Partition-bound transport: authenticated partition matches the envelope.
 		{name: "match_passes", transport: "acme", wantErr: ""},
-		// Tenant-specific transport: envelope lies about its partition — REJECTED.
+		// Partition-bound transport: envelope lies about its partition — REJECTED.
 		{name: "mismatch_rejects", transport: "evil", wantErr: "transport/authenticated partition mismatch"},
-		// Single-partition fallback: reconcile skipped, envelope self-asserted.
-		{name: "default_skips_selfassert", transport: "default", wantErr: ""},
-		// Shared transport with no resolved ScopeID: skipped (empty == unset).
+		// A partition whose name is "default" is a partition like any other, so
+		// an identity pinned elsewhere is rejected on it.
+		{name: "partition_named_default_is_compared", transport: "default", wantErr: "transport/authenticated partition mismatch"},
+		// A session bound to no partition has nothing to compare: skipped.
 		{name: "empty_skips", transport: "", wantErr: ""},
 		{name: "unstamped_skips", noStamp: true, wantErr: ""},
 	}
 	r := newScopedRegistry()
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			h := &stubMeta{name: "tenant.op", scope: ScopePartition}
+			h := &stubMeta{name: "partition.op", scope: ScopePartition}
 			ctx := context.Background()
 			if !c.noStamp {
 				ctx = WithTransportPartition(ctx, c.transport)
 			}
-			ctx = rpcscope.WithAuthenticatedIdentity(ctx, scopeIdentity(reqTenant, "", ""))
+			ctx = rpcscope.WithAuthenticatedIdentity(ctx, scopeIdentity(reqPartition, "", ""))
 			err := r.validateScope(ctx, h)
 			if c.wantErr == "" {
 				if err != nil {
@@ -355,7 +356,7 @@ func TestValidateTenantScope_TransportReconcile(t *testing.T) {
 	}
 }
 
-func TestValidateTenantScope_OrganizationIgnoresMutableHints(t *testing.T) {
+func TestValidateScope_WithinPartitionIgnoresMutableHints(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "org.read", scope: ScopeWithinPartition}
 

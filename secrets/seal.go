@@ -77,7 +77,7 @@ func sealAAD(role string, epoch uint64) []byte {
 
 // canonicalBundle produces deterministic bytes for a bundle (sorted keys,
 // length-prefixed segments). Determinism is NOT needed for convergence
-// (replicas store the owner's bytes verbatim) — it exists so tests and
+// (replicas store the author's bytes verbatim) — it exists so tests and
 // audit tooling can compare plaintexts structurally.
 func canonicalBundle(b ConfigBundle) ([]byte, error) {
 	keys := make([]string, 0, len(b))

@@ -242,7 +242,7 @@ func (rt *Runtime) ActivateRole(ctx context.Context, role string, bundle secrets
 	}
 
 	// 2. Run the exact activator with a causal registry capability. Global or
-	// unrelated registrations during this call are not inferred as ownership.
+	// unrelated registrations during this call are not attributed to the role.
 	err = activator.Activate(ctx, env)
 	if err != nil {
 		// Closing the scope is atomic with registration: a racing scoped

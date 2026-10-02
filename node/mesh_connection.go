@@ -39,9 +39,33 @@ type AcceptMeshConnectionOpts struct {
 	// Roles is the peer's comma-separated role list (e.g., "anchor,bootstrap").
 	// Included in the pre-published Member record when non-empty.
 	Roles string
+	// Partition is the transport partition the session's connection was bound
+	// to by its handshake (transportPartitionOf). A non-empty value is recorded
+	// on the peer for dialPartitionFor; "" leaves the recorded one in place.
+	Partition string
 }
 
-// AcceptMeshConnection takes full ownership of an Aether session's lifecycle:
+// bidiScopeLabel returns the scope label AcceptMeshConnection gives a
+// session's BidiRPC, which RPCServer's bidi histograms carry into the
+// bidirpc_*_ms_<transport>_<scope> keys of Runtime.MeshMetrics. The label
+// is "cross-origin" for a peer of another origin (peer.crossOrigin, a
+// different Fly.io private network), "same-origin-cross-region" for a peer of
+// this origin whose known region differs from localRegion, and
+// "same-origin-same-region" otherwise, including a nil peer or one whose
+// region is not yet known. The region split keeps same-region (~1ms RTT)
+// and cross-region (~200ms RTT) samples in separate buckets, so a
+// same-origin p99 stays readable as local latency.
+func bidiScopeLabel(peer *peerConn, localRegion string) string {
+	switch {
+	case peer != nil && peer.crossOrigin:
+		return "cross-origin"
+	case peer != nil && peer.peerRegion != "" && peer.peerRegion != localRegion:
+		return "same-origin-cross-region"
+	}
+	return "same-origin-same-region"
+}
+
+// AcceptMeshConnection runs the whole lifecycle of an Aether session:
 // opens well-known streams (gossip, RPC, keepalive, control), runs gossip,
 // serves incoming RPCs, and manages keepalive. Blocks until the session closes.
 //
@@ -113,6 +137,9 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 	}
 	peer.addTransport(tc)
 	peer.state = PeerConnected
+	if opts.Partition != "" {
+		peer.partition = opts.Partition
+	}
 	// (previousProtocol was snapshotted above, before peer creation
 	// branch, so the reject rollback can restore the actual prior
 	// value — or signal "fresh peer, delete on reject" via
@@ -493,19 +520,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			// fallback transport.
 			bidiTransport = "ws"
 		}
-		// Scope label tracks both cross-origin (different Fly.io
-		// organisation) and cross-region (same Fly.io organisation but a
-		// different region). An origin-only 2-way label would lump
-		// same-region same-origin (~1ms RTT) and cross-region same-origin
-		// (~200ms RTT) into one bucket, making the p99 unreadable for
-		// real local latency; the 3-way split below keeps them apart.
-		bidiScope := "same-org-same-region"
-		switch {
-		case peer != nil && peer.crossOrigin:
-			bidiScope = "cross-org"
-		case peer != nil && peer.peerRegion != "" && peer.peerRegion != m.rt.cfg.Platform.Region():
-			bidiScope = "same-org-cross-region"
-		}
+		bidiScope := bidiScopeLabel(peer, m.rt.cfg.Platform.Region())
 		bidiRPC := NewBidiRPC(rpcStream, aether.NodeID(nodeID), m.rt.rpcServer, bidiTransport, bidiScope)
 		m.registerBidiRPC(opts.Session, bidiRPC)
 
@@ -842,20 +857,20 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			//      connCtx ending or by a higher-grade peer
 			//      preempting us).
 			//
-			//   2. slot held by lower-grade owner → cancel theirs,
+			//   2. slot held by lower-grade holder → cancel theirs,
 			//      install ourselves, run.
 			//
-			//   3. slot held by equal-or-higher-grade owner → wait
+			//   3. slot held by equal-or-higher-grade holder → wait
 			//      5 s and retry. We never preempt an equal-grade
-			//      owner because it's already doing the same job
+			//      holder because it's already doing the same job
 			//      we'd be doing, and equal-grade thrash would
 			//      churn for no gain.
 			//
 			// On gossip exit (whether preempted, ctx cancelled, or
 			// peer-side error) we clear the slot ONLY if we still
 			// own it — a preemptor will have already overwritten it
-			// with their own owner record, and clearing wholesale
-			// would leak the new owner's pointer.
+			// with their own holder record, and clearing wholesale
+			// would leak the new holder's pointer.
 			ourGrade := tc.grade
 			for connCtx.Err() == nil {
 				m.gossipMu.Lock()
@@ -865,12 +880,12 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 				existing := m.gossipActive[nodeID]
 				preempt := false
 				if existing != nil && existing.grade < ourGrade {
-					// Preempt the lower-grade owner.
+					// Preempt the lower-grade holder.
 					preempt = true
 				}
 				if existing == nil || preempt {
 					if preempt {
-						// Cancel the old owner's gossip ctx; their
+						// Cancel the old holder's gossip ctx; their
 						// outer loop will see the slot reassigned
 						// and back off into wait mode.
 						existing.cancel()
@@ -893,7 +908,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 					// the entry already; deleting unconditionally
 					// would discard their pointer and break the
 					// invariant that gossipActive[nodeID] is
-					// either nil or a live owner.
+					// either nil or a live holder.
 					m.gossipMu.Lock()
 					if m.gossipActive[nodeID] == owner {
 						delete(m.gossipActive, nodeID)
@@ -912,8 +927,8 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 				}
 				m.gossipMu.Unlock()
 
-				// Equal-or-higher-grade owner already running. Wait
-				// and re-check; if the existing owner exits or gets
+				// Equal-or-higher-grade holder already running. Wait
+				// and re-check; if the existing holder exits or gets
 				// preempted by an even higher grade and our grade is
 				// the new highest, we'll take over on the next pass.
 				select {
@@ -1552,10 +1567,10 @@ func (m *ConnectionManager) registerMeshSession(ctx context.Context, nodeID stri
 		// If the new (upgraded) session dies during the proving window,
 		// unregisterMeshSession reverts to the old session rather than
 		// leaving the peer entirely disconnected.
-		// Evict the gossip dedup owner so the new session's higher-grade
+		// Evict the gossip dedup holder so the new session's higher-grade
 		// initiator can take over without waiting for the lower-grade
-		// owner's natural exit. evictGossipOwnerLocked cancels the
-		// owner's gossip context (causing RunGossipLoopWithPeer to
+		// holder's natural exit. evictGossipOwnerLocked cancels the
+		// holder's gossip context (causing RunGossipLoopWithPeer to
 		// return) and clears the slot.
 		m.evictGossipOwnerLocked(nodeID, "upgrade-promote")
 		log.Printf("[AETHER] Upgrading %s → %s for %s (grade %d → %d, proving 60s)",
@@ -1702,7 +1717,7 @@ func (m *ConnectionManager) unregisterMeshSessionWithoutHook(nodeID string, expe
 	// Nil is the value captured from a present-but-empty zombie slot, not a
 	// wildcard. Registration may replace that slot after the sweep releases
 	// dispatchMu; refuse to delete either an absent entry or its live
-	// replacement. Non-nil ownership keeps the established proving semantics
+	// replacement. A non-nil expected session keeps the established proving semantics
 	// below unchanged.
 	if expected == nil {
 		current, present := m.meshSessions[nodeID]
@@ -1729,7 +1744,7 @@ func (m *ConnectionManager) unregisterMeshSessionWithoutHook(nodeID string, expe
 			if expected != nil && expected != ps.newSession && expected != ps.oldSession {
 				// Neither party of the proving window owns this expected
 				// pointer — a third (newer) session has taken over. Skip
-				// the revert; the new owner's lifecycle drives dispatch.
+				// the revert; the new session's lifecycle drives dispatch.
 				m.unregisterSkippedNotHolder.Add(1)
 				log.Printf("[DISPATCH-TRACE] unregister exit: peer=%s decision=skipped-proving-mismatch expectedProto=%s",
 					truncID(nodeID), expected.Protocol())
@@ -1779,7 +1794,7 @@ func (m *ConnectionManager) unregisterMeshSessionWithoutHook(nodeID string, expe
 		current, present := m.meshSessions[nodeID]
 		// Presence is checked here for the same reason the nil-expected guard
 		// above checks it. Without it an ABSENT entry yields current == nil, the
-		// ownership comparison is skipped, and the teardown below runs anyway:
+		// identity comparison is skipped, and the teardown below runs anyway:
 		// the delete is a no-op but unregisterDeleted counts a removal that did
 		// not happen, clearDedupRejectAllForPeer drops the peer's dial back-off,
 		// and the true return makes unregisterMeshSession fire a disconnect hook

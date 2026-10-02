@@ -36,28 +36,25 @@ import (
 // ─── fixture ─────────────────────────────────────────────────────────────
 
 // activationFixture builds the smallest Runtime that ActivateRole can run
-// against: a real HandlerRegistry (exact scoped registration ownership is what
+// against: a real HandlerRegistry (exact scoped registration attribution is what
 // we are testing, so faking the registry would test the fake) and a real
 // manager.
 //
-// 🔬 MEASURED, and it is why rpcServer is not optional here: ActivateRole opens
-// a registry-owned causal registration scope, and rt.Registry() returns nil
-// when rt.rpcServer is nil.
+// rpcServer is not optional here: ActivateRole opens a registry-owned causal
+// registration scope, and rt.Registry() returns nil when rt.rpcServer is nil.
 //
-// That is NOT a live defect: runtime.go:557-562 assigns rt.rpcServer and
-// rt.roleActivation three lines apart, unconditionally, in one constructor
-// block — and ActivateRole dereferences rt.roleActivation first, so a Runtime
-// without the manager panics before it ever reaches Registry(). Whether that
-// discharge covers this path matters as much as the discharge itself:
-// the guarantee comes from a co-assignment in another file, not from a guard here,
-// and step 4 of this very function DOES guard `rt.rpcRegistry != nil`. The
-// defensiveness is asymmetric within one function; recorded, not "fixed", because
-// changing it would be a production edit this slice did not claim.
-// ⚠ rt.ctx is DELIBERATELY NOT context.Background(). Mutation caught this: with
-// rt.ctx == context.Background(), a mutant replacing env.Go's `fn(rt.ctx)` with
-// `fn(context.Background())` SURVIVED — the two are the same value, so no
-// assertion could tell them apart. A fixture whose values coincide cannot
-// distinguish the mechanisms that read them.
+// A deployed Runtime always has both: its constructor in runtime.go assigns
+// rt.rpcServer and rt.roleActivation two lines apart, unconditionally, and
+// ActivateRole dereferences rt.roleActivation first, so a Runtime without the
+// manager panics before it reaches Registry(). That guarantee comes from the
+// co-assignment in runtime.go, not from a guard here, while step 5 of
+// ActivateRole (the handler re-export) does guard `rt.rpcRegistry != nil`.
+//
+// ⚠ rt.ctx is DELIBERATELY NOT context.Background(): with rt.ctx ==
+// context.Background(), a change replacing env.Go's `fn(rt.ctx)` with
+// `fn(context.Background())` would pass, because the two are the same value
+// and no assertion could tell them apart. A fixture whose values coincide
+// cannot distinguish the mechanisms that read them.
 func activationFixture(roles ...string) *Runtime {
 	registry := handlers.NewHandlerRegistry()
 	rt := &Runtime{

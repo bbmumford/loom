@@ -144,37 +144,21 @@ func TestFeedReputationToleratesAnAbsentTracker(t *testing.T) {
 // eligible for drain when the connection budget is under pressure, so a peer
 // landing one rung too low is dropped while a busier one survives.
 //
-// 🔴🔴 READ THIS BEFORE TRUSTING THE COVERAGE NUMBER ON updatePriorities.
-// THREE OF THE FIVE ARMS BELOW ARE UNREACHABLE IN PRODUCTION. This test sets
-// peer.rpcsLastMinute and peer.lastRPCAt directly, so every arm is exercised
-// here — but MEASURED (, positive controls .Rebalance(=1, .SetPriority(=1,
-// .RecordPathFailure(=2 against a result of 0):
+// This test sets peer.rpcsLastMinute and peer.lastRPCAt directly, so every arm
+// is exercised here. In a deployment both fields are written only by
+// ConnectionManager.RecordRPC, which rpc_forward.go calls for each RPC this
+// node forwards to a peer. A peer this node sends no RPC to keeps both at zero
+// and lands on the last two rungs:
 //
-//	peer.rpcsLastMinute / peer.lastRPCAt are written at exactly ONE non-test
-//	site, peer_connections.go:4321-4322, inside ConnectionManager.RecordRPC —
-//	and RecordRPC has ZERO non-test callers in loom, ORBTR or HSTLES, despite
-//	its doc at :4313 claiming "Called by RPC dispatch when traffic flows
-//	through a peer connection" (the coding contract: a declared operation is not evidence
-//	of a writer).
+//	anchor                        -> PriorityCritical
+//	rpcsLastMinute > 10           -> PriorityHigh       (forwarded traffic)
+//	rpcsLastMinute > 0            -> PriorityNormal     (forwarded traffic)
+//	==0 && !lastRPCAt.IsZero()    -> PriorityLow        (traffic, none this minute)
+//	default                       -> PriorityIdle
 //
-// So in a deployment both fields are permanently zero, and the ladder collapses:
-//
-//	anchor                        -> PriorityCritical   REACHABLE
-//	rpcsLastMinute > 10           -> PriorityHigh       UNREACHABLE
-//	rpcsLastMinute > 0            -> PriorityNormal     UNREACHABLE
-//	==0 && !lastRPCAt.IsZero()    -> PriorityLow        UNREACHABLE (always zero)
-//	default                       -> PriorityIdle       REACHABLE
-//
-// Every non-anchor peer is PriorityIdle forever, so drain selection treats a
-// peer carrying all the traffic exactly like an idle one — which is the whole
-// thing the ladder exists to prevent.
-//
-// ⚠ THIS TEST IS STILL CORRECT AND STILL WORTH KEEPING: it pins the ladder's
-// logic so that wiring RecordRPC is a one-line change with the semantics already
-// nailed down. But a green test here plus "updatePriorities 91.7% covered" reads
-// as "peer prioritisation works", and it does not. Per the coding contract the honest
-// statement is REGISTERED, not REACHABLE — and the fix (call RecordRPC from RPC
-// dispatch) is a wiring decision for @R/DESIGN, not this lane's to make.
+// Inbound RPCs a peer sends this node are not counted (rpc_forward.go records
+// outbound only), so a peer that only calls in is PriorityIdle however busy it
+// is.
 func TestThePriorityLadderPlacesEachPeerOnItsOwnRung(t *testing.T) {
 	for _, tc := range []struct {
 		name     string

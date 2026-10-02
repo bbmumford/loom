@@ -29,7 +29,7 @@ import (
 // run `gofmt -w` on it — this slice adds a test file only.
 
 // walkerManager returns a manager that OWNS the dial for testNodeIDB
-// (dialOwned: selfID < peer.nodeID) so the ownership gate is not what is being
+// (dialOwned: selfID < peer.nodeID) so the dial-claim gate is not what is being
 // measured in the tests below.
 func walkerManager(t *testing.T) *ConnectionManager {
 	t.Helper()
@@ -155,12 +155,13 @@ func TestANilPeerEntryDoesNotCrashTheWalker(t *testing.T) {
 	}
 }
 
-// 🔑 THE RATE LIMITER MUST NOT BURN ITS BUDGET ON A NO-OP SNAPSHOT. The code's
-// own comment records this as a fixed defect: stamping at the FILTER step meant
-// a peer gated out downstream (most commonly bestAddress() == "" for a same-org
-// peer whose AddressTable merge had not landed) was rate-limited for the full
-// interval even though no probe was ever queued — and by the time the limiter
-// released, the address had merged but the walker would not re-check.
+// 🔑 THE RATE LIMITER MUST NOT BURN ITS BUDGET ON A NO-OP SNAPSHOT. The walker
+// stamps a peer's rate-limit slot only when a probe is queued. Stamped at the
+// FILTER step instead, a peer gated out downstream (most commonly
+// bestAddress() == "" for a same-origin peer whose AddressTable merge has not
+// landed) would be rate-limited for the full interval with no probe queued, and
+// by the time the limiter released, the address would have merged without the
+// walker re-checking.
 //
 // The peer here produces NO candidate (no address resolves), so its rate-limit
 // slot must remain unstamped and the next tick must re-evaluate it.

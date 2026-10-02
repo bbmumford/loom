@@ -12,15 +12,14 @@ import (
 	"github.com/ORBTR/aether"
 )
 
-// COVERAGE of the connection reporter: snapshotLiveSessions,
-// ActiveConnections, ConnectionTo, ConnectedPeerCount — all 0.0%.
+// Covers the connection reporter: snapshotLiveSessions, ActiveConnections,
+// ConnectionTo and ConnectedPeerCount.
 //
-// Censused first with a NON-IGNORING grep: every one is driven, and
-// two consumers are outside loom entirely —
-// ORBTR io/endpoints/help.orbtr.io/monitoring_api.go calls both
-// ActiveConnections and ConnectionTo. This is the surface the topology view
-// and the monitoring endpoint read, so a wrong answer here is a wrong
-// operational picture rather than a wrong routing decision.
+// Every one is driven, and two have consumers outside loom: a monitoring
+// client outside loom calls both ActiveConnections and ConnectionTo. This is
+// the surface the topology view and the monitoring endpoint read, so a wrong
+// answer here is a wrong operational picture rather than a wrong routing
+// decision.
 
 // reporterSession is a probeSession with a settable RTT. probeSession.Metrics
 // returns the zero value, and RTT is half of what the live-session override

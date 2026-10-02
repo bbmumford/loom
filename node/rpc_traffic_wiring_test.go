@@ -14,15 +14,12 @@ import (
 	"github.com/ORBTR/aether/rpc/pb"
 )
 
-// — WIRING THE ONLY WRITER OF PER-PEER RPC TRAFFIC.
+// — THE ONLY WRITER OF PER-PEER RPC TRAFFIC.
 //
-// ConnectionManager.RecordRPC had ZERO non-test callers across loom, ORBTR and
-// HSTLES while its own doc claimed "Called by RPC dispatch" (the coding contract). Measured
-// with positive controls on the identical command shape: .Rebalance( = 1,
-// .SetPriority( = 1, .RecordPathFailure( = 2, against .RecordRPC( = 0.
-//
-// Two subsystems were starved by that one missing call, and BOTH degraded
-// silently to a constant rather than failing:
+// ConnectionManager.RecordRPC is the one writer of a peer's RPC counters, and
+// rpc_forward.go calls it for each RPC this node forwards to a peer. Two
+// subsystems read those counters, and both fall back silently to a constant
+// when nothing writes them rather than failing:
 //
 //	updatePriorities ladder      three of five arms unreachable -> every
 //	                             non-anchor peer stuck at PriorityIdle

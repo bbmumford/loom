@@ -14,28 +14,24 @@ import (
 	ladcache "github.com/bbmumford/ledger/cache"
 )
 
-// PINNED MEASUREMENT: the anchor snapshot attests to records that
-// carry no owner signature — TODAY, in shipping code, independently of the
-// loom cutover.
+// The anchor snapshot attests to records that carry no author signature.
 //
 // generateSnapshot (runtime.go) does `records := rt.cache.Dump()` and hands
-// them straight to anchorGenerator.Generate. This test measures what Dump
-// actually yields.
+// them straight to anchorGenerator.Generate. This test pins what Dump yields.
 //
-// Why it matters: ports.Record's four missing signature-covered fields do NOT
-// block the signed anchor-snapshot input, because anchor.Generate
-// never verifies a per-record signature and anchor.Verify covers only
-// SnapshotContent{Timestamp, Sequence, NodeID, Records} with ONE header
-// signature. The anchor's signature is a CONTAINER signature: it attests
-// "this node, at this sequence, saw these bytes", not "these records are
-// authentic owner facts".
+// ports.Record's four missing signature-covered fields do NOT block the signed
+// anchor-snapshot input, because anchor.Generate never verifies a per-record
+// signature and anchor.Verify covers only SnapshotContent{Timestamp, Sequence,
+// NodeID, Records} with ONE header signature. The anchor's signature is a
+// CONTAINER signature: it attests "this node, at this sequence, saw these
+// bytes", not "these records are authentic author facts".
 //
 // The provenance is not forged or lost in transit — ladcache verifies
 // signatures at INGRESS (signedTopicACL -> lad.VerifyRecord) and then stores
-// the typed struct, discarding the envelope. So the property is: verified
-// once at the wire boundary, NOT preserved for downstream re-verification.
-// §0.5.4 requires provenance to survive "snapshot". It does not.
-func TestAnchorSnapshotInputCarriesNoOwnerSignature(t *testing.T) {
+// the typed struct, discarding the envelope. So a record is verified once at
+// the wire boundary and is not preserved for downstream re-verification:
+// provenance does not survive a snapshot.
+func TestAnchorSnapshotInputCarriesNoAuthorSignature(t *testing.T) {
 	c := ladcache.NewDirectoryCache()
 
 	rr := lad.ReachRecord{

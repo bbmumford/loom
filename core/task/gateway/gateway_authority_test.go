@@ -245,7 +245,7 @@ func TestStopReleasesAuthorizedBindings(t *testing.T) {
 	}
 }
 
-func TestAuthorizedAdmissionIsBoundedIndependentlyPerOpaqueOwner(t *testing.T) {
+func TestAuthorizedAdmissionIsBoundedIndependentlyPerOpaquePartition(t *testing.T) {
 	g, err := NewGateway(
 		GatewayConfig{
 			ID:                         "partitionKey-limit-test",
@@ -259,7 +259,7 @@ func TestAuthorizedAdmissionIsBoundedIndependentlyPerOpaqueOwner(t *testing.T) {
 	defer g.Stop()
 
 	firstPartition := gatewayPrincipalFor(t, "realm=test|tenant=app|org=one|kind=service|id=w|space=ops")
-	secondOwner := gatewayPrincipalFor(t, "realm=test|tenant=app|org=two|kind=service|id=w|space=ops")
+	secondPartition := gatewayPrincipalFor(t, "realm=test|tenant=app|org=two|kind=service|id=w|space=ops")
 	first := &task.Task{ID: "first"}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstPartition), first); err != nil {
 		t.Fatalf("first partitionKey admission: %v", err)
@@ -268,7 +268,7 @@ func TestAuthorizedAdmissionIsBoundedIndependentlyPerOpaqueOwner(t *testing.T) {
 		!strings.Contains(err.Error(), "outstanding limit") {
 		t.Fatalf("same-partitionKey second admission = %v, want outstanding limit", err)
 	}
-	if err := g.EnqueueAuthorized(gatewayPrincipalContext(secondOwner), &task.Task{ID: "other-partitionKey"}); err != nil {
+	if err := g.EnqueueAuthorized(gatewayPrincipalContext(secondPartition), &task.Task{ID: "other-partitionKey"}); err != nil {
 		t.Fatalf("independent partitionKey was coupled to first partitionKey's limit: %v", err)
 	}
 	if err := g.EnqueueAuthorized(gatewayPrincipalContext(firstPartition), first); err == nil ||
@@ -365,7 +365,7 @@ func TestAssignmentIdentityMutationRejectsBeforePrincipalAuthorization(t *testin
 	}
 }
 
-func TestQueueRejectionRollsBackOwnerAndPointerAdmission(t *testing.T) {
+func TestQueueRejectionRollsBackPartitionAndPointerAdmission(t *testing.T) {
 	g, err := NewGateway(
 		GatewayConfig{
 			ID:                         "queue-bound-test",

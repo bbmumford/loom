@@ -21,7 +21,7 @@ import (
 
 // canonicalPeer builds a fleet.peer record whose NodeID is the aether NodeID for
 // its key, so VerifyNodeKey passes and the tests exercise the AuthorizePublish
-// (topic) leg — the one an unseeded PolicyConfig fails closed. partition=hstles.
+// (topic) leg — the one an unseeded PolicyConfig fails closed.
 func canonicalPeer(t *testing.T, hlc uint64) (ports.Record, ports.NodeID) {
 	t.Helper()
 	pub, _, err := ed25519.GenerateKey(rand.Reader)
@@ -37,7 +37,7 @@ func canonicalPeer(t *testing.T, hlc uint64) (ports.Record, ports.NodeID) {
 		NodeId: pub,
 		Capabilities: &swarmpb.Capabilities{
 			Roles: []string{"auth"},
-			Tags:  []string{"service=auth-svc", "region=syd", "tenant=hstles"},
+			Tags:  []string{"service=auth-svc", "region=syd", "partition=hstles"},
 		},
 		RpcHandlers: []string{"hstles.auth.ping"},
 		Addresses:   []*swarmpb.Address{{Transport: swarmpb.Address_WEBSOCKET, Host: "203.0.113.7", Port: 443}},

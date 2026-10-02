@@ -257,7 +257,7 @@ func TestComparisonThatCouldNotEnumerateHandlersIsNotParity(t *testing.T) {
 	}
 
 	// Control: both sides enumerable, identical state => real parity.
-	ctl, err := CompareDirectories(ctx, auth, shadowInner, testTenantID, []string{"auth"})
+	ctl, err := CompareDirectories(ctx, auth, shadowInner, testPartitionID, []string{"auth"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -269,7 +269,7 @@ func TestComparisonThatCouldNotEnumerateHandlersIsNotParity(t *testing.T) {
 	}
 
 	// Same state, but the shadow side cannot enumerate its handler index.
-	rep, err := CompareDirectories(ctx, auth, opaqueDirectory{shadowInner}, testTenantID, []string{"auth"})
+	rep, err := CompareDirectories(ctx, auth, opaqueDirectory{shadowInner}, testPartitionID, []string{"auth"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -279,37 +279,34 @@ func TestComparisonThatCouldNotEnumerateHandlersIsNotParity(t *testing.T) {
 	}
 }
 
-// Tenant scoping is a REAL filter, not a decorative parameter (#R-1455 ③).
-//
-// Before the port went tenant-explicit, SwarmDirectory.Members returned every
-// tenant's members to every caller — a cross-partition read the partition-implicit
-// signature could not even express, so nothing could have caught it. Adding
-// the parameter without enforcing it would be worse than leaving it out: the
-// signature would promise isolation the code does not provide.
-func TestTenantScopingActuallyFilters(t *testing.T) {
+// TestPartitionScopingActuallyFilters requires SwarmDirectory's partition
+// parameter to filter: Members, NodesByRole and Reach for one partition return
+// nothing stored under another. A parameter that is accepted and not enforced
+// would promise an isolation the code does not provide.
+func TestPartitionScopingActuallyFilters(t *testing.T) {
 	ctx := context.Background()
 	d := newTestDirectory(t, nil)
 
 	idA, pubA, _ := testIdentity(t)
 	idB, pubB, _ := testIdentity(t)
 
-	// peerRecord tags partition=hstles; build a second node on another partition.
+	// peerRecord tags testPartition; build a second node on another partition.
 	if err := d.Ingest(ctx, peerRecord(t, idA, pubA, 100<<16, []string{"auth"}, "svc-a")); err != nil {
 		t.Fatal(err)
 	}
 	other := peerRecord(t, idB, pubB, 100<<16, []string{"auth"}, "svc-b")
-	other.Body = peerBodyWithTenant(t, pubB, []string{"auth"}, "svc-b", "other-tenant")
+	other.Body = peerBodyWithPartition(t, pubB, []string{"auth"}, "svc-b", "other-tenant")
 	if err := d.Ingest(ctx, other); err != nil {
 		t.Fatal(err)
 	}
 
-	ms, err := d.Members(ctx, testTenantID)
+	ms, err := d.Members(ctx, testPartitionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(ms) != 1 || ms[0].NodeID != idA {
 		t.Fatalf("Members(%q) = %d entries %v — want exactly the one node on that "+
-			"tenant; the parameter is not being enforced", testTenantID, len(ms), ms)
+			"partition; the parameter is not being enforced", testPartitionID, len(ms), ms)
 	}
 
 	// Control: the other partition's node IS present, so the 1 above is a filter
@@ -324,10 +321,10 @@ func TestTenantScopingActuallyFilters(t *testing.T) {
 	}
 
 	// Role and reach indexes must scope too, or the isolation is partial.
-	if n, _ := d.NodesByRole(ctx, testTenantID, "auth"); len(n) != 1 || n[0] != idA {
-		t.Fatalf("NodesByRole leaked across tenants: %v", n)
+	if n, _ := d.NodesByRole(ctx, testPartitionID, "auth"); len(n) != 1 || n[0] != idA {
+		t.Fatalf("NodesByRole leaked across partitions: %v", n)
 	}
-	if r, _ := d.Reach(ctx, testTenantID, idB); len(r) != 0 {
-		t.Fatalf("Reach returned another tenant's addresses: %v", r)
+	if r, _ := d.Reach(ctx, testPartitionID, idB); len(r) != 0 {
+		t.Fatalf("Reach returned another partition's addresses: %v", r)
 	}
 }
