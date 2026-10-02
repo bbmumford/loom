@@ -18,12 +18,12 @@ import (
 
 const testInferenceCap = "orbtr.ai:inference.dispatch"
 
-// requirementProbe declares ScopeAllowlisted, which customerScopePolicy admits
+// requirementProbe declares ScopeAllowlisted, which typedPrincipalScopePolicy admits
 // for any principal with a pinned axis, plus an optional Requirement. With a
 // Requirement declared, a denial can therefore only come from the
 // authorization arm, never from the scope tag.
 type requirementProbe struct {
-	customerPrincipalProbe
+	typedPrincipalProbe
 	req *rpcscope.Requirement
 }
 
@@ -48,7 +48,7 @@ func (grantAuthorizer) HasCapability(p rpcscope.AuthenticatedPrincipal, capabili
 // within-transport axis when it stamps the sealed principal, as a consumer's
 // AuthenticatedPrincipalStamper does: loom rebuilds the wire identity with no
 // partition, so the nexus arm sees one only after this stamp.
-type partitionStampingValidator struct{ customerPrincipalValidator }
+type partitionStampingValidator struct{ typedPrincipalValidator }
 
 func (partitionStampingValidator) WithAuthenticatedPrincipal(
 	ctx context.Context,
@@ -66,7 +66,7 @@ func (partitionStampingValidator) WithAuthenticatedPrincipal(
 func requirementServer(t *testing.T, probe *requirementProbe, authz *rpcscope.Policy) *RPCServer {
 	t.Helper()
 	registry := handlers.NewHandlerRegistry()
-	registry.SetPresencePolicy(customerScopePolicy())
+	registry.SetPresencePolicy(typedPrincipalScopePolicy())
 	if authz != nil {
 		registry.SetAuthzPolicy(authz)
 	}
@@ -79,7 +79,7 @@ func requirementServer(t *testing.T, probe *requirementProbe, authz *rpcscope.Po
 }
 
 func requirementRequest(grants []string, axes ...*pb.ScopeAxis) *pb.RPCRequest {
-	req := customerPrincipalRequest()
+	req := typedPrincipalRequest()
 	req.Principal.Scopes = grants
 	if len(axes) > 0 {
 		req.Principal.Axes = axes
@@ -118,7 +118,7 @@ func TestMeshRequirementCapabilityArm(t *testing.T) {
 	})
 
 	// The scope tag alone would admit this principal (ScopeAllowlisted under
-	// customerScopePolicy); the declared Requirement must still fail closed
+	// typedPrincipalScopePolicy); the declared Requirement must still fail closed
 	// when no authorization policy is configured.
 	t.Run("with no authorization policy the handler is denied, not judged by its tag", func(t *testing.T) {
 		probe := &requirementProbe{req: &capability}

@@ -130,8 +130,8 @@ func TestFloorDisagreementIgnoresSilenceAndCatchesRealConflict(t *testing.T) {
 
 // 🛑 THE NEGATIVE ASSERTION, AND IT IS THE POINT OF THE WHOLE FILE.
 // rankClaims must produce an identical ordering whatever the floors say. If a
-// change ever makes the floor rank, ME-Q06 has been answered by implementation
-// rather than by @owner, and this test is what catches it.
+// change ever makes the floor rank, whether floors rank has been settled by
+// implementation rather than by a decision, and this test is what catches it.
 func TestTheCardinalityFloorDoesNotAffectRanking(t *testing.T) {
 	base := map[string]roleClaim{
 		"node-a": {body: claimBody{NodeID: "node-a"}, hlc: 300, rung: 1, minHolders: floorUnset},

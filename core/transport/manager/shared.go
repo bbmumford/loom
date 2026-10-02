@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 
 	"github.com/ORBTR/aether"
@@ -117,6 +118,21 @@ func (s *SharedTransport) PartitionCount() int {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return len(s.partitionKeys)
+}
+
+// Partitions returns the partitions registered on this transport, sorted, so a
+// caller that advertises or compares them gets the same answer for the same set.
+// node's Runtime reads it to decide which partition its peer record names as the
+// one it accepts dials under.
+func (s *SharedTransport) Partitions() []aether.ScopeID {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]aether.ScopeID, 0, len(s.partitionKeys))
+	for id := range s.partitionKeys {
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
+	return out
 }
 
 // ResolveKeys implements noise.PartitionKeyResolver for the listener's preamble handling.

@@ -124,9 +124,9 @@ func TestWithAuthenticatedPrincipal_InvalidFailsClosed(t *testing.T) {
 	}
 }
 
-// HSTLES-shaped positive: a (platform, customer-org, user) identity — the shape
-// hstles NewScopeIdentity produces — survives validation and reads back whole.
-func TestHSTLESShapedPositiveSurvives(t *testing.T) {
+// Two-axis positive: an identity with a transport-pinned value, a
+// within-transport value and a subject survives validation and reads back whole.
+func TestTwoAxisIdentityWithSubjectSurvives(t *testing.T) {
 	id := mustIdentity(t, "user-x",
 		ScopeValue{Name: AxisTransportPinned, Value: "orbtr"},
 		ScopeValue{Name: AxisWithinTransport, Value: "org-A"})

@@ -22,10 +22,10 @@ import (
 	"github.com/bbmumford/loom/ports"
 )
 
-const testTenant = "hstles"
+const testPartition = "hstles"
 
-// testTenantID is the port-level form of testTenant.
-const testTenantID = ports.Partition(testTenant)
+// testPartitionID is the port-level form of testPartition.
+const testPartitionID = ports.Partition(testPartition)
 
 func applyLAD(t *testing.T, c *ladcache.DirectoryCache, topic lad.Topic, nodeID string, body any) {
 	t.Helper()
@@ -35,7 +35,7 @@ func applyLAD(t *testing.T, c *ladcache.DirectoryCache, topic lad.Topic, nodeID 
 	}
 	rec := lad.Record{
 		Topic:     topic,
-		Partition: testTenant,
+		Partition: testPartition,
 		NodeID:    nodeID,
 		Body:      b,
 		Timestamp: time.Now(),
@@ -50,7 +50,7 @@ func applyLAD(t *testing.T, c *ladcache.DirectoryCache, topic lad.Topic, nodeID 
 func ladSideOfTheSameNode(t *testing.T, c *ladcache.DirectoryCache, id ports.NodeID, roles []string, service string) {
 	t.Helper()
 	applyLAD(t, c, lad.TopicMember, string(id), lad.MemberRecord{
-		Partition: testTenant,
+		Partition: testPartition,
 		NodeID:    string(id),
 		CreatedAt: time.Now(),
 		// Keys copied from the producer, node/lad_reach_bridge.go:156-158 —
@@ -59,14 +59,14 @@ func ladSideOfTheSameNode(t *testing.T, c *ladcache.DirectoryCache, id ports.Nod
 		Attrs: map[string]string{"serviceName": service, "region": "syd"},
 	})
 	applyLAD(t, c, lad.TopicRole, string(id), lad.RoleRecord{
-		Partition: testTenant,
+		Partition: testPartition,
 		NodeID:    string(id),
 		Roles:     roles,
 		Handlers:  []lad.HandlerMetadata{{Name: "hstles." + service + ".ping"}},
 		Updated:   time.Now(),
 	})
 	applyLAD(t, c, lad.TopicReach, string(id), lad.ReachRecord{
-		Partition: testTenant,
+		Partition: testPartition,
 		NodeID:    string(id),
 		Region:    "syd",
 		Addresses: []lad.ReachAddress{
@@ -107,7 +107,7 @@ func TestLADAndSwarmAgreeOnTheTypedProjectionsOfTheSameNode(t *testing.T) {
 	ladSide, _ := newLADDirectory(t)
 	ladSideOfTheSameNode(t, ladSide.cache, idA, roles, "auth-svc")
 
-	rep, err := CompareDirectories(ctx, swarmSide, ladSide, testTenantID, roles)
+	rep, err := CompareDirectories(ctx, swarmSide, ladSide, testPartitionID, roles)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestLADSwarmDivergenceIsReported(t *testing.T) {
 	// Same node, DIFFERENT role set.
 	ladSideOfTheSameNode(t, ladSide.cache, idA, []string{"billing"}, "auth-svc")
 
-	rep, err := CompareDirectories(ctx, swarmSide, ladSide, testTenantID, []string{"auth", "billing"})
+	rep, err := CompareDirectories(ctx, swarmSide, ladSide, testPartitionID, []string{"auth", "billing"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +191,7 @@ func TestLivenessOverrideExpiresAndEvictionResumes(t *testing.T) {
 
 	// A member last seen well past the gossip cutoff: evictable on sight.
 	applyLAD(t, c, lad.TopicMember, id, lad.MemberRecord{
-		Partition: testTenant,
+		Partition: testPartition,
 		NodeID:    id,
 		CreatedAt: time.Now().Add(-30 * time.Minute),
 	})
@@ -222,7 +222,7 @@ func TestZeroTTLClearsTheOverride(t *testing.T) {
 	d, c := newLADDirectory(t)
 	id := "node-clear"
 	applyLAD(t, c, lad.TopicMember, id, lad.MemberRecord{
-		Partition: testTenant,
+		Partition: testPartition,
 		NodeID:    id,
 		CreatedAt: time.Now().Add(-30 * time.Minute),
 	})
@@ -285,7 +285,7 @@ func TestSubscribeDeliversHistoryAndLiveExactlyOnce(t *testing.T) {
 	defer cancel()
 
 	applyLAD(t, c, lad.TopicMember, "node-history", lad.MemberRecord{
-		Partition: testTenant, NodeID: "node-history", CreatedAt: time.Now(),
+		Partition: testPartition, NodeID: "node-history", CreatedAt: time.Now(),
 	})
 
 	ch, err := d.Subscribe(ctx, []ports.Topic{FleetPeerTopic}, 0)
@@ -294,7 +294,7 @@ func TestSubscribeDeliversHistoryAndLiveExactlyOnce(t *testing.T) {
 	}
 
 	applyLAD(t, c, lad.TopicMember, "node-live", lad.MemberRecord{
-		Partition: testTenant, NodeID: "node-live", CreatedAt: time.Now(),
+		Partition: testPartition, NodeID: "node-live", CreatedAt: time.Now(),
 	})
 
 	got := map[ports.NodeID]int{}
@@ -330,7 +330,7 @@ func TestReachAddressesAreDialableForIPv6(t *testing.T) {
 	if err := d.Ingest(ctx, peerRecord(t, idA, pubA, 100<<16, []string{"auth"}, "auth-svc")); err != nil {
 		t.Fatal(err)
 	}
-	addrs, err := d.Reach(ctx, testTenantID, idA)
+	addrs, err := d.Reach(ctx, testPartitionID, idA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -379,30 +379,28 @@ func TestUnprojectedTopicsErrorRatherThanReturningEmpty(t *testing.T) {
 	}
 }
 
-// CHARACTERISATION — the measured limit of ports.Record as an envelope for
-// LAD-signed records, and a hard prerequisite for stage 2's "signed
-// anchor-snapshot input".
+// CHARACTERISATION of ports.Record as an envelope for LAD-signed records. The
+// signed anchor-snapshot input needs author-signed provenance to survive
+// gossip, persistence, snapshot, recovery and projection.
 //
-// §0.5.4 requires that "owner-signed provenance survives gossip, persistence,
-// snapshot, recovery, and PROJECTION". For swarm-native records it does:
-// swarm's signable bytes are fields ports.Record carries. For LAD records it
-// does NOT. lad.signatureContent covers Topic, NodeID, Partition, Body,
-// Timestamp, LamportClock, Seq, HLC, ExpiresAt(UnixNano), Tombstone,
-// DeletedAt, TombstoneReason, AuthorPubKey, BlobCID — and ports.Record carries
-// no Partition, no Seq, no Timestamp, and only MILLISECOND expiry.
+// For swarm-native records it does: swarm's signable bytes are fields
+// ports.Record carries. For LAD records it does not. lad.signatureContent
+// covers Topic, NodeID, Partition, Body, Timestamp, LamportClock, Seq, HLC,
+// ExpiresAt(UnixNano), Tombstone, DeletedAt, TombstoneReason, AuthorPubKey and
+// BlobCID, and ports.Record carries no Partition, no Seq, no Timestamp and only
+// a millisecond expiry.
 //
 // So anchor.Generator.Generate([]lad.Record) cannot be fed from a
 // ports.DirectorySnapshot: every record's signature would fail to verify. This
-// test pins WHICH fields are missing, so the fix is a checklist rather than a
-// rediscovery — and so that if ports.Record later gains them, the test says so
-// by failing at the step that no longer matters.
+// test pins which fields are missing, and fails at the step that stops
+// mattering once ports.Record carries them.
 func TestLADSignedRecordDoesNotSurviveThePortEnvelope(t *testing.T) {
 	_, priv, err := ed25519.GenerateKey(crand.Reader)
 	if err != nil {
 		t.Fatal(err)
 	}
 	orig := lad.Record{
-		Topic: lad.TopicMember, Partition: testTenant, NodeID: "node-1", Seq: 42,
+		Topic: lad.TopicMember, Partition: testPartition, NodeID: "node-1", Seq: 42,
 		Body: []byte(`{"x":1}`), Timestamp: time.Now(), LamportClock: 7,
 		HLCTimestamp: 99 << 16, ExpiresAt: time.Now().Add(time.Hour),
 	}
@@ -443,24 +441,25 @@ func TestLADSignedRecordDoesNotSurviveThePortEnvelope(t *testing.T) {
 	}
 }
 
-// PINNED MEASUREMENT (#M-515): the LAD read path carries NO owner signature,
-// and its Body is a re-marshal rather than the received bytes.
+// The LAD read path carries no author signature, and its Body is a re-marshal
+// rather than the received bytes.
 //
-// This is not a defect in the adapter — it is a property of ladcache v0.0.20's
-// only bulk read, ChangesSinceHLC, which rebuilds records from the typed store
-// and never populates Signature/AuthorPubKey. It is pinned here because the
-// opposite is easy to assume: ports.Record documents Body/Signature as the
-// owner's verbatim bytes, this adapter copies them verbatim, and both
-// statements are true while the guarantee still fails.
+// The adapter copies what it is given; the loss is in ladcache's only bulk read,
+// ChangesSinceHLC, which rebuilds records from the typed store and never
+// populates Signature or AuthorPubKey. It is pinned because the opposite is
+// easy to assume: ports.Record documents Body and Signature as the author's
+// verbatim bytes, this adapter copies them verbatim, and both statements hold
+// while the guarantee fails.
 //
-// The trap worth keeping: the re-marshalled body had the SAME LENGTH as the
-// owner's wire bytes (282) and different content. A length assertion passes.
-func TestLADReadPathCarriesNoOwnerSignature(t *testing.T) {
+// The re-marshalled body has the same length as the author's wire bytes (282)
+// and different content, so a length assertion passes where an equality check
+// fails.
+func TestLADReadPathCarriesNoAuthorSignature(t *testing.T) {
 	d, c := newLADDirectory(t)
 	ctx := context.Background()
 
 	rr := lad.ReachRecord{
-		Partition: testTenant, NodeID: "node-1", Seq: 5,
+		Partition: testPartition, NodeID: "node-1", Seq: 5,
 		Addresses: []lad.ReachAddress{{Host: "1.2.3.4", Port: 443, Proto: "ws"}},
 		UpdatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour),
 	}
@@ -469,7 +468,7 @@ func TestLADReadPathCarriesNoOwnerSignature(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := c.Apply(lad.Record{
-		Topic: lad.TopicReach, Partition: testTenant, NodeID: "node-1", Seq: 5,
+		Topic: lad.TopicReach, Partition: testPartition, NodeID: "node-1", Seq: 5,
 		Body: wire, Timestamp: time.Now(),
 		Signature: []byte("OWNER-SIGNATURE-BYTES"), AuthorPubKey: []byte("OWNER-PUBKEY"),
 	}); err != nil {
@@ -511,9 +510,9 @@ func TestLADReadPathCarriesNoOwnerSignature(t *testing.T) {
 			len(reach.Body), len(wire))
 	}
 
-	// Control: the cache DOES retain the owner's bytes — on a different API.
+	// Control: the cache DOES retain the author's bytes — on a different API.
 	// This is why GetLastReachBody cannot be replaced by RecordsByTopic.
-	if got := c.GetLastReachBody(testTenant, "node-1"); string(got) != string(wire) {
+	if got := c.GetLastReachBody(testPartition, "node-1"); string(got) != string(wire) {
 		t.Fatalf("control failed: GetLastReachBody no longer returns the received "+
 			"bytes (%d vs %d) — the claim that it is the only verbatim route is stale",
 			len(got), len(wire))
@@ -530,7 +529,7 @@ func TestRawReachTierPreservesTheProducersVocabulary(t *testing.T) {
 	idA, _, _ := testIdentity(t)
 	ladSideOfTheSameNode(t, c, idA, []string{"auth"}, "auth-svc")
 
-	addrs, err := d.Reach(ctx, testTenantID, idA)
+	addrs, err := d.Reach(ctx, testPartitionID, idA)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -576,11 +575,11 @@ func TestMemberAttrsCarryTheProducersOpenMetadata(t *testing.T) {
 	d, c := newLADDirectory(t)
 	ctx := context.Background()
 	applyLAD(t, c, lad.TopicMember, "node-attrs", lad.MemberRecord{
-		Partition: testTenant, NodeID: "node-attrs", CreatedAt: time.Now(),
+		Partition: testPartition, NodeID: "node-attrs", CreatedAt: time.Now(),
 		Attrs: map[string]string{"serviceName": "svc", "http_port": "8080"},
 	})
 
-	m, ok, err := d.Member(ctx, testTenantID, ports.NodeID("node-attrs"))
+	m, ok, err := d.Member(ctx, testPartitionID, ports.NodeID("node-attrs"))
 	if err != nil || !ok {
 		t.Fatalf("member not found: ok=%v err=%v", ok, err)
 	}

@@ -72,7 +72,7 @@ func reportFor(t *testing.T, e *meshHealthEvaluator) *ServiceHealthReport {
 
 // Layer 4 wins outright: a direct connection is healthy at ANY grade, and the
 // comment is explicit that Grade C must not read as degraded because
-// cross-org nodes can only ever use Grade C.
+// cross-origin nodes can only ever use Grade C.
 func TestDirectConnectionIsHealthyEvenAtTheLowestUsableGrade(t *testing.T) {
 	e := evaluatorFor(t, snapWith(t), nil,
 		ConnectionInfo{PeerNodeID: testNodeIDB, Transport: "websocket", Grade: GradeC, ConnCount: 1})
@@ -535,7 +535,7 @@ func TestMeshStatusReturnsTheCachedVerdict(t *testing.T) {
 // The cross-repo boundary contract.
 //
 // MeshStatus is consumed OUTSIDE this repository —
-// HSTLES Library/domain/monitoring/service/checker.go:177 branches on the
+// a monitoring service outside this module branches on the
 // exact literals "healthy" / "degraded" / "connecting" / "unreachable", and
 // maps "unreachable" to partial_outage, which opens an auto-incident. So the
 // string set is a published contract, not an internal label.

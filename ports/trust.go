@@ -47,7 +47,7 @@ type TrustPolicy interface {
 	VerifyNodeKey(id NodeID, pub ed25519.PublicKey) error
 
 	// AuthorizePublish authorizes p to write the given topic (partition scope +
-	// topic ownership; role.secrets.<role> additionally requires the role's
+	// the author's own topic slot; role.secrets.<role> additionally requires the role's
 	// publisher entitlement).
 	AuthorizePublish(ctx context.Context, p Principal, topic Topic) error
 

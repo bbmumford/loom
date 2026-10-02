@@ -16,7 +16,7 @@
 // Field vocabulary (canonical keys — do NOT invent new names):
 //
 //	subsystem  — dotted package path, e.g. "security.middleware.auth"
-//	reason     — snake_case machine token, e.g. "org_access_denied"
+//	reason     — snake_case machine token, e.g. "scope_denied"
 //	actor      — the principal being judged (opaque id)
 //	peer       — mesh peer node id (mesh subsystems)
 //	decision   — "allow" | "deny" | "challenge"
@@ -38,7 +38,7 @@ import (
 )
 
 // Canonical field keys. Call sites SHOULD use these so a dashboard search for
-// "reason=org_access_denied" hits every emitter.
+// "reason=scope_denied" hits every emitter.
 const (
 	KeySubsystem = "subsystem"
 	KeyReason    = "reason"

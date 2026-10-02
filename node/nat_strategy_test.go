@@ -14,8 +14,7 @@ import (
 
 // TestNATClassifyIdempotent verifies that classifyNATBehaviour is "first
 // success wins": once natStrategy is populated, a subsequent call is a
-// no-op and must not overwrite the existing strategy. This mirrors the
-// ORBTR agent's DiscoverNAT idempotency guard.
+// no-op and must not overwrite the existing strategy.
 func TestNATClassifyIdempotent(t *testing.T) {
 	rt := &Runtime{}
 

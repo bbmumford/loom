@@ -40,9 +40,10 @@ func makeTestTransport(t *testing.T, keys []string) (*noise.NoiseTransport, aeth
 	return nt, nodeID
 }
 
-// TestCrossTenantDialRejection verifies that Tenant A's transport cannot complete
-// a handshake with Tenant B's listener when they use different PSKs.
-func TestCrossTenantDialRejection(t *testing.T) {
+// TestCrossPartitionDialRejection verifies that partition alpha's transport
+// cannot complete a handshake with partition beta's listener when they use
+// different PSKs.
+func TestCrossPartitionDialRejection(t *testing.T) {
 	tA, _ := makeTestTransport(t, []string{"psk-alpha"})
 	tB, nodeB := makeTestTransport(t, []string{"psk-beta"})
 
@@ -54,7 +55,7 @@ func TestCrossTenantDialRejection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	// Start listener on Tenant B's aether.
+	// Start the listener on partition beta's transport.
 	listener, err := tB.Listen(ctx)
 	if err != nil {
 		t.Fatalf("listen: %v", err)
@@ -63,8 +64,8 @@ func TestCrossTenantDialRejection(t *testing.T) {
 
 	serverAddr := listener.Addr().String()
 
-	// Dial through TransportManager as Tenant A → targets Tenant B's listener.
-	// Tenant A uses "psk-alpha" as prologue; Tenant B's listener expects "psk-beta".
+	// Dial through TransportManager as partition alpha → targets beta's listener.
+	// Alpha uses "psk-alpha" as prologue; beta's listener expects "psk-beta".
 	// The handshake must fail because the prologues don't match.
 	_, err = mgr.Dial(ctx, "alpha", aether.Target{
 		Address: serverAddr,
@@ -73,13 +74,13 @@ func TestCrossTenantDialRejection(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected handshake to fail due to PSK mismatch, but dial succeeded")
 	}
-	t.Logf("Cross-tenant dial correctly rejected: %v", err)
+	t.Logf("Cross-partition dial correctly rejected: %v", err)
 }
 
-// TestPreambleSpoofingRejection verifies that an attacker who claims to be
-// Tenant B in the preamble but uses Tenant A's PSK is rejected. The responder
-// resolves Tenant B's keys from the preamble, which won't match the attacker's
-// CRC32 fingerprint (derived from Tenant A's key).
+// TestPreambleSpoofingRejection verifies that an attacker who names one
+// partition in the preamble but holds another partition's PSK is rejected. The
+// responder resolves the named partition's keys from the preamble, which do not
+// match the attacker's CRC32 fingerprint (derived from the key it holds).
 func TestPreambleSpoofingRejection(t *testing.T) {
 	// Create shared transport with two partitions.
 	_, sharedPriv, _ := ed25519.GenerateKey(rand.Reader)
@@ -110,7 +111,7 @@ func TestPreambleSpoofingRejection(t *testing.T) {
 
 	serverAddr := listener.Addr().String()
 
-	// Create an attacker transport that has honest-tenant's key.
+	// Create an attacker transport that holds honest-partition's key.
 	_, attackerPriv, _ := ed25519.GenerateKey(rand.Reader)
 	attackerPub := attackerPriv.Public().(ed25519.PublicKey)
 	attackerNodeID, _ := aether.NewNodeID(attackerPub)
@@ -140,11 +141,11 @@ func TestPreambleSpoofingRejection(t *testing.T) {
 	t.Logf("Preamble spoofing correctly rejected: %v", err)
 }
 
-// TestInfrastructureServesAllTenants verifies that a shared transport listener
+// TestInfrastructureServesAllPartitions verifies that a shared transport listener
 // accepts handshakes from multiple partitions, each using their own PSK.
 // Each partition uses a separate dialer transport with its own keypair (Noise
 // handshakes require different static keys on each side).
-func TestInfrastructureServesAllTenants(t *testing.T) {
+func TestInfrastructureServesAllPartitions(t *testing.T) {
 	// Server: shared transport that accepts multiple partitions
 	_, serverPriv, _ := ed25519.GenerateKey(rand.Reader)
 	serverPub := serverPriv.Public().(ed25519.PublicKey)
@@ -213,7 +214,7 @@ func TestInfrastructureServesAllTenants(t *testing.T) {
 		}
 	}()
 
-	// Tenant A dials server — network key match resolves authentication
+	// The first partition dials the server; its network key resolves authentication.
 	sessA, err := mgr.Dial(ctx, "tenant-a", aether.Target{
 		Address: serverAddr,
 		NodeID:  serverNodeID,
@@ -223,7 +224,7 @@ func TestInfrastructureServesAllTenants(t *testing.T) {
 	}
 	defer sessA.Close()
 
-	// Tenant B dials server
+	// The second partition dials the server.
 	sessB, err := mgr.Dial(ctx, "tenant-b", aether.Target{
 		Address: serverAddr,
 		NodeID:  serverNodeID,
@@ -250,8 +251,8 @@ func TestInfrastructureServesAllTenants(t *testing.T) {
 	t.Log("Infrastructure served both partitions successfully")
 }
 
-// TestDedicatedTransportIsolation verifies that ORBTR's dedicated transport
-// rejects connections from clients using a different PSK.
+// TestDedicatedTransportIsolation verifies that a dedicated transport rejects
+// connections from clients using a different PSK.
 func TestDedicatedTransportIsolation(t *testing.T) {
 	orbtrTransport, orbtrNodeID := makeTestTransport(t, []string{"orbtr-secret-psk"})
 

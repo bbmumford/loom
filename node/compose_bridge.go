@@ -87,7 +87,7 @@ type ComposeTriggerPrincipalProvider interface {
 //                attach, RoleMissing) via RegisterKind.
 //   OBSERVABLE — the existing Prometheus export + /mesh/status wire
 //                contracts are untouched; the scope tracker inside role
-//                activation gives per-role function ownership.
+//                activation attributes each function to its role.
 
 // ComposeInvoke dispatches one FunctionID with an opaque event payload and
 // maps the outcome onto compose.FunctionResult:

@@ -15,17 +15,16 @@ import (
 
 // Covers CallViaBidi's "no usable bidi" contract and evictDeadBidiForSession.
 //
-// From CallViaBidi's own comment: when a session closes, BidiRPC.readLoop exits and
-// closes `done` BEFORE unregisterMeshSession evicts the bidi entry. A call
-// inside that window gets a still-registered-but-dead bidi. Without the
-// IsAlive check the dispatch layer surfaced "bidi stream closed" as the probe
-// error and SKIPPED its dynamic-stream fallback — which produced fleet-wide
-// "all 3 probes failed: bidi stream closed" auth-callback failures
-// (CompleteOAuth) when WS sessions to cross-org anchors churned.
+// When a session closes, BidiRPC.readLoop exits and closes `done` BEFORE
+// unregisterMeshSession evicts the bidi entry, so a call inside that window
+// finds a still-registered but dead bidi. Reported as a bidi, it would make the
+// dispatch layer surface "bidi stream closed" as the probe error and skip its
+// dynamic-stream fallback, so a call such as CompleteOAuth to a peer whose WS
+// session churns would fail on every probe.
 //
-// The contract that fixes it: a dead bidi must be reported as NO BIDI —
-// (nil, false, nil) — so the caller falls back, and the stale entry must be
-// evicted so the next call goes straight to the dynamic-stream path.
+// The contract: a dead bidi is reported as NO BIDI — (nil, false, nil) — so
+// the caller falls back, and the stale entry is evicted so the next call goes
+// straight to the dynamic-stream path.
 //
 // The fixture is small because IsAlive() only reads a channel, so a dead bidi
 // is a struct literal holding a closed one.

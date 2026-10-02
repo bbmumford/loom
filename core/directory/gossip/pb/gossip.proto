@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package hstles.mesh.gossip.v1;
+package loom.mesh.gossip.v1;
 
-option go_package = "github.com/hstles/library/mesh/core/directory/gossip/pb";
+option go_package = "github.com/bbmumford/loom/core/directory/gossip/pb";
 
 // GossipEnvelope is the wire format for gossip exchanges.
 // The records field carries opaque serialised payloads — the gossip engine

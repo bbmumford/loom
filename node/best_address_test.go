@@ -26,7 +26,7 @@ import (
 // the one whose violation is both silent and dangerous: a CROSS-ORIGIN peer
 // must never be handed a private-IP candidate. Tier 0 is gated on
 // `!peerCrossOrigin`; if a migration flips or drops that gate, this node would
-// attempt a private dial to a foreign org — routable to the wrong machine on a
+// attempt a private dial to a foreign origin — routable to the wrong machine on a
 // shared ULA range, and failing silently rather than erroring.
 //
 // Scope is deliberately narrow: no AddressTracker, no swarm AddressTable
@@ -268,19 +268,19 @@ func TestBestAddressFallsBackToSnapshotWhenTableHasNoUDPEntry(t *testing.T) {
 	}
 }
 
-// 🛑 THE TIER-3 ASYMMETRY REPRODUCES A NAMED PRODUCTION INCIDENT IF INVERTED.
+// 🛑 THE TIER-3 ASYMMETRY IS LOAD-BEARING IN BOTH DIRECTIONS.
 //
-// Cross-org noise-UDP falls back to the peer's service hostname on the
-// configured VL1 UDP port. Same-org dials deliberately DO NOT, even though the
+// Cross-origin noise-UDP falls back to the peer's service hostname on the
+// configured VL1 UDP port. Same-origin dials deliberately DO NOT, even though the
 // hostname is equally available — because anycast UDP cannot guarantee
 // per-packet machine affinity: the handshake succeeds, then later datagrams
 // 5-tuple-hash to a different machine with no session state and the session
-// dies. The code comment records this as the observed v0.0.388 symptom
-// ("walker probes succeeded, then the upgraded session died inside a single
-// ping window").
+// dies. bestAddress's Tier-3 comment (peer_connections.go) states the same
+// reason: the upgraded session dies inside a single ping window.
 //
-// So this is not a style preference: making the fallback symmetric
-// reintroduces a diagnosed outage. Pinned in both directions.
+// So this is not a style preference: a symmetric fallback would hand same-origin
+// noise-UDP an anycast hostname whose sessions die after the handshake. Pinned in
+// both directions.
 func hostnameManager(t *testing.T, crossOrigin bool) *ConnectionManager {
 	t.Helper()
 	c := ladcache.NewDirectoryCache()
@@ -309,7 +309,7 @@ func hostnameManager(t *testing.T, crossOrigin bool) *ConnectionManager {
 	return &ConnectionManager{rt: rt}
 }
 
-func TestTier3HostnameFallbackIsCrossOrgOnly(t *testing.T) {
+func TestTier3HostnameFallbackIsCrossOriginOnly(t *testing.T) {
 	// No addresses at all, so the hostname fallback is the ONLY possible
 	// candidate — this isolates Tier 3 from every other tier.
 	t.Run("cross-org GETS the hostname fallback", func(t *testing.T) {
@@ -389,7 +389,7 @@ func TestWebSocketTierReturnsBareHostnameNotHostPort(t *testing.T) {
 	m := &ConnectionManager{rt: &Runtime{ctx: context.Background()}}
 	peer := &peerConn{
 		nodeID:      testNodeIDA,
-		crossOrigin: true, // keep the same-org 6PN WS path out of the way
+		crossOrigin: true, // keep the same-origin 6PN WS path out of the way
 		addresses: []lad.ReachAddress{
 			{Host: "devices.orbtr.io", Port: 443, Proto: "wss", Scope: "public"},
 		},

@@ -280,7 +280,7 @@ func TestFailedScopedRegistrationPreservesPreexistingLiveCapability(t *testing.T
 	}
 }
 
-func TestSimultaneousActiveRoleScopesPreserveLateOwnershipAndTeardownIsolation(t *testing.T) {
+func TestSimultaneousActiveRoleScopesPreserveLateAttributionAndTeardownIsolation(t *testing.T) {
 	rt := activationFixture("system")
 	var authScope ports.RegistrationScope
 	var billingScope ports.RegistrationScope

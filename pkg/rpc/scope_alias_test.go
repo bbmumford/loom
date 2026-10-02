@@ -78,6 +78,6 @@ func TestScopeAlias_ProfileEnforceScopeParity(t *testing.T) {
 		t.Fatalf("EnforceScope(ScopePartition, empty ctx) unexpectedly passed — Profile tier must require a tenant axis")
 	}
 	// handlers.validateScope side is exercised in
-	// mesh/node/handlers/scope_test.go:TestValidateTenantScope_Profile_MissingTenantFailsClosed.
+	// node/handlers/scope_test.go:TestValidateScope_Profile_MissingPartitionFailsClosed.
 	// Both together prove parity across the two dispatch surfaces.
 }

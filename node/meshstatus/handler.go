@@ -66,27 +66,29 @@ type RuntimeProvider interface {
 
 // DirectoryProvider abstracts the LAD directory cache.
 type DirectoryProvider interface {
-	Members(ctx context.Context, tenant string) ([]lad.MemberRecord, error)
-	Roles(ctx context.Context, tenant string, query ladcache.RoleQuery) ([]lad.RoleRecord, error)
-	Reach(ctx context.Context, tenant string, query ladcache.ReachQuery) ([]lad.ReachRecord, error)
+	Members(ctx context.Context, partition string) ([]lad.MemberRecord, error)
+	Roles(ctx context.Context, partition string, query ladcache.RoleQuery) ([]lad.RoleRecord, error)
+	Reach(ctx context.Context, partition string, query ladcache.ReachQuery) ([]lad.ReachRecord, error)
 }
 
 // Option configures NewHandler and NewHandlerFromRuntime.
 type Option func(*handlerOptions)
 
 // handlerOptions holds the settings Options write. allowedOrigins is nil
-// until WithAllowedOrigins runs; nil selects the built-in origins in
+// until WithAllowedOrigins runs; nil selects the built-in origin in
 // originAllowed.
 type handlerOptions struct {
 	allowedOrigins []string
 }
 
-// WithAllowedOrigins replaces the built-in CORS allow-list with exactly
+// WithAllowedOrigins replaces the built-in CORS origin with exactly
 // origins: the handler echoes a request's Origin header in
 // Access-Control-Allow-Origin only when it equals one entry byte-for-byte
-// (scheme://host[:port]). Calling it with no origins admits no
-// cross-origin caller; empty entries never match. The slice is copied, so
-// the caller may reuse it. The last WithAllowedOrigins passed wins.
+// (scheme://host[:port]). Calling it with no origins admits no cross-origin
+// caller; empty entries never match. A composition root that serves a
+// browser page reading /mesh/status passes that page's origin here. The
+// slice is copied, so the caller may reuse it. The last WithAllowedOrigins
+// passed wins.
 func WithAllowedOrigins(origins ...string) Option {
 	list := make([]string, len(origins))
 	copy(list, origins)
@@ -97,15 +99,16 @@ func WithAllowedOrigins(origins ...string) Option {
 
 // originAllowed reports whether the handler echoes origin in
 // Access-Control-Allow-Origin. configured is nil unless WithAllowedOrigins
-// was passed: nil admits the built-in pair below; a non-nil slice replaces
-// that pair exactly. An empty origin (a request with no Origin header) is
-// never echoed.
+// was passed: nil admits only the built-in origin https://localhost:8080; a
+// non-nil slice replaces it exactly, so an empty one admits nothing. An empty
+// origin (a request with no Origin header) is never echoed, and an empty
+// entry in configured never matches.
 func originAllowed(origin string, configured []string) bool {
 	if origin == "" {
 		return false
 	}
 	if configured == nil {
-		return origin == "https://help.orbtr.io" || origin == "https://localhost:8080"
+		return origin == "https://localhost:8080"
 	}
 	for _, allowed := range configured {
 		if allowed != "" && allowed == origin {
@@ -118,8 +121,8 @@ func originAllowed(origin string, configured []string) bool {
 // NewHandler returns an http.HandlerFunc that serves GET /mesh/status.
 // It exposes public, aggregate mesh status data suitable for external monitoring.
 // Intentionally does NOT expose: private keys, PSKs, partition IDs, IP addresses, handler names.
-// opts are applied in order when the handler is built; with none, CORS
-// admits the built-in origins in originAllowed.
+// opts are applied in order when the handler is built; with no
+// WithAllowedOrigins, CORS admits only the built-in origin in originAllowed.
 func NewHandler(provider RuntimeProvider, platform ports.PlatformInfo, startTime time.Time, opts ...Option) http.HandlerFunc {
 	var settings handlerOptions
 	for _, opt := range opts {

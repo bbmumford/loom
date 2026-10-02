@@ -11,10 +11,10 @@ import (
 	"github.com/ORBTR/aether"
 )
 
-// unregisterMeshSessionWithoutHook has two "am I the owner" guards. The
-// nil-expected guard binds `present` and refuses an absent entry; the
-// non-nil-expected guard did not, so an absent entry produced current == nil,
-// skipped the ownership comparison, and fell through to the teardown.
+// unregisterMeshSessionWithoutHook has two "do I hold the slot" guards, and
+// both bind `present` and refuse an absent entry. Without that check in the
+// non-nil-expected guard, an absent entry would yield current == nil, skip the
+// identity comparison, and fall through to the teardown.
 //
 // Two concurrent teardowns for one peer reach that state: the second finds the
 // entry already removed by the first.

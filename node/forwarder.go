@@ -148,15 +148,15 @@ func isFly6PN(ip net.IP) bool {
 // reload path re-entering startup without tearing the old transport down.
 // The old forwarder's lookup closure is then retained and the new lookup
 // is silently dropped; the warning surfaces that ambiguity to operators.
-func (rt *Runtime) attachIntraOrgForwarder(tr *noise.NoiseTransport, label string) {
+func (rt *Runtime) attachIntraOriginForwarder(tr *noise.NoiseTransport, label string) {
 	if tr == nil {
 		return
 	}
 	if tr.Forwarder() != nil {
-		log.Printf("[NODE] WARN: VL1 cross-org forwarder already attached to %s transport — retaining existing instance; new lookup closure DROPPED (config reload without transport rebuild?)", label)
+		log.Printf("[NODE] WARN: VL1 cross-origin forwarder already attached to %s transport — retaining existing instance; new lookup closure DROPPED (config reload without transport rebuild?)", label)
 		return
 	}
-	fwd := noise.NewIntraOrgForwarder(rt.identity.NodeID, rt.forwarderLookup())
+	fwd := noise.NewIntraOriginForwarder(rt.identity.NodeID, rt.forwarderLookup())
 	tr.SetForwarder(fwd)
-	log.Printf("[NODE] VL1 cross-org forwarder attached to %s transport", label)
+	log.Printf("[NODE] VL1 cross-origin forwarder attached to %s transport", label)
 }

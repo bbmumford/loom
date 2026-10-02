@@ -221,9 +221,17 @@ type peerConn struct {
 	outboundDialed bool               // true if ConnectionManager dialed this peer (not just incoming)
 	bootstrapHost  string             // TLS bootstrap host for re-dial (e.g., "node.example.com")
 
+	// partition is the transport partition this peer's most recent noise-UDP
+	// session was bound to, read off the session's connection when
+	// AcceptMeshConnection registers it (transportPartitionOf). dialPartitionFor
+	// hands it to the next shared-transport dial to this peer. It is kept after
+	// the session closes, so a redial names the partition the peer last proved
+	// in a handshake. "" until such a session registers.
+	partition string
+
 	// dialEligibleSince stamps when this peer first became eligible for an
 	// outbound dial while THIS node is the higher-nodeID (deferring) side of
-	// the pair. Deterministic dial ownership (see dialOwned) has the higher
+	// the pair. The deterministic dial claim (see dialOwned) has the higher
 	// nodeID wait dialOwnershipGrace for the lower nodeID to dial inbound
 	// before dialing anyway. Zero whenever the peer is connected or when we
 	// own the dial; set lazily on the first deferred scan tick.
@@ -284,11 +292,11 @@ type peerConn struct {
 
 // gossipHolder records who currently holds the per-peer gossip-initiator
 // dedup slot. grade is the grade of the underlying transport the
-// owner is running gossip on; cancel terminates the owner's gossip
+// holder is running gossip on; cancel terminates the holder's gossip
 // context (a context.WithCancel-derived child of connCtx), causing
 // RunGossipLoopWithPeer to return without affecting the surrounding
 // session. A new initiator with a strictly higher grade calls cancel
-// to preempt the current owner; the preempted owner's outer
+// to preempt the current holder; the preempted holder's outer
 // initiator loop then sees the slot has been reassigned (or is empty)
 // and waits/retries normally.
 type gossipHolder struct {
@@ -297,11 +305,11 @@ type gossipHolder struct {
 }
 
 // evictGossipOwnerLocked clears the per-peer gossip dedup slot and
-// cancels the existing owner's gossip context, if any. Used by the
+// cancels the existing holder's gossip context, if any. Used by the
 // session-replace and upgrade-promote paths in registerMeshSession
 // where the new (typically higher-grade) session needs to grab the
 // gossip role immediately rather than waiting for the existing
-// owner's natural exit. reason is logged for trace correlation
+// holder's natural exit. reason is logged for trace correlation
 // against [DISPATCH-TRACE] register-exit lines.
 //
 // Caller must NOT hold m.gossipMu; this function takes it. Callers
@@ -593,7 +601,7 @@ const (
 	// start: it dials on tick T, the handshake completes within seconds,
 	// and the inbound session moves the peer to PeerConnected before the
 	// deferring side's next tick at T+scanInterval. Past the grace the
-	// deferring side dials regardless, so a dead or unreachable owner can
+	// deferring side dials regardless, so a dead or unreachable lower side can
 	// never strand the pair.
 	dialOwnershipGrace = scanInterval + 5*time.Second
 
@@ -785,13 +793,13 @@ type ConnectionManager struct {
 	// eventually closes the noise-udp session — bouncing the peer
 	// back to WS permanently.
 	//
-	// So each peer holds a *gossipHolder with the owner's grade and a
+	// So each peer holds a *gossipHolder with the holder's grade and a
 	// preemption channel. A new initiator with a
-	// strictly higher grade can preempt the existing owner by
+	// strictly higher grade can preempt the existing holder by
 	// cancelling its derived gossip context, forcing
 	// RunGossipLoopWithPeer to return; the outer initiator loop
 	// then sees the dedup slot is free (or that ours is now the
-	// owner) and takes over without disturbing the lower-grade
+	// holder) and takes over without disturbing the lower-grade
 	// session itself, which continues to carry RPC, keepalive,
 	// and control traffic.
 	gossipMu     sync.Mutex
@@ -823,9 +831,9 @@ type ConnectionManager struct {
 	//     growing ⇒ packets arrive but classifier or hairpin lookup
 	//     drops them (e.g. target_unknown means LAD reach cache miss).
 	// Surfaced via Runtime.MeshMetrics on /api/monitoring/mesh-debug.
-	crossOrgPreambleDialsAttempted atomic.Uint64
-	crossOrgPreambleDialsSucceeded atomic.Uint64
-	crossOrgPreambleDialsFailed    atomic.Uint64
+	crossOriginPreambleDialsAttempted atomic.Uint64
+	crossOriginPreambleDialsSucceeded atomic.Uint64
+	crossOriginPreambleDialsFailed    atomic.Uint64
 
 	// Cross-origin dial funnel gates. Pinpoint which upstream stage drops
 	// cross-origin noise-UDP dials before they reach the preamble code.
@@ -843,12 +851,12 @@ type ConnectionManager struct {
 	//   BestAddrNonAnycastSelected > 0 && PreambleDialsAttempted == 0 →
 	//     peers advertise direct (non-anycast) public IPs; preamble
 	//     correctly skipped, hairpin not needed
-	crossOrgPickPathNoiseUDPIncluded   atomic.Uint64
-	crossOrgBestAddrPublicUDPCount     atomic.Uint64
-	crossOrgBestAddrCandidatesEmpty    atomic.Uint64
-	crossOrgBestAddrAllDead            atomic.Uint64
-	crossOrgBestAddrNonAnycastSelected atomic.Uint64
-	crossOrgDialNoSuitableAddr         atomic.Uint64
+	crossOriginPickPathNoiseUDPIncluded   atomic.Uint64
+	crossOriginBestAddrPublicUDPCount     atomic.Uint64
+	crossOriginBestAddrCandidatesEmpty    atomic.Uint64
+	crossOriginBestAddrAllDead            atomic.Uint64
+	crossOriginBestAddrNonAnycastSelected atomic.Uint64
+	crossOriginDialNoSuitableAddr         atomic.Uint64
 
 	// Proactive transport-grade upgrade walker telemetry. Each tick of
 	// tryProactiveUpgrades increments walkerTicks; the count of candidate
@@ -1891,7 +1899,7 @@ func (m *ConnectionManager) BudgetStatus() map[string]interface{} {
 	}
 }
 
-// CrossPartitionPreambleStats reports noise-UDP forwarder dial telemetry for
+// CrossOriginPreambleStats reports noise-UDP forwarder dial telemetry for
 // peers of another origin: the number of dialWithProtocol calls that engaged
 // aether's forwarder-preamble path (attempted), and how many returned
 // without / with a dial error (succeeded / failed). The counts are per
@@ -1899,25 +1907,25 @@ func (m *ConnectionManager) BudgetStatus() map[string]interface{} {
 // Runtime.MeshMetrics' receive-side forwarder_drops_* counters to localize
 // WebSocket pinning between Fly.io organisations. See the field definitions
 // on ConnectionManager for the diagnostic decision tree.
-func (m *ConnectionManager) CrossPartitionPreambleStats() (attempted, succeeded, failed uint64) {
-	return m.crossOrgPreambleDialsAttempted.Load(),
-		m.crossOrgPreambleDialsSucceeded.Load(),
-		m.crossOrgPreambleDialsFailed.Load()
+func (m *ConnectionManager) CrossOriginPreambleStats() (attempted, succeeded, failed uint64) {
+	return m.crossOriginPreambleDialsAttempted.Load(),
+		m.crossOriginPreambleDialsSucceeded.Load(),
+		m.crossOriginPreambleDialsFailed.Load()
 }
 
-// CrossPartitionGateStats reports the cross-origin dial funnel telemetry (per
+// CrossOriginGateStats reports the cross-origin dial funnel telemetry (per
 // origin, not per partition): which upstream stage (pickPath, bestAddress
 // public-UDP filter, AddressTracker dead-cooldown, anycast-vs-direct address
 // shape) is dropping cross-origin noise-UDP dials before they reach the
 // preamble code site. See the field definitions on ConnectionManager for the
 // diagnostic decision tree mapping counter patterns to root cause.
-func (m *ConnectionManager) CrossPartitionGateStats() (pickPathIncluded, publicUDPCount, candidatesEmpty, allDead, nonAnycastSelected, dialNoSuitableAddr uint64) {
-	return m.crossOrgPickPathNoiseUDPIncluded.Load(),
-		m.crossOrgBestAddrPublicUDPCount.Load(),
-		m.crossOrgBestAddrCandidatesEmpty.Load(),
-		m.crossOrgBestAddrAllDead.Load(),
-		m.crossOrgBestAddrNonAnycastSelected.Load(),
-		m.crossOrgDialNoSuitableAddr.Load()
+func (m *ConnectionManager) CrossOriginGateStats() (pickPathIncluded, publicUDPCount, candidatesEmpty, allDead, nonAnycastSelected, dialNoSuitableAddr uint64) {
+	return m.crossOriginPickPathNoiseUDPIncluded.Load(),
+		m.crossOriginBestAddrPublicUDPCount.Load(),
+		m.crossOriginBestAddrCandidatesEmpty.Load(),
+		m.crossOriginBestAddrAllDead.Load(),
+		m.crossOriginBestAddrNonAnycastSelected.Load(),
+		m.crossOriginDialNoSuitableAddr.Load()
 }
 
 // AggregateAetherStats walks every live aether session and sums the
@@ -2360,7 +2368,7 @@ func (m *ConnectionManager) pickPath(peer *peerConn) []Protocol {
 	// the full protocolOrder (which begins with ProtoNoiseUDP) for a
 	// cross-origin peer. Confirms NoiseUDP was offered to the dial loop.
 	if crossOrigin {
-		m.crossOrgPickPathNoiseUDPIncluded.Add(1)
+		m.crossOriginPickPathNoiseUDPIncluded.Add(1)
 	}
 	return out
 }
@@ -2375,7 +2383,7 @@ func (m *ConnectionManager) isCrossRegion(peerRegion string) bool {
 
 // scanAndConnect discovers new peers from LAD and connects unconnected ones.
 // dialOwned reports whether THIS node should perform the outbound dial for a
-// not-yet-connected peer. Deterministic dial ownership: across any node pair
+// not-yet-connected peer. The dial claim is deterministic: across any node pair
 // the lexicographically-lower nodeID owns the dial; the higher nodeID waits
 // for the inbound connection instead. This removes the simultaneous
 // cross-dial that otherwise yields a session pair, a registerMeshSession
@@ -2383,11 +2391,11 @@ func (m *ConnectionManager) isCrossRegion(peerRegion string) bool {
 //
 // The higher-nodeID side defers only within dialOwnershipGrace of first
 // becoming dial-eligible; past the grace it dials anyway so a dead or
-// unreachable owner cannot strand the pair. A bootstrap host on first
+// unreachable lower side cannot strand the pair. A bootstrap host on first
 // contact (lastConnected still zero) is always owned locally — a joining
 // node must dial its bootstrap host, which has no prior knowledge of the
 // joiner and cannot dial first. Once any session has succeeded the peer is
-// governed by normal nodeID ownership like every other peer.
+// governed by the normal nodeID dial claim like every other peer.
 //
 // Caller must hold m.mu (reads and mutates peer.dialEligibleSince).
 func (m *ConnectionManager) dialOwned(p *peerConn, now time.Time) bool {
@@ -2629,7 +2637,7 @@ func (m *ConnectionManager) scanAndConnect(ctx context.Context) {
 	toConnect := make([]*peerConn, 0)
 	for _, p := range m.peers {
 		if p.state == PeerDiscovered {
-			// Deterministic dial ownership — defer to the lower-nodeID
+			// Deterministic dial claim — defer to the lower-nodeID
 			// peer within the grace window (see dialOwned).
 			if !m.dialOwned(p, now) {
 				continue
@@ -2645,7 +2653,7 @@ func (m *ConnectionManager) scanAndConnect(ctx context.Context) {
 			toConnect = append(toConnect, p)
 		} else if p.state == PeerConnected {
 			// Connected — the dial race is over. Clear the deferral
-			// marker so a future disconnect opens a fresh ownership
+			// marker so a future disconnect opens a fresh dial-claim
 			// grace window instead of reusing a stale timestamp.
 			p.dialEligibleSince = time.Time{}
 			if !p.outboundDialed {
@@ -3139,7 +3147,7 @@ func (m *ConnectionManager) dialWithProtocol(ctx context.Context, peer *peerConn
 		// bestAddress candidates-empty and all-dead counters for
 		// ProtoNoiseUDP calls.
 		if proto == ProtoNoiseUDP && peerCrossOrigin {
-			m.crossOrgDialNoSuitableAddr.Add(1)
+			m.crossOriginDialNoSuitableAddr.Add(1)
 		}
 		return nil, fmt.Errorf("no suitable address for %s: %w", proto, errLocalDialState)
 	}
@@ -3172,14 +3180,14 @@ func (m *ConnectionManager) dialWithProtocol(ctx context.Context, peer *peerConn
 	// and the preamble-dials-attempted counter indicates whether peers
 	// advertise anycast hostnames vs direct public IPs.
 	if proto == ProtoNoiseUDP && peerCrossOrigin && !anycastForwarderDial {
-		m.crossOrgBestAddrNonAnycastSelected.Add(1)
+		m.crossOriginBestAddrNonAnycastSelected.Add(1)
 	}
 	if anycastForwarderDial {
 		if target.Metadata == nil {
 			target.Metadata = make(map[string]string, 1)
 		}
-		target.Metadata[noise.MetadataKeyCrossOrgPreamble] = "1"
-		m.crossOrgPreambleDialsAttempted.Add(1)
+		target.Metadata[noise.MetadataKeyCrossOriginPreamble] = "1"
+		m.crossOriginPreambleDialsAttempted.Add(1)
 	}
 
 	switch proto {
@@ -3187,9 +3195,9 @@ func (m *ConnectionManager) dialWithProtocol(ctx context.Context, peer *peerConn
 		conn, err := m.rt.dialNoiseUDP(dialCtx, target)
 		if anycastForwarderDial {
 			if err == nil {
-				m.crossOrgPreambleDialsSucceeded.Add(1)
+				m.crossOriginPreambleDialsSucceeded.Add(1)
 			} else {
-				m.crossOrgPreambleDialsFailed.Add(1)
+				m.crossOriginPreambleDialsFailed.Add(1)
 			}
 		}
 		return conn, err
@@ -3585,10 +3593,10 @@ func (m *ConnectionManager) bestAddress(peer *peerConn, proto Protocol) string {
 		// pays at most two atomic adds.
 		if peerCrossOrigin {
 			if publicUDPCount > 0 {
-				m.crossOrgBestAddrPublicUDPCount.Add(uint64(publicUDPCount))
+				m.crossOriginBestAddrPublicUDPCount.Add(uint64(publicUDPCount))
 			}
 			if len(candidates) == 0 {
-				m.crossOrgBestAddrCandidatesEmpty.Add(1)
+				m.crossOriginBestAddrCandidatesEmpty.Add(1)
 			}
 		}
 
@@ -3599,7 +3607,7 @@ func (m *ConnectionManager) bestAddress(peer *peerConn, proto Protocol) string {
 		// UDP candidate was filtered out by AddressTracker dead-cooldown.
 		// Isolates sticky-suppression as the gate.
 		if peerCrossOrigin && len(candidates) > 0 {
-			m.crossOrgBestAddrAllDead.Add(1)
+			m.crossOriginBestAddrAllDead.Add(1)
 		}
 
 		// No UDP address found — log for diagnosing why Noise/QUIC fails
@@ -4019,14 +4027,14 @@ func (m *ConnectionManager) isCrossOrigin(addrs []lad.ReachAddress) bool {
 		if a.Scope != "private" {
 			continue
 		}
-		peerOrg := extractOriginPrefix(a.Host)
-		if peerOrg == "" {
+		peerOrigin := extractOriginPrefix(a.Host)
+		if peerOrigin == "" {
 			// Not a Fly 6PN host — e.g., Docker bridge IPv4 leaking
 			// through. Don't let it drive the same/cross decision.
 			continue
 		}
 		sawPrivate = true
-		if peerOrg != ourOrigin {
+		if peerOrigin != ourOrigin {
 			return true
 		}
 	}
@@ -4408,7 +4416,7 @@ func (m *ConnectionManager) closeDrainedConnection(peerNodeID, transport string,
 
 	// Do NOT decrement connCount or release the budget here.
 	// Cancelling the transport's connCtx drives AcceptMeshConnection's cleanup,
-	// which is the SINGLE owner of that accounting (connCount--, budget.Release,
+	// which is the ONLY code that does that accounting (connCount--, budget.Release,
 	// state transition). Doing it in both places double-decremented
 	// currentTotal — so MaxTotal stopped being enforced — and dropped a
 	// multi-transport peer's connCount by two.

@@ -20,15 +20,15 @@ import (
 func TestRPCServerCountsSealedAndUnsealedArrivalsSeparately(t *testing.T) {
 	t.Run("a sealed principal counts as sealed, not unsealed", func(t *testing.T) {
 		registry := handlers.NewHandlerRegistry()
-		registry.SetPresencePolicy(customerScopePolicy())
-		if err := registry.RegisterRPC(&customerPrincipalProbe{}); err != nil {
+		registry.SetPresencePolicy(typedPrincipalScopePolicy())
+		if err := registry.RegisterRPC(&typedPrincipalProbe{}); err != nil {
 			t.Fatal(err)
 		}
 		server := NewRPCServer(registry)
-		server.SetAuthValidator(customerPrincipalValidator{})
+		server.SetAuthValidator(typedPrincipalValidator{})
 
 		ctx := handlers.WithTransportPartition(context.Background(), "orbtr")
-		if resp := server.handleRequest(ctx, customerPrincipalRequest()); !resp.Success {
+		if resp := server.handleRequest(ctx, typedPrincipalRequest()); !resp.Success {
 			t.Fatalf("sealed request denied, so the counts below prove nothing: %s", resp.Error)
 		}
 		sealed, unsealed := server.PrincipalPathStats()
@@ -42,15 +42,15 @@ func TestRPCServerCountsSealedAndUnsealedArrivalsSeparately(t *testing.T) {
 	// probe's declared scope denies it.
 	t.Run("a request with no principal counts as unsealed and is denied", func(t *testing.T) {
 		registry := handlers.NewHandlerRegistry()
-		registry.SetPresencePolicy(customerScopePolicy())
-		if err := registry.RegisterRPC(&customerPrincipalProbe{}); err != nil {
+		registry.SetPresencePolicy(typedPrincipalScopePolicy())
+		if err := registry.RegisterRPC(&typedPrincipalProbe{}); err != nil {
 			t.Fatal(err)
 		}
 		server := NewRPCServer(registry)
-		server.SetAuthValidator(customerPrincipalValidator{})
+		server.SetAuthValidator(typedPrincipalValidator{})
 
 		ctx := handlers.WithTransportPartition(context.Background(), "orbtr")
-		req := customerPrincipalRequest()
+		req := typedPrincipalRequest()
 		req.Principal = nil
 		req.Context = map[string]string{"userId": "user-A", "scopes": "org.read"}
 		if resp := server.handleRequest(ctx, req); resp.Success {

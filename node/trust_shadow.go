@@ -173,7 +173,7 @@ func (rt *Runtime) startShadowParity() bool {
 	if shadow == nil {
 		return false
 	}
-	tenant, roles := rt.shadowParityScope()
+	partition, roles := rt.shadowParityScope()
 	log.Printf("[SHADOW-PARITY] periodic directory comparison started (interval=%v)", interval)
 	rt.GoCtx("shadow-parity", func(ctx context.Context) {
 		t := time.NewTicker(interval)
@@ -183,7 +183,7 @@ func (rt *Runtime) startShadowParity() bool {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				rt.shadowParityPass(ctx, rt.liveDir, shadow, tenant, roles)
+				rt.shadowParityPass(ctx, rt.liveDir, shadow, partition, roles)
 			}
 		}
 	})
@@ -204,7 +204,7 @@ func (rt *Runtime) startShadowParity() bool {
 // escalates to the typed CompareDirectories walk, which is the comparison that
 // is meaningful across the two models. A report that is not InParity is the
 // evidence that the shadow does not yet reproduce the live directory.
-func (rt *Runtime) shadowParityPass(ctx context.Context, authoritative, shadow ports.LiveDirectory, tenant ports.Partition, roles []string) {
+func (rt *Runtime) shadowParityPass(ctx context.Context, authoritative, shadow ports.LiveDirectory, partition ports.Partition, roles []string) {
 	if authoritative == nil || shadow == nil {
 		return
 	}
@@ -212,7 +212,7 @@ func (rt *Runtime) shadowParityPass(ctx context.Context, authoritative, shadow p
 		rt.shadowParityRuns.Add(1)
 		return
 	}
-	rep, err := directory.CompareDirectories(ctx, authoritative, shadow, tenant, roles)
+	rep, err := directory.CompareDirectories(ctx, authoritative, shadow, partition, roles)
 	if err != nil {
 		log.Printf("[SHADOW-PARITY] compare error: %v", err)
 		return

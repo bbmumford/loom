@@ -32,8 +32,9 @@
 //     /metrics export, /mesh/status DTO, connection-event history, and
 //     latency histograms as an observability worker. The metric names/label
 //     sets and the /mesh/status JSON shape + CORS allow-list are an
-//     EXTERNAL WIRE CONTRACT (monitoring clients' dashboards read them) —
-//     never rename.
+//     EXTERNAL WIRE CONTRACT (monitoring clients' dashboards read them): a
+//     rename lands together with every reader of the old name, and no
+//     second name is emitted beside the new one.
 //
 // The scope tracker (scope.go) captures exactly the function IDs a role
 // registers during activation, so takeover teardown can remove precisely

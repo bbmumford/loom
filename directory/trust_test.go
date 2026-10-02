@@ -15,18 +15,11 @@ import (
 	"github.com/bbmumford/loom/ports"
 )
 
-// COVERAGE of the Phase-0.5 TrustPolicy's untested authorization paths
-// (#M-559 ④): AuthorizeRead 0.0%, EntitleRole 0.0%, checkTenant 28.6%.
-//
-// 🛑 THIS GATE IS NOT WIRED YET (#M-557 ⑥ holds it pending @R), so nothing is
-// currently at risk. That is exactly why it is worth doing NOW: it becomes
-// load-bearing the instant that decision lands, and an authorization path
-// executed for the first time in production is the class that produced
-// #I-466 and #C-1159.
-//
-// Every assertion below is about the FAIL-CLOSED direction, because a trust
-// gate that wrongly denies is an outage you find in minutes and one that
-// wrongly allows is a breach you may never find.
+// These tests cover the TrustPolicy authorization paths AuthorizeRead,
+// EntitleRole and checkPartition. Every assertion below is about the
+// fail-closed direction, because a trust gate that wrongly denies is an outage
+// found in minutes and one that wrongly allows is a breach that may never be
+// found.
 
 // trustPrincipal builds a principal whose NodeID is the canonical aether NodeID
 // of its key — the binding VerifyNodeKey enforces. Taking the ID from the key
@@ -149,11 +142,11 @@ func TestAuthorizeReadsDocumentedCoarsenessIsIntentional(t *testing.T) {
 	})
 
 	t.Run("an UNSTAMPED partition bypasses the partition check", func(t *testing.T) {
-		// checkTenant returns nil for Tenant == "" — "tenantless fleet
-		// principals; partition scoping applies when stamped". So the gate is
-		// only as strong as whatever stamps the tenant upstream.
-		tenantless, _ := trustPrincipal(t, "")
-		if err := p.AuthorizeRead(ctx, tenantless, ports.Topic("fleet.peer")); err != nil {
+		// checkPartition returns nil for PartitionID == "" (an unstamped fleet
+		// principal; partition scoping applies once stamped). So the gate is
+		// only as strong as whatever stamps the partition upstream.
+		unstamped, _ := trustPrincipal(t, "")
+		if err := p.AuthorizeRead(ctx, unstamped, ports.Topic("fleet.peer")); err != nil {
 			t.Fatalf("a tenantless principal was denied: %v — that is a stricter "+
 				"policy than documented; confirm intent before adopting it", err)
 		}
@@ -196,10 +189,10 @@ func TestEntitleRoleGrantsAndStaysScoped(t *testing.T) {
 	}
 }
 
-// checkTenant is reached from several authorize paths; its three branches are
+// checkPartition is reached from several authorize paths; its three branches are
 // asserted directly through AuthorizeRead so the behaviour is pinned at the
 // caller rather than at an unexported helper.
-func TestCheckTenantBranches(t *testing.T) {
+func TestCheckPartitionBranches(t *testing.T) {
 	ctx := context.Background()
 	p := NewPolicy(PolicyConfig{Partitions: []string{"hstles", "acme"}})
 

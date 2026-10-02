@@ -21,28 +21,26 @@ import (
 // Covers the hole-punch RPC handler's AUTHORIZATION DESCRIPTOR and the
 // dial-path entry point:
 //
-//	Role · RequiresAuth · AllowedAuthTypes · Scopes · Scope · AllowedPartitions  (:211-:216)
-//	attemptHolePunch (:268)
+//	Role · RequiresAuth · AllowedAuthTypes · Scopes · Scope · AllowedPartitions  (holepunch.go)
+//	attemptHolePunch (holepunch.go)
 //
-// Censused per symbol, one level out, including interface satisfaction. These
-// six are METHODS SATISFYING handlers.SecureHandler, so nothing calls them
-// by name; the registry calls them through the interface:
+// The six descriptor methods SATISFY handlers.SecureHandler, so nothing calls
+// them by name; the registry calls them through the interface:
 //
-//	registered  runtime.go:591  registry.RegisterRPC(&holepunchRPCHandler{...})
-//	local gate  internal/securityctx/securityctx.go:99  if !h.RequiresAuth() { return nil }
-//	🔴 GOSSIPED  runtime.go:3025  PublishHandlersToLAD -> lad.HandlerMetadata{RequiresAuth: ...}
+//	registered  runtime.go  registry.RegisterRPC(&holepunchRPCHandler{...})
+//	local gate  internal/securityctx/securityctx.go  if !h.RequiresAuth() { return nil }
+//	🔴 GOSSIPED  runtime.go  PublishHandlersToLAD -> lad.HandlerMetadata{RequiresAuth: ...}
 //
 // 🔑 SO THE DESCRIPTOR IS NOT ONLY A LOCAL GATE INPUT — IT IS ADVERTISED TO EVERY
 // PEER in this node's LAD role record. A wrong value is both a local
 // authorization decision and a false statement to the whole mesh.
 //
-// ✅ AND THE DESIGN'S PREMISE WAS CHECKED, NOT ASSUMED. `RequiresAuth() == false`
-// rests on "the mesh RPC path rides an authenticated session, so the session
-// handshake is the security boundary" (stated three times in holepunch.go). That
-// premise needs the auth machinery to be real, and it is: endpoints install
-// `helpers.LoomValidator{}` into Config.AuthValidator — 2 assignments in the
-// ORBTR root, 11 in HSTLES — so securityctx.Default()'s fail-closed loom-local
-// validator is a fallback, not what production runs.
+// `RequiresAuth() == false` rests on holepunch.go's premise that the mesh RPC
+// path rides an authenticated session, so the session handshake is the
+// security boundary. That premise holds only while the auth machinery is real:
+// a composition root installs its validator into Config.AuthValidator, and
+// securityctx.Default()'s fail-closed loom-local validator is the fallback
+// when none is installed.
 
 // punchCoordForTest mirrors how holepunch_test.go builds a coordinator inline;
 // there is no shared fixture in that file to reuse.
@@ -123,7 +121,7 @@ func TestHolePunchDeliberatelyRequiresNoPerRPCAuth(t *testing.T) {
 }
 
 // 🔑 THE CONSISTENCY PROPERTY, AND IT IS THE ONE WORTH HAVING. A handler that
-// requires no auth must not ALSO declare scopes, auth types or tenant
+// requires no auth must not ALSO declare scopes, auth types or partition
 // restrictions: securityctx returns at `if !h.RequiresAuth()` before reading any
 // of them, so such declarations are unenforceable — and worse, they are
 // published to LAD as requirements that nothing checks. Every peer would read a

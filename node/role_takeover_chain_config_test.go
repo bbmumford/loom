@@ -75,9 +75,10 @@ func TestArmRoleTakeoverIsANoOpWhenUnconfigured(t *testing.T) {
 }
 
 // The failover-chain position and the winner cap only affect behaviour if they
-// reach the running engine. Before they were threaded, a consumer could set
-// them on RoleTakeoverConfig and the engine would run flat, so the chain order
-// (node.hstles.com → node.orbtr.io → thin-apps) could not be expressed at all.
+// reach the running engine. armRoleTakeover copies them from RoleTakeoverConfig
+// into the engine; an engine that never received them would run flat, so a
+// chain order such as node-a.example.com → node-b.example.com → thin-apps could
+// not be expressed at all.
 func TestArmRoleTakeoverThreadsTheFailoverChainIntoTheEngine(t *testing.T) {
 	rt := armFixture(t, &RoleTakeoverConfig{
 		Roles:       []string{"auth"},

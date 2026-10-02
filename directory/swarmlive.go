@@ -283,7 +283,8 @@ func (d *SwarmDirectory) project(r ports.Record) {
 
 // projectPeerLocked decodes a fleet.peer PeerRecord into the typed views,
 // mirroring the mesh RoleTable/AddressTable conventions (service=/region=
-// tags, Capabilities.Roles, RpcHandlers). Caller holds d.mu.
+// tags, Capabilities.Roles, RpcHandlers); a partition= tag sets the member's
+// PartitionID. Caller holds d.mu.
 func (d *SwarmDirectory) projectPeerLocked(r ports.Record) {
 	var pr swarmpb.PeerRecord
 	if err := proto.Unmarshal(r.Body, &pr); err != nil {
@@ -313,7 +314,7 @@ func (d *SwarmDirectory) projectPeerLocked(r ports.Record) {
 					m.ServiceName = v
 				case "region":
 					m.Region = v
-				case "tenant":
+				case "partition":
 					m.PartitionID = v
 				}
 			}

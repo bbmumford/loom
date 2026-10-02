@@ -17,15 +17,16 @@ import "testing"
 // indefinitely: the escalating back-off could not escalate.
 
 // ⚠ WHAT THESE TESTS COVER, AND WHAT THEY DO NOT. They exercise the ladder
-// semantics the fix depends on — that repeated failures escalate to
-// suppression, that success does not, and that the key is per-(peer, protocol).
+// semantics DialAndAcceptMesh's setup-failure branch relies on — that repeated
+// failures escalate to suppression, that success does not, and that the key is
+// per-(peer, protocol).
 // They call recordDialFailure directly and therefore say NOTHING about whether
 // DialAndAcceptMesh calls it: deleting that call site leaves every test here
 // green.
 //
 // That call site is on the same setup-failure branch as the connecting-state
-// ownership gate, and it is unreachable from a unit test for the same reason
-// recorded in connecting_state_ownership_test.go — a closed net.Pipe still
+// dial-claim gate, and it is unreachable from a unit test for the same reason
+// recorded in connecting_state_dial_claim_test.go — a closed net.Pipe still
 // constructs a session adapter, and a nil conn panics inside the adapter rather
 // than returning an error. Both need an integration fixture with a transport
 // that can be made to fail.

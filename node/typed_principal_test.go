@@ -18,10 +18,11 @@ import (
 	"github.com/bbmumford/loom/ports"
 )
 
-// customerScopePolicy is a CONSUMER-side reference PresencePolicy admitting a
-// customer-org principal. loom no longer contains presence semantics — the
-// receive path reconstructs the opaque identity and this policy judges it.
-func customerScopePolicy() rpcscope.PresencePolicyFunc {
+// typedPrincipalScopePolicy is a consumer-side PresencePolicy that admits a
+// principal carrying a transport-pinned value, and for ScopeWithinPartition a
+// within-transport value too. The receive path reconstructs the opaque identity
+// and this policy judges it; loom carries no presence semantics of its own.
+func typedPrincipalScopePolicy() rpcscope.PresencePolicyFunc {
 	return func(declared handlers.Scope, id rpcscope.AuthenticatedIdentity) (bool, string) {
 		partition := id.Scope(rpcscope.AxisTransportPinned)
 		switch declared {
@@ -44,21 +45,21 @@ func customerScopePolicy() rpcscope.PresencePolicyFunc {
 	}
 }
 
-type customerPrincipalProbe struct {
+type typedPrincipalProbe struct {
 	calls int32
 	got   rpcscope.AuthenticatedPrincipal
 }
 
-func (h *customerPrincipalProbe) Name() string               { return "orbtr.test.CustomerOrg" }
-func (h *customerPrincipalProbe) Role() string               { return "orbtr.test" }
-func (h *customerPrincipalProbe) RequiresAuth() bool         { return false }
-func (h *customerPrincipalProbe) AllowedAuthTypes() []string { return nil }
-func (h *customerPrincipalProbe) Scopes() []string           { return nil }
-func (h *customerPrincipalProbe) Scope() handlers.Scope {
+func (h *typedPrincipalProbe) Name() string               { return "orbtr.test.CustomerOrg" }
+func (h *typedPrincipalProbe) Role() string               { return "orbtr.test" }
+func (h *typedPrincipalProbe) RequiresAuth() bool         { return false }
+func (h *typedPrincipalProbe) AllowedAuthTypes() []string { return nil }
+func (h *typedPrincipalProbe) Scopes() []string           { return nil }
+func (h *typedPrincipalProbe) Scope() handlers.Scope {
 	return handlers.ScopeWithinPartition
 }
-func (h *customerPrincipalProbe) AllowedPartitions() []string { return nil }
-func (h *customerPrincipalProbe) ExecuteRPC(
+func (h *typedPrincipalProbe) AllowedPartitions() []string { return nil }
+func (h *typedPrincipalProbe) ExecuteRPC(
 	ctx context.Context,
 	_ *handlers.RPCRequest,
 ) (*handlers.RPCResponse, error) {
@@ -67,18 +68,18 @@ func (h *customerPrincipalProbe) ExecuteRPC(
 	return &handlers.RPCResponse{Success: true}, nil
 }
 
-type customerPrincipalValidator struct{}
+type typedPrincipalValidator struct{}
 
-func (customerPrincipalValidator) ValidateExecutionAuth(
+func (typedPrincipalValidator) ValidateExecutionAuth(
 	context.Context,
 	ports.SecureHandler,
 ) error {
 	return nil
 }
-func (customerPrincipalValidator) WithPartitionID(ctx context.Context, _ string) context.Context {
+func (typedPrincipalValidator) WithPartitionID(ctx context.Context, _ string) context.Context {
 	return ctx
 }
-func (customerPrincipalValidator) WithAuthenticatedPrincipal(
+func (typedPrincipalValidator) WithAuthenticatedPrincipal(
 	ctx context.Context,
 	principal rpcscope.AuthenticatedPrincipal,
 ) context.Context {
@@ -88,7 +89,7 @@ func (customerPrincipalValidator) WithAuthenticatedPrincipal(
 // AdmitPrincipal is a consumer admitter with the rule a composition root applies: the
 // pinned axis a peer asserts must equal the transport partition it arrived on.
 // loom applies no rule of its own; this one lives in the consumer.
-func (customerPrincipalValidator) AdmitPrincipal(
+func (typedPrincipalValidator) AdmitPrincipal(
 	_ context.Context,
 	transportPartition string,
 	principal rpcscope.AuthenticatedPrincipal,
@@ -99,7 +100,7 @@ func (customerPrincipalValidator) AdmitPrincipal(
 	return nil
 }
 
-func customerPrincipalRequest() *pb.RPCRequest {
+func typedPrincipalRequest() *pb.RPCRequest {
 	return &pb.RPCRequest{
 		Id:      "principal-request",
 		Handler: "orbtr.test.CustomerOrg",
@@ -115,18 +116,18 @@ func customerPrincipalRequest() *pb.RPCRequest {
 	}
 }
 
-func TestRPCServerBindsTypedPrincipalFromTenantTransport(t *testing.T) {
+func TestRPCServerBindsTypedPrincipalFromPartitionTransport(t *testing.T) {
 	registry := handlers.NewHandlerRegistry()
-	registry.SetPresencePolicy(customerScopePolicy())
-	probe := &customerPrincipalProbe{}
+	registry.SetPresencePolicy(typedPrincipalScopePolicy())
+	probe := &typedPrincipalProbe{}
 	if err := registry.RegisterRPC(probe); err != nil {
 		t.Fatal(err)
 	}
 	server := NewRPCServer(registry)
-	server.SetAuthValidator(customerPrincipalValidator{})
+	server.SetAuthValidator(typedPrincipalValidator{})
 
 	ctx := handlers.WithTransportPartition(context.Background(), "orbtr")
-	resp := server.handleRequest(ctx, customerPrincipalRequest())
+	resp := server.handleRequest(ctx, typedPrincipalRequest())
 
 	if !resp.Success {
 		t.Fatalf("typed principal request denied: %s", resp.Error)
@@ -177,21 +178,29 @@ func TestRPCServerRejectsPrincipalTamperingBeforeHandler(t *testing.T) {
 		{
 			name:      "unbound transport",
 			mutate:    func(*pb.RPCRequest) {},
-			transport: "default",
+			transport: "",
 			want:      "partition-bound transport",
+		},
+		{
+			// A partition whose name is "default" is bound like any other, so
+			// the consumer admitter judges the principal on it.
+			name:      "partition named default",
+			mutate:    func(*pb.RPCRequest) {},
+			transport: "default",
+			want:      "does not match the transport",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			registry := handlers.NewHandlerRegistry()
-			probe := &customerPrincipalProbe{}
+			probe := &typedPrincipalProbe{}
 			if err := registry.RegisterRPC(probe); err != nil {
 				t.Fatal(err)
 			}
 			server := NewRPCServer(registry)
-			server.SetAuthValidator(customerPrincipalValidator{})
-			req := customerPrincipalRequest()
+			server.SetAuthValidator(typedPrincipalValidator{})
+			req := typedPrincipalRequest()
 			tc.mutate(req)
 
 			ctx := handlers.WithTransportPartition(context.Background(), tc.transport)
@@ -212,18 +221,18 @@ func TestRPCServerRejectsPrincipalTamperingBeforeHandler(t *testing.T) {
 // partition is admitted and round-trips unchanged. Pinning the
 // within-transport axis too would deny legitimate within-partition traffic
 // that spans many values of that axis.
-func TestRPCServerAdmitsWithinTenantCustomerOrg(t *testing.T) {
+func TestRPCServerAdmitsAnyWithinTransportValue(t *testing.T) {
 	registry := handlers.NewHandlerRegistry()
-	registry.SetPresencePolicy(customerScopePolicy())
-	probe := &customerPrincipalProbe{}
+	registry.SetPresencePolicy(typedPrincipalScopePolicy())
+	probe := &typedPrincipalProbe{}
 	if err := registry.RegisterRPC(probe); err != nil {
 		t.Fatal(err)
 	}
 	server := NewRPCServer(registry)
-	server.SetAuthValidator(customerPrincipalValidator{})
+	server.SetAuthValidator(typedPrincipalValidator{})
 
-	req := customerPrincipalRequest()
-	req.Principal.Axes[1].Value = "org-Z" // a different customer org, same platform tenant
+	req := typedPrincipalRequest()
+	req.Principal.Axes[1].Value = "org-Z" // a different within-transport value, same pinned value
 
 	ctx := handlers.WithTransportPartition(context.Background(), "orbtr")
 	resp := server.handleRequest(ctx, req)
@@ -236,16 +245,16 @@ func TestRPCServerAdmitsWithinTenantCustomerOrg(t *testing.T) {
 	}
 }
 
-func TestRPCServerMutableContextCannotCreateCustomerPrincipal(t *testing.T) {
+func TestRPCServerMutableContextCannotCreatePrincipal(t *testing.T) {
 	registry := handlers.NewHandlerRegistry()
-	registry.SetPresencePolicy(customerScopePolicy())
-	probe := &customerPrincipalProbe{}
+	registry.SetPresencePolicy(typedPrincipalScopePolicy())
+	probe := &typedPrincipalProbe{}
 	if err := registry.RegisterRPC(probe); err != nil {
 		t.Fatal(err)
 	}
 	server := NewRPCServer(registry)
-	server.SetAuthValidator(customerPrincipalValidator{})
-	req := customerPrincipalRequest()
+	server.SetAuthValidator(typedPrincipalValidator{})
+	req := typedPrincipalRequest()
 	req.Principal = nil
 
 	ctx := handlers.WithTransportPartition(context.Background(), "orbtr")
@@ -273,12 +282,12 @@ func (f *principalForwarder) Forward(
 
 func TestRPCServerForwardingPreservesTypedPrincipal(t *testing.T) {
 	server := NewRPCServer(handlers.NewHandlerRegistry())
-	server.SetAuthValidator(customerPrincipalValidator{})
+	server.SetAuthValidator(typedPrincipalValidator{})
 	forwarder := &principalForwarder{}
 	server.SetForwarder(forwarder)
 
 	ctx := handlers.WithTransportPartition(context.Background(), "orbtr")
-	resp := server.handleRequest(ctx, customerPrincipalRequest())
+	resp := server.handleRequest(ctx, typedPrincipalRequest())
 
 	if !resp.Success {
 		t.Fatalf("forwarded request failed: %s", resp.Error)
@@ -311,43 +320,43 @@ func (h *platformOnlyProbe) ExecuteRPC(
 	return &handlers.RPCResponse{Success: true}, nil
 }
 
-// stampingTenantValidator's WithPartitionID ACTUALLY stamps platform authority (unlike
-// customerPrincipalValidator's no-op). It exists so this test can discriminate the
-// removed req.Context["tenantId"] fallback: only a validator that stamps on
-// WithPartitionID makes the fallback's authority-minting observable.
-type stampingTenantValidator struct{}
+// stampingPartitionValidator's WithPartitionID stamps the transport-pinned axis,
+// where typedPrincipalValidator's returns ctx unchanged. The test below needs a
+// validator that stamps, so that a WithPartitionID call made from the
+// mutable req.Context map would show up as an admitted handler.
+type stampingPartitionValidator struct{}
 
-func (stampingTenantValidator) ValidateExecutionAuth(context.Context, ports.SecureHandler) error {
+func (stampingPartitionValidator) ValidateExecutionAuth(context.Context, ports.SecureHandler) error {
 	return nil
 }
-func (stampingTenantValidator) WithPartitionID(ctx context.Context, partitionID string) context.Context {
+func (stampingPartitionValidator) WithPartitionID(ctx context.Context, partitionID string) context.Context {
 	return rpcscope.WithAuthenticatedScope(ctx, rpcscope.AxisTransportPinned, partitionID)
 }
-func (stampingTenantValidator) WithAuthenticatedPrincipal(
+func (stampingPartitionValidator) WithAuthenticatedPrincipal(
 	ctx context.Context,
 	principal rpcscope.AuthenticatedPrincipal,
 ) context.Context {
 	return rpcscope.WithAuthenticatedPrincipal(ctx, principal)
 }
 
-// TestRPCServerRejectsWireTenantWithoutAuthenticatedTransport is the mutation-
-// discriminating proof that node/rpc.go does NOT mint platform authority from the
-// mutable req.Context["tenantId"] map. The request carries tenantId ONLY in that map
-// (no authenticated transport, no typed Principal), and the validator would stamp
-// platform authority if WithPartitionID were called. With the fallback removed, nothing
-// calls WithPartitionID, so the platform axis stays empty and the platform-scoped
-// handler is DENIED (calls==0). Restoring the deleted
-// `else if tid := req.Context["tenantId"]; tid != "" { WithPartitionID }` branch turns
-// this RED: WithPartitionID stamps the platform partition and the handler is invoked.
-func TestRPCServerRejectsWireTenantWithoutAuthenticatedTransport(t *testing.T) {
+// TestRPCServerRejectsWirePartitionWithoutAuthenticatedTransport requires
+// node/rpc.go to take no transport partition from the mutable request map. The
+// request carries a partition value only in req.Context (no authenticated transport, no
+// typed Principal), and stampingPartitionValidator stamps the pinned axis if
+// WithPartitionID is called. handleRequest calls it for no map value, so the
+// pinned axis stays empty and the partition-scoped handler is denied
+// (calls==0). A branch such as
+// `else if v := req.Context[key]; v != "" { WithPartitionID }` in
+// handleRequest turns this red: the handler is invoked.
+func TestRPCServerRejectsWirePartitionWithoutAuthenticatedTransport(t *testing.T) {
 	registry := handlers.NewHandlerRegistry()
-	registry.SetPresencePolicy(customerScopePolicy())
+	registry.SetPresencePolicy(typedPrincipalScopePolicy())
 	probe := &platformOnlyProbe{}
 	if err := registry.RegisterRPC(probe); err != nil {
 		t.Fatal(err)
 	}
 	server := NewRPCServer(registry)
-	server.SetAuthValidator(stampingTenantValidator{})
+	server.SetAuthValidator(stampingPartitionValidator{})
 
 	// Deliberately NO handlers.WithTransportPartition: the only partition signal is the
 	// mutable req.Context map, which must never establish authority.

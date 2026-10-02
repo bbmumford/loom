@@ -96,7 +96,7 @@ func TestARecordedSampleReachesTheReaderWithItsTagSplit(t *testing.T) {
 // inject a 30s sample, which pins the success p99 at the deadline value.
 func TestTimeoutSamplesStayOutOfTheSuccessHistogram(t *testing.T) {
 	s := NewRPCServer(nil)
-	s.RecordBidiTimeout("websocket", "cross-org", 30*time.Second)
+	s.RecordBidiTimeout("websocket", "cross-origin", 30*time.Second)
 
 	if got := s.BidiLatencySnapshots(); len(got) != 0 {
 		t.Fatalf("a TIMEOUT sample appeared in the success histogram (%+v) — "+
@@ -110,7 +110,7 @@ func TestTimeoutSamplesStayOutOfTheSuccessHistogram(t *testing.T) {
 	}
 
 	// And the reverse direction: a success must not land in the timeout series.
-	s.RecordBidiLatency("websocket", "cross-org", time.Millisecond)
+	s.RecordBidiLatency("websocket", "cross-origin", time.Millisecond)
 	if got := s.BidiTimeoutSnapshots(); len(got) != 1 {
 		t.Fatalf("BidiTimeoutSnapshots = %d after recording a SUCCESS, want 1 — "+
 			"the two registries are the same one", len(got))

@@ -7,19 +7,17 @@ package node
 
 import "testing"
 
-// COVERAGE of the Runtime's outward-facing reach setters:
-// SetRoles (:35), SetServiceName (:63), rolesJoined (:73) — all at 0.0%.
+// Covers the Runtime's outward-facing reach setters: SetRoles, SetServiceName
+// and rolesJoined (reach_adapter.go).
 //
-// 🛑 SetCapabilityMetadata (:54) IS DELIBERATELY NOT TESTED HERE. It is the
-// whole of another writer's uncommitted hunk in this file (`@@ -42,0 +43,17 @@`,
-// the SetCapabilityExtras work). Pinning a design someone is
-// mid-authoring would freeze it, and their next edit would surface as my test
-// breaking. Ownership census run BEFORE writing, not after.
+// TODO: SetCapabilityMetadata, the fourth setter in reach_adapter.go, has no
+// test in this file.
 //
 // 🔑 WHY THESE THREE MATTER: they are how something OUTSIDE the mesh changes what
-// this node advertises. The doc names the callers — "AI/Quorum shim, runtime
-// promotion logic" — so they run on a live node mid-flight, and a panic or a
-// retained slice here corrupts what every peer believes about this node.
+// this node advertises. SetRoles' doc names its callers — a composition root's
+// role controller and runtime promotion logic — so they run on a live node
+// mid-flight, and a panic or a retained slice here corrupts what every peer
+// believes about this node.
 
 // 🔴 THE COPY IS THE PROPERTY. SetRoles stores `append([]string(nil), roles...)`,
 // so a caller that reuses or mutates its slice afterwards cannot silently

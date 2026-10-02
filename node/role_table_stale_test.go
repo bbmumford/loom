@@ -23,20 +23,21 @@ func newStaleTestTable(self string) *RoleTable {
 	}
 }
 
-// TestRoleTableStaleNodes_FindsGhostAndSparesLive is the regression guard for
-// immortal ghosts in the mesh topology.
+// TestRoleTableStaleNodes_FindsGhostAndSparesLive guards against immortal
+// ghosts in the mesh topology.
 //
 // A RoleTable entry has ONE removal path: an inbound tombstone on fleet.peer
-// (onRecord). No TTL, no expiry. So it dies only by the owner's graceful
+// (onRecord). No TTL, no expiry. So it dies only by the node's own graceful
 // tombstone — never emitted when a deploy destroys the machine — or by an
-// observer tombstone, which was published solely by sweepZombieSessions: a
-// sweep over dead SESSIONS, structurally blind to a peer this process never
-// held a session with. Every deploy-replaced machine landed in that gap.
+// observer tombstone, whose other publisher is sweepZombieSessions: a sweep
+// over dead SESSIONS, structurally blind to a peer this process never held a
+// session with. A deploy-replaced machine falls in that gap.
 //
-// Measured live: 40 entries against 11 real machines, while the LAD directory
-// (which HAS a TTL) sat clean at 8 beside it. mesh-topology merges both, so the
-// corpses rendered as healthy peers and got dialled forever — noise-UDP hanging
-// to msg2 timeout, WebSocket taking 401/404 and falling back to TLS.
+// The LAD directory, which HAS a TTL, can then report a clean set beside a
+// RoleTable holding several times as many entries as there are machines.
+// mesh-topology merges both, so the stale entries render as healthy peers and
+// are dialled forever — noise-UDP hanging to msg2 timeout, WebSocket taking
+// 401/404 and falling back to TLS.
 //
 // StaleNodes is the witness the session sweep cannot be. The live-peer case is
 // the half that matters most: attesting against a live peer is the cascade the

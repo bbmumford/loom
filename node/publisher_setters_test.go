@@ -11,17 +11,14 @@ import (
 	swarmpb "github.com/bbmumford/swarm/proto/pb"
 )
 
-// COVERAGE of what a node TELLS THE MESH ABOUT ITSELF: the
-// PeerPublisher setters and the saturation-change republish, all at 0.0%.
+// Covers what a node TELLS THE MESH ABOUT ITSELF: the PeerPublisher setters
+// and the saturation-change republish. Their callers:
 //
-// CENSUSED FIRST, per symbol, one level out, and checked for interface
-// satisfaction:
-//
-//	SetRegion                          <- swarm_integration.go:110
-//	SetMaxGrade                        <- swarm_integration.go:593
-//	SetRoles                           <- reach_adapter.go + runtime.orbtr.ai/routes.go:399
-//	SetServiceName (publisher)         <- reach_adapter.go:63's Runtime.SetServiceName
-//	maybeRepublishOnSaturationChange   <- peer_publisher.go:325 (the run loop)
+//	SetRegion                          <- swarm_integration.go
+//	SetMaxGrade                        <- swarm_integration.go
+//	SetRoles                           <- reach_adapter.go + a composition root outside loom
+//	SetServiceName (publisher)         <- reach_adapter.go's Runtime.SetServiceName
+//	maybeRepublishOnSaturationChange   <- peer_publisher.go (the run loop)
 //
 // 🔑 EVERY SETTER ENDS IN PublishNow(), which is a NON-BLOCKING send on a
 // size-1 channel — so the observable contract is "the change is recorded AND a

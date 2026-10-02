@@ -67,13 +67,13 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 
 // idAxes builds an opaque identity from the three deployed axes, omitting any
 // axis whose value is empty (an absent axis must stay absent).
-func idAxes(partition, org, user string) AuthenticatedScopeIdentity {
+func idAxes(partition, within, user string) AuthenticatedScopeIdentity {
 	id := AuthenticatedScopeIdentity{Subject: user}
 	if partition != "" {
 		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisTransportPinned, Value: partition})
 	}
-	if org != "" {
-		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisWithinTransport, Value: org})
+	if within != "" {
+		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisWithinTransport, Value: within})
 	}
 	return id
 }
@@ -226,25 +226,25 @@ func TestEnforceScope_Platform(t *testing.T) {
 	h := &Handler{Namespace: "hstles", Domain: "identity", Operation: "Mint", Scope: ScopeAllowlisted}
 	policy := refPolicy("orbtr", "hstles")
 
-	// Caller without tenant — denied
+	// Caller without a partition — denied
 	if err := EnforceScope(context.Background(), h, policy); !errors.Is(err, ErrScopeDenied) {
 		t.Errorf("expected ErrScopeDenied for missing tenant, got %v", err)
 	}
 
-	// Caller with non-platform tenant — denied
+	// Caller with a partition outside the allow-list — denied
 	ctx := WithAuthenticatedScopeIdentity(context.Background(), idAxes("stranger", "", ""))
 	if err := EnforceScope(ctx, h, policy); !errors.Is(err, ErrScopeDenied) {
 		t.Errorf("expected ErrScopeDenied for stranger tenant, got %v", err)
 	}
 
-	// Caller with platform tenant — pass
+	// Caller with an allow-listed partition — pass
 	ctx = WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "", ""))
 	if err := EnforceScope(ctx, h, policy); err != nil {
 		t.Errorf("expected pass for platform tenant, got %v", err)
 	}
 }
 
-func TestEnforceScope_Tenant(t *testing.T) {
+func TestEnforceScope_Partition(t *testing.T) {
 	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopePartition}
 	policy := refPolicy()
 	if err := EnforceScope(context.Background(), h, policy); !errors.Is(err, ErrScopeDenied) {
@@ -256,17 +256,17 @@ func TestEnforceScope_Tenant(t *testing.T) {
 	}
 }
 
-func TestEnforceScope_Org(t *testing.T) {
+func TestEnforceScope_WithinPartition(t *testing.T) {
 	h := &Handler{Namespace: "ns", Domain: "d", Operation: "Op", Scope: ScopeWithinPartition}
 	policy := refPolicy()
 
-	// Tenant only — denied for missing org
+	// Transport-pinned value only — denied for a missing within-transport value
 	ctx := WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "", ""))
 	if err := EnforceScope(ctx, h, policy); !errors.Is(err, ErrScopeDenied) {
 		t.Errorf("expected ErrScopeDenied for missing org, got %v", err)
 	}
 
-	// Tenant + org — pass
+	// Both values — pass
 	ctx = WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "acme", ""))
 	if err := EnforceScope(ctx, h, policy); err != nil {
 		t.Errorf("expected pass with tenant+org, got %v", err)
@@ -283,7 +283,7 @@ func TestEnforceScope_Org(t *testing.T) {
 	}
 
 	// A conflicting wire hint cannot replace an independently authenticated
-	// organisation. Presence enforcement consumes only the typed snapshot.
+	// within-transport value. Presence enforcement consumes only the typed snapshot.
 	ctx = WithRPCContext(ctx, map[string]string{"orgId": "evil"})
 	ctx = WithAuthenticatedScopeIdentity(ctx, idAxes("orbtr", "acme", ""))
 	if err := EnforceScope(ctx, h, policy); err != nil {

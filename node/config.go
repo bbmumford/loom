@@ -172,13 +172,14 @@ type Config struct {
 
 	// Network Keys (Shared PSKs for mesh authorization)
 	// First key is used for sending, all are accepted for receiving.
-	// Used as a single-partition fallback when Partitions is empty.
+	// When Partitions is empty they key the one transport, bound to no partition.
 	NetworkKeys []string
 
 	// Partitions configures a per-partition transport for mesh segmentation.
 	// Each entry creates either a dedicated NoiseTransport (its own UDP port) or
 	// registers with the shared transport (preamble protocol on VL1.UDPPort).
-	// When empty, NetworkKeys supplies a single unpartitioned default transport.
+	// When empty, NetworkKeys key a single transport bound to no partition, and
+	// a session accepted on it carries no transport partition.
 	Partitions []PartitionTransportConfig
 
 	// Anchor bootstrapping (Secure Snapshot)
@@ -227,9 +228,9 @@ type Config struct {
 	Audit AuditConfig
 
 	// SubsystemsAllowedOrigins lists the browser origins SubsystemsHandler
-	// echoes in Access-Control-Allow-Origin. nil keeps the built-in pair in
-	// subsystemsOriginAllowed; a non-nil slice replaces that pair exactly,
-	// so an empty non-nil slice admits no cross-origin caller. Each entry is
+	// echoes in Access-Control-Allow-Origin. nil keeps the built-in origin in
+	// subsystemsOriginAllowed; a non-nil slice replaces it exactly, so an
+	// empty non-nil slice admits no cross-origin caller. Each entry is
 	// compared byte-for-byte with the request's Origin header
 	// (scheme://host[:port]); empty entries never match. SubsystemsHandler
 	// copies the slice when it builds the handler.
@@ -351,7 +352,7 @@ func (c *Config) Validate() error {
 	}
 	// Network key validation: either NetworkKeys or Partitions must be provided.
 	// When Partitions is non-empty, each partition carries its own keys.
-	// When Partitions is empty, NetworkKeys is used as single-partition fallback.
+	// When Partitions is empty, NetworkKeys key the one transport, bound to no partition.
 	if len(c.NetworkKeys) == 0 && len(c.Partitions) == 0 {
 		return fmt.Errorf("at least one network key or partition config is required")
 	}

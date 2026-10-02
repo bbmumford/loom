@@ -58,7 +58,7 @@ func TestSaturationCap(t *testing.T) {
 	}
 }
 
-// TestPeerWantsBackoff covers the load-bearing safety property: a same-org peer
+// TestPeerWantsBackoff covers the load-bearing safety property: a same-origin peer
 // with no strictly-better path is NEVER backed off, so its only viable Tier-0
 // 6PN route can't be starved by the saturation bit. A bare peerConn has no
 // addresses/transports, so peerHasBetterGradeAddress is false and

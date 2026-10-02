@@ -15,21 +15,15 @@ import (
 	lad "github.com/bbmumford/ledger"
 )
 
-// CHARACTERISATION of the same-org/cross-org classification, written BEFORE
-// the peer.addresses type migration touches it.
+// CHARACTERISATION of the same-origin/cross-origin classification:
+// `isCrossOrigin`, `isCrossOriginLocked`, `bestAddress`, `extractOriginPrefix`
+// and `isCrossRegion`.
 //
-// 🛑 WHY THIS EXISTS AND WHY NOW. `isCrossOrigin`, `isCrossOriginLocked`,
-// `bestAddress`, `extractOriginPrefix` and `isCrossRegion` were ALL at 0.0%
-// statement coverage — measured with `go tool cover`, not inferred from a grep
-// (a grep for test references returns 0 even for functions that ARE exercised
-// indirectly, which is how `parseSixPNUDPAddr` reads).
-//
-// That matters because this classification decides whether a peer is eligible
-// for a direct noise-UDP dial. Getting it wrong does not error: it silently
-// routes everything through relay, or worse, treats a foreign org as same-org.
-// A type migration through untested code of that shape is how the silent
-// failures this work keeps finding get made — so the behaviour gets pinned
-// first, and the migration must then preserve exactly these answers.
+// This classification decides whether a peer is eligible for a direct
+// noise-UDP dial. Getting it wrong does not error: it silently routes
+// everything through relay, or worse, treats a foreign origin as same-origin.
+// So a change to the type of peer.addresses, or to any of these functions, must
+// keep exactly these answers.
 //
 // These tests assert CURRENT behaviour, including the conservative defaults.
 // They are not a judgement that every answer below is desirable.
@@ -109,7 +103,7 @@ func TestIsCrossOriginCharacterisation(t *testing.T) {
 			name:      "non-6PN private entry does NOT drive the decision",
 			ourOrigin: ourOrigin,
 			// A Docker bridge / Tailscale address marked private must be
-			// skipped, not treated as a foreign org.
+			// skipped, not treated as a foreign origin.
 			addrs: []lad.ReachAddress{priv("fd7a:115c::1"), priv("fdaa:0:1234:a7b::2")},
 			want:  false,
 			why:   "the unrecognised private entry is skipped; the 6PN one matches",
@@ -142,7 +136,7 @@ func TestIsCrossOriginCharacterisation(t *testing.T) {
 
 // The classification must be CONSERVATIVE in both unknown directions: an
 // unknown local origin and an unknown peer address both mean "cross", because
-// treating a foreign org as same-org would authorise a direct dial that should
+// treating a foreign origin as same-origin would authorise a direct dial that should
 // not happen. This asserts the direction of the default explicitly, so a
 // migration that flips it fails loudly rather than widening direct-dial
 // eligibility in silence.
@@ -211,8 +205,8 @@ func TestCrossRegionAndCrossOriginDefaultInOppositeDirections(t *testing.T) {
 // isCrossOriginLocked is the lock-held lookup used on the connection path. Its
 // fallback when a peer has no known addresses is CROSS — the same fail-safe
 // direction as isCrossOrigin, and for a documented reason: a misclassified
-// same-org peer pays a 34-byte preamble its receiver ignores, while a
-// misclassified cross-org peer's noise dials fail on every retry.
+// same-origin peer pays a 34-byte preamble its receiver ignores, while a
+// misclassified cross-origin peer's noise dials fail on every retry.
 func TestIsCrossOriginLockedFallsBackToCross(t *testing.T) {
 	priv6PN := []lad.ReachAddress{
 		{Host: "fdaa:0:1234:a7b::2", Port: 41641, Proto: "udp", Scope: "private"},
@@ -262,7 +256,7 @@ func TestComputeCrossOriginUsesExistingPeerAddressesFirst(t *testing.T) {
 	m := &ConnectionManager{peers: map[string]*peerConn{}}
 	m.setOurOrigin("0:1234")
 
-	// A peer we already know, holding a SAME-org 6PN address, and NO runtime
+	// A peer we already know, holding a SAME-origin 6PN address, and NO runtime
 	// at all — so a LAD lookup would nil-deref if the fast path did not win.
 	m.peers[testNodeIDA] = &peerConn{nodeID: testNodeIDA, addresses: []lad.ReachAddress{
 		{Host: "fdaa:0:1234:a7b::2", Port: 41641, Proto: "udp", Scope: "private"},
@@ -276,7 +270,7 @@ func TestComputeCrossOriginUsesExistingPeerAddressesFirst(t *testing.T) {
 			"cross-origin — private dialling is suppressed for a same-org peer")
 	}
 
-	// Same fixture, FOREIGN org: the fast path must still answer, oppositely.
+	// Same fixture, FOREIGN origin: the fast path must still answer, oppositely.
 	m.peers[testNodeIDB] = &peerConn{nodeID: testNodeIDB, addresses: []lad.ReachAddress{
 		{Host: "fdaa:0:9999:a7b::2", Port: 41641, Proto: "udp", Scope: "private"},
 	}}

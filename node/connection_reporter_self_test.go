@@ -7,26 +7,18 @@ package node
 
 import "testing"
 
-// COVERAGE of the ConnectionReporter's SELF-IDENTITY pair and the
-// NilConnectionReporter fallback — the five methods still at 0.0%:
+// Covers the ConnectionReporter's SELF-IDENTITY pair and the
+// NilConnectionReporter fallback:
 //
-//	peerConnectionReporter.SelfRegion  (:212)   NilConnectionReporter.ConnectionTo (:224)
-//	peerConnectionReporter.SelfNodeID  (:216)   NilConnectionReporter.SelfRegion   (:226)
-//	                                            NilConnectionReporter.SelfNodeID   (:227)
+//	peerConnectionReporter.SelfRegion    NilConnectionReporter.ConnectionTo
+//	peerConnectionReporter.SelfNodeID    NilConnectionReporter.SelfRegion
+//	                                     NilConnectionReporter.SelfNodeID
 //
-// 🔴 CENSUS MODE 3, AND THIS TIME IT CHANGED THE ANSWER. These are
-// interface methods, so no caller names them — and `ConnectionReporter` is
-// EXPORTED, so the loom repo is NOT the population. Enumerating the roots first
-// censused before publishing rather than after:
-//
-//	loom repo         .SelfNodeID() / .SelfRegion() call sites:  0
-//	HSTLES root                                                  0
-//	ORBTR root                                                   4  <- LIVE
-//	  io/endpoints/help.orbtr.io/monitoring_api.go:1139 :1141 :1209 :1392
-//	POSITIVE CONTROL: the same sweep finds .ActiveConnections() 16/5/13 across the roots.
-//
-// ⇒ A loom-only grep would have filed all five as DEAD. They are the mesh
-// topology API's view of "which node am I".
+// 🔴 These are interface methods, so no caller names them, and
+// `ConnectionReporter` is EXPORTED, so their callers are not confined to loom:
+// loom itself calls neither .SelfNodeID() nor .SelfRegion(), while a monitoring
+// client outside loom calls both. They are the mesh topology API's view of
+// "which node am I", so a search of loom alone cannot show them unused.
 
 // ── The real reporter ───────────────────────────────────────────────────────
 
@@ -69,8 +61,8 @@ func TestTheReporterReadsSelfIdentityThroughToTheManager(t *testing.T) {
 // returns are not arbitrary placeholders: a consumer in a DIFFERENT REPO guards
 // on them by value.
 //
-//	help.orbtr.io/monitoring_api.go:1139  if _, ok := machineMap[selfID]; !ok && selfID != ""
-//	help.orbtr.io/monitoring_api.go:1141  if selfOwnRegion == "" { ...Platform.Region() }
+//	if _, ok := machineMap[selfID]; !ok && selfID != ""
+//	if selfOwnRegion == "" { ...Platform.Region() }
 //
 // Both guards test for THE EMPTY STRING. If SelfNodeID() ever returned
 // "unknown" or "nil-reporter" instead, the `selfID != ""` guard would pass and

@@ -327,12 +327,17 @@ type Runtime struct {
 	// holepunchRPCHandler, the initiator side drives it from connectPeer.
 	punchCoord *punchCoordinator
 
+	// unpartitionedTransport is the one transport a node with no configured
+	// partition listens on, nil otherwise. transportMgr holds a transport per
+	// partition and this one serves none, so Shutdown closes it itself.
+	unpartitionedTransport *noise.NoiseTransport
+
 	// Core components
 	identity           *NodeIdentity
 	transportMgr       *manager.TransportManager // per-partition transport routing
 	sharedTransport    *manager.SharedTransport  // shared preamble-based transport (may be nil)
 	listenTransports   []aether.Transport        // unique transports needing Listen()
-	listenPartitionIDs []string                  // parallel: partition ID per listener (""=from session)
+	listenPartitionIDs []string                  // parallel: partition ID per listener; "" binds none of its own (see startVL1Listener)
 	ledger             lad.Ledger
 	cache              *ladcache.DirectoryCache
 	// liveDir is the ports.LiveDirectory over the LAD cache. Mesh directory
@@ -818,9 +823,13 @@ func Initialize(cfg Config) (*Runtime, error) {
 			}
 
 			if len(cfg.Partitions) == 0 {
-				// ── Unpartitioned fallback ───────────────────────────────────
-				// No Partitions configured — create a single NoiseTransport from
-				// cfg.NetworkKeys and register it as "default".
+				// ── No partition configured ──────────────────────────────────
+				// One NoiseTransport over cfg.NetworkKeys, bound to no partition.
+				// It is not registered with transportMgr, whose keys are
+				// partitions, and its listener's partition is "", so a session
+				// accepted on it carries no transport partition: RPCServer and
+				// validateScope then treat it as bound to none, and
+				// bindAuthenticatedPrincipal refuses any mesh principal on it.
 				singleCfg := baseCfg
 				singleCfg.NetworkKeys = cfg.NetworkKeys
 				singleCfg.ListenAddr = fmt.Sprintf(":%d", cfg.VL1.UDPPort)
@@ -830,10 +839,10 @@ func Initialize(cfg Config) (*Runtime, error) {
 					cancel()
 					return nil, fmt.Errorf("create VL1 transport: %w", err)
 				}
-				rt.attachIntraOrgForwarder(tr, "default")
-				rt.transportMgr.Register(aether.ScopeID("default"), tr)
+				rt.attachIntraOriginForwarder(tr, "unpartitioned")
+				rt.unpartitionedTransport = tr
 				rt.listenTransports = append(rt.listenTransports, tr)
-				rt.listenPartitionIDs = append(rt.listenPartitionIDs, "default")
+				rt.listenPartitionIDs = append(rt.listenPartitionIDs, "")
 
 				// Register with global transport registry for selector fallback
 				aether.RegisterTransport(aether.ProtocolVL1, tr)
@@ -861,7 +870,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 						cancel()
 						return nil, fmt.Errorf("create shared VL1 transport: %w", err)
 					}
-					rt.attachIntraOrgForwarder(st.Inner(), "shared")
+					rt.attachIntraOriginForwarder(st.Inner(), "shared")
 					rt.sharedTransport = st
 					rt.listenTransports = append(rt.listenTransports, st)
 					rt.listenPartitionIDs = append(rt.listenPartitionIDs, "") // resolved from session preamble
@@ -883,7 +892,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 							cancel()
 							return nil, fmt.Errorf("create dedicated transport for partition %s: %w", tc.PartitionID, err)
 						}
-						rt.attachIntraOrgForwarder(tr, "partition:"+tc.PartitionID)
+						rt.attachIntraOriginForwarder(tr, "partition:"+tc.PartitionID)
 						rt.transportMgr.Register(tid, tr)
 						rt.listenTransports = append(rt.listenTransports, tr)
 						rt.listenPartitionIDs = append(rt.listenPartitionIDs, tc.PartitionID)
@@ -1475,6 +1484,11 @@ func (rt *Runtime) Shutdown() error {
 				log.Printf("[NODE] Error closing VL1 transports: %v", err)
 			}
 		}
+		if rt.unpartitionedTransport != nil {
+			if err := rt.unpartitionedTransport.Close(); err != nil {
+				log.Printf("[NODE] Error closing the unpartitioned VL1 transport: %v", err)
+			}
+		}
 
 		// Step 5: Close audit logger
 		if rt.auditLogger != nil {
@@ -1889,16 +1903,16 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	defer rt.vl1Metrics.RUnlock()
 
 	m := map[string]interface{}{
-		"active_sessions":                 rt.vl1Metrics.activeSessions,
-		"total_connections":               rt.vl1Metrics.totalConnections,
-		"failed_dials":                    rt.vl1Metrics.failedDials,
-		"last_sync_time":                  rt.vl1Metrics.lastSyncTime,
-		"sync_lag_seconds":                rt.vl1Metrics.syncLag.Seconds(),
-		"ledger_append_errors":            rt.vl1Metrics.ledgerAppendErrors,
-		"compose_task_in_flight":          rt.composeTaskInFlight.Load(),
-		"compose_task_in_flight_limit":    rt.composeTaskInFlightLimit(),
-		"compose_task_owner_limit":        rt.composeTaskPartitionInFlightLimit(),
-		"compose_task_admission_rejected": rt.composeTaskRejected.Load(),
+		"active_sessions":                        rt.vl1Metrics.activeSessions,
+		"total_connections":                      rt.vl1Metrics.totalConnections,
+		"failed_dials":                           rt.vl1Metrics.failedDials,
+		"last_sync_time":                         rt.vl1Metrics.lastSyncTime,
+		"sync_lag_seconds":                       rt.vl1Metrics.syncLag.Seconds(),
+		"ledger_append_errors":                   rt.vl1Metrics.ledgerAppendErrors,
+		"compose_task_in_flight":                 rt.composeTaskInFlight.Load(),
+		"compose_task_in_flight_limit":           rt.composeTaskInFlightLimit(),
+		"compose_task_partition_in_flight_limit": rt.composeTaskPartitionInFlightLimit(),
+		"compose_task_admission_rejected":        rt.composeTaskRejected.Load(),
 	}
 
 	// LAD cache stats
@@ -2030,7 +2044,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	// reason X" without enabling a debug log channel.
 	var preambleMalformed, targetUnknown, innerRelayMalformed,
 		opForwardNoSrc, opReplyStaleFlow, opUnknown uint64
-	var crossOrgMsg1Received uint64
+	var crossOriginMsg1Received uint64
 	// forwarderAttached/Absent disambiguate a zero msg1-received counter
 	// (the forwarder's count of preambled msg1 datagrams, emitted below).
 	//
@@ -2043,7 +2057,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	// arrived" (the delivery-gap reading) or "nothing was listening for one".
 	// Without these two counters those are indistinguishable, and the decision
 	// tree below silently assumes the former. forwarder.go's attach function is
-	// called unconditionally after every transport build (default/shared/partition), so
+	// called unconditionally after every transport build (unpartitioned/shared/partition), so
 	// forwarder_absent SHOULD be 0 — but that is a source reading, and this makes
 	// it a runtime fact.
 	var forwarderAttached, forwarderAbsent uint64
@@ -2071,7 +2085,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		opForwardNoSrc += d
 		opReplyStaleFlow += e
 		opUnknown += f
-		crossOrgMsg1Received += fwd.CrossOrgMsg1Received()
+		crossOriginMsg1Received += fwd.CrossOriginMsg1Received()
 	}
 	// Read these BEFORE interpreting the msg1-received counter below: if
 	// forwarder_absent > 0, a zero msg1 count proves nothing about delivery.
@@ -2103,7 +2117,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	//     format/version skew also presents as counter==0.
 	// Neither is a Fly problem, and both are fixable in code — so
 	// counter==0 alone does NOT license an infrastructure conclusion.
-	m["cross_org_msg1_received"] = crossOrgMsg1Received
+	m["cross_origin_msg1_received"] = crossOriginMsg1Received
 
 	// ── Mesh session resumption: capability census + establishment volume ──
 	//
@@ -2156,22 +2170,22 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 	// them. See ConnectionManager field documentation for the full
 	// decision tree.
 	if rt.connMgr != nil {
-		attempted, succeeded, failed := rt.connMgr.CrossPartitionPreambleStats()
-		m["cross_org_preamble_dials_attempted"] = attempted
-		m["cross_org_preamble_dials_succeeded"] = succeeded
-		m["cross_org_preamble_dials_failed"] = failed
+		attempted, succeeded, failed := rt.connMgr.CrossOriginPreambleStats()
+		m["cross_origin_preamble_dials_attempted"] = attempted
+		m["cross_origin_preamble_dials_succeeded"] = succeeded
+		m["cross_origin_preamble_dials_failed"] = failed
 
 		// Cross-origin dial funnel gates. Narrow which stage drops
 		// noise-UDP dials before they reach the preamble code. See
 		// ConnectionManager field documentation for the diagnostic
 		// decision tree.
-		pickIncl, pubUDP, candEmpty, allDead, nonAny, noSuit := rt.connMgr.CrossPartitionGateStats()
-		m["cross_org_pickpath_noise_udp_included"] = pickIncl
-		m["cross_org_bestaddr_public_udp_count"] = pubUDP
-		m["cross_org_bestaddr_candidates_empty"] = candEmpty
-		m["cross_org_bestaddr_all_dead"] = allDead
-		m["cross_org_bestaddr_non_anycast_selected"] = nonAny
-		m["cross_org_dial_no_suitable_addr"] = noSuit
+		pickIncl, pubUDP, candEmpty, allDead, nonAny, noSuit := rt.connMgr.CrossOriginGateStats()
+		m["cross_origin_pickpath_noise_udp_included"] = pickIncl
+		m["cross_origin_bestaddr_public_udp_count"] = pubUDP
+		m["cross_origin_bestaddr_candidates_empty"] = candEmpty
+		m["cross_origin_bestaddr_all_dead"] = allDead
+		m["cross_origin_bestaddr_non_anycast_selected"] = nonAny
+		m["cross_origin_dial_no_suitable_addr"] = noSuit
 
 		// Aether session-aggregate counters. Walks every live aether
 		// session and sums SessionMetrics counter fields. Without
@@ -2240,7 +2254,7 @@ func (rt *Runtime) MeshMetrics() map[string]interface{} {
 		m["role_affinity_dispatch_target_hits"] = raDisp
 		m["role_affinity_total_bonus_applied"] = raBonus
 
-		// unregister_skipped_not_owner is the diagnostic counter for the
+		// The skipped-unregister counter is the diagnostic counter for the
 		// dispatch-identity guard. Each increment is one case where an
 		// obsolete cleanup goroutine would have removed a newer session
 		// from dispatch and didn't, thanks to the identity check.
@@ -2824,32 +2838,33 @@ func (rt *Runtime) bootstrapPeers(ctx context.Context, cfg Config) error {
 	return nil
 }
 
-// transitionToUDP manages the lifecycle of gossip connections:
-// 1. Start HTTPS gossip to bootstrap hosts
+// dialNoiseUDP dials target over each listen transport in turn and returns the
+// first session that completes. DialByProtocol, dialWithProtocol and
+// attemptHolePunch call it.
+//
+// A shared transport picks the keys and preamble for exactly one partition, the
+// one on the dial context (manager.WithPartitionID). A caller that dials for a
+// partition puts it there; otherwise dialPartitionFor supplies the partition the
+// target is known under, from its last session or its peer record. With neither
+// the shared transport refuses the dial with manager.ErrSharedNoPartitionInCtx
+// and the loop moves on. No configured partition is chosen in the target's
+// place: the responder binds the session to whichever partition the preamble
+// names, so a partition the target was not known under would become the
+// session's partition on both ends.
 func (rt *Runtime) dialNoiseUDP(ctx context.Context, target aether.Target) (aether.Connection, error) {
 	if rt.transportMgr == nil {
 		return nil, fmt.Errorf("no transport manager")
 	}
 
-	// Dial with proper partition isolation. SharedTransport requires a partition
-	// context for PSK key selection and preamble encoding.
 	var lastErr error
-	for i, tr := range rt.listenTransports {
+	for _, tr := range rt.listenTransports {
 		dialCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 
-		// Inject the partition onto the dial context if this transport requires it
 		if _, ok := tr.(*manager.SharedTransport); ok {
-			partitionID := ""
-			if i < len(rt.listenPartitionIDs) && rt.listenPartitionIDs[i] != "" {
-				partitionID = rt.listenPartitionIDs[i]
-			}
-			// A shared transport resolves the partition from the session, so it
-			// leaves this empty; fall back to the first configured partition.
-			if partitionID == "" && len(rt.cfg.Partitions) > 0 {
-				partitionID = rt.cfg.Partitions[0].PartitionID
-			}
-			if partitionID != "" {
-				dialCtx = manager.WithPartitionID(dialCtx, aether.ScopeID(partitionID))
+			if named, _ := manager.PartitionIDFromContext(dialCtx); named == "" {
+				if partition := rt.dialPartitionFor(target.NodeID); partition != "" {
+					dialCtx = manager.WithPartitionID(dialCtx, aether.ScopeID(partition))
+				}
 			}
 		}
 
@@ -2890,8 +2905,10 @@ func (rt *Runtime) startVL1Listener(ctx context.Context) error {
 
 		log.Printf("[NODE] VL1 UDP listener started on %s", listener.Addr())
 
-		// Resolve the fallback partition for this listener.
-		// "" means the partition is resolved from the session preamble (shared transport).
+		// The partition a session on this listener is bound to when it carries
+		// none itself: a dedicated listener's own partition. "" binds none, which
+		// is what the shared listener (whose sessions name their partition in
+		// the preamble) and the unpartitioned listener pass.
 		fallbackPartition := ""
 		if i < len(rt.listenPartitionIDs) {
 			fallbackPartition = rt.listenPartitionIDs[i]

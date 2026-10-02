@@ -16,7 +16,7 @@ import (
 // camelCase and the snake_case spelling. Spelling is irrelevant: the map is not
 // authority in either spelling. Only the typed server-established identity may
 // satisfy a scope tier.
-const probeTenant = "orbtr"
+const probePartition = "orbtr"
 
 // TestSpellingProbe_MeshShapedArrivalIsDenied covers the camelCase wire shape.
 func TestSpellingProbe_MeshShapedArrivalIsDenied(t *testing.T) {
@@ -25,7 +25,7 @@ func TestSpellingProbe_MeshShapedArrivalIsDenied(t *testing.T) {
 	for _, scope := range []Scope{ScopePartition, ScopeWithinPartition, ScopePartition} {
 		h := &stubMeta{name: "probe.meshArrival", scope: scope}
 		err := r.validateScope(ctxWithRPC(map[string]interface{}{
-			"tenantId": probeTenant, // CAMEL — what the wire actually stamps
+			"tenantId": probePartition, // CAMEL — what the wire actually stamps
 		}), h)
 
 		if err == nil {
@@ -51,7 +51,7 @@ func TestSpellingProbe_ReaderShapedArrivalIsDenied(t *testing.T) {
 	for _, scope := range []Scope{ScopePartition, ScopeWithinPartition, ScopePartition} {
 		h := &stubMeta{name: "probe.readerShape", scope: scope}
 		err := r.validateScope(ctxWithRPC(map[string]interface{}{
-			"tenant_id": probeTenant, // SNAKE — what the reader looks up
+			"tenant_id": probePartition, // SNAKE — what the reader looks up
 		}), h)
 		if err == nil {
 			t.Errorf("scope %q: mutable snake_case request hint manufactured identity", scope)
@@ -66,17 +66,17 @@ func TestSpellingProbe_TypedIdentityIsTheOnlyAdmissionPath(t *testing.T) {
 	r := newScopedRegistry()
 	h := &stubMeta{name: "probe.control", scope: ScopePartition}
 
-	camelErr := r.validateScope(ctxWithRPC(map[string]interface{}{"tenantId": probeTenant}), h)
-	snakeErr := r.validateScope(ctxWithRPC(map[string]interface{}{"tenant_id": probeTenant}), h)
+	camelErr := r.validateScope(ctxWithRPC(map[string]interface{}{"tenantId": probePartition}), h)
+	snakeErr := r.validateScope(ctxWithRPC(map[string]interface{}{"tenant_id": probePartition}), h)
 
 	if camelErr == nil || snakeErr == nil {
 		t.Fatalf("both mutable spellings must deny (camel=%v snake=%v)", camelErr, snakeErr)
 	}
 
 	ctx := rpcscope.WithAuthenticatedIdentity(ctxWithRPC(map[string]interface{}{
-		"tenantId":  probeTenant,
-		"tenant_id": probeTenant,
-	}), scopeIdentity(probeTenant, "", ""))
+		"tenantId":  probePartition,
+		"tenant_id": probePartition,
+	}), scopeIdentity(probePartition, "", ""))
 	if err := r.validateScope(ctx, h); err != nil {
 		t.Errorf("typed authenticated platform tenant should admit: %v", err)
 	}

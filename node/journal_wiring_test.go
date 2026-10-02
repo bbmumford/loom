@@ -140,7 +140,7 @@ func TestJournalOpenFailsSoftlyOnAnUnusableDir(t *testing.T) {
 //
 // closePortSeams exists so both are testable without standing up a full
 // node, and this asserts what shutdown must actually do.
-func TestShutdownReleasesBothPhase05Seams(t *testing.T) {
+func TestShutdownClosesTheJournalSeamAndIsIdempotent(t *testing.T) {
 	fj, err := journal.Open(filepath.Join(t.TempDir(), "journal"))
 	if err != nil {
 		t.Fatal(err)

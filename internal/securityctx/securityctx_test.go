@@ -62,7 +62,7 @@ func TestValidateExecutionAuthChecksTheHandlerScopes(t *testing.T) {
 	}
 }
 
-func TestDefaultExecutionTenantIDReadsWithoutMinting(t *testing.T) {
+func TestDefaultExecutionPartitionIDReadsWithoutMinting(t *testing.T) {
 	reader, ok := Default().(ports.PartitionPrincipalReader)
 	if !ok {
 		t.Fatal("default validator must implement ports.PartitionPrincipalReader")

@@ -660,9 +660,10 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 	// 2b. Stamp the transport partition the session was accepted on, then bind
 	// the optional typed caller principal. RPCRequest.Context is mutable
 	// metadata and never establishes authority; only the transport the session
-	// authenticated over, and a principal its admitter accepts, do.
+	// authenticated over, and a principal its admitter accepts, do. "" is a
+	// session bound to no partition, and every other value is a partition.
 	transportPartition := handlers.TransportPartitionFromContext(ctx)
-	if transportPartition != "" && transportPartition != "default" {
+	if transportPartition != "" {
 		ctx = s.authValidator.WithPartitionID(ctx, transportPartition)
 	}
 	typedPrincipal := false
@@ -784,7 +785,7 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 	if wire == nil {
 		return ctx, nil
 	}
-	if transportPartition == "" || transportPartition == "default" {
+	if transportPartition == "" {
 		return ctx, fmt.Errorf("a mesh principal requires a partition-bound transport")
 	}
 
@@ -909,16 +910,18 @@ func (s *RPCServer) writeMessage(ctx context.Context, session aether.Connection,
 	return session.Send(ctx, body)
 }
 
-// HandleIncomingSessions processes incoming VL1 sessions with RPC protocol,
-// binding every session to the unpartitioned "default" transport partition.
+// HandleIncomingSessions processes incoming VL1 sessions with RPC protocol on a
+// listener bound to no partition: a session that names no partition itself is
+// bound to none.
 func (s *RPCServer) HandleIncomingSessions(ctx context.Context, listener aether.Listener) {
-	s.HandleIncomingSessionsForPartition(ctx, listener, "default")
+	s.HandleIncomingSessionsForPartition(ctx, listener, "")
 }
 
 // HandleIncomingSessionsForPartition processes incoming sessions, resolving the
 // transport-level partition for each. fallbackPartitionID is used for a session
 // that carries no embedded partition (a dedicated single-partition transport);
-// on a shared preamble transport the partition is read from the session.
+// on a shared preamble transport the partition is read from the session. An
+// empty fallbackPartitionID binds such a session to no partition.
 func (s *RPCServer) HandleIncomingSessionsForPartition(ctx context.Context, listener aether.Listener, fallbackPartitionID string) {
 	s.logger.Printf("[RPC] Listening for incoming mesh connections (partition fallback: %s)...", fallbackPartitionID)
 

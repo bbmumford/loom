@@ -72,13 +72,13 @@ func refPolicy(platforms ...string) scope.PresencePolicyFunc {
 
 // idAxes builds an opaque identity from the deployed axes, omitting any empty
 // axis (an absent axis must stay absent).
-func idAxes(partition, org, user string) rpc.AuthenticatedScopeIdentity {
+func idAxes(partition, within, user string) rpc.AuthenticatedScopeIdentity {
 	id := rpc.AuthenticatedScopeIdentity{Subject: user}
 	if partition != "" {
 		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisTransportPinned, Value: partition})
 	}
-	if org != "" {
-		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisWithinTransport, Value: org})
+	if within != "" {
+		id.Scopes = append(id.Scopes, scope.ScopeValue{Name: scope.AxisWithinTransport, Value: within})
 	}
 	return id
 }
@@ -150,7 +150,7 @@ func TestExecuteLocal_ScopeSubject_Denied(t *testing.T) {
 	}
 }
 
-// TestExecuteLocal_ScopePartition_Denied — missing tenantId on ScopePartition
+// TestExecuteLocal_ScopePartition_Denied — a missing partition on ScopePartition
 // fails closed.
 func TestExecuteLocal_ScopePartition_Denied(t *testing.T) {
 	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopePartition))
@@ -174,7 +174,7 @@ func TestExecuteLocal_ScopeNone_Passes(t *testing.T) {
 }
 
 // TestExecuteLocal_ScopeSubject_StampedCtx_Passes — positive path: a stamped
-// ctx (tenantId+userId) satisfies ScopeSubject and the handler runs.
+// ctx (partition and subject) satisfies ScopeSubject and the handler runs.
 func TestExecuteLocal_ScopeSubject_StampedCtx_Passes(t *testing.T) {
 	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopeSubject))
 	ctx := rpc.WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "", "u-1"))
@@ -254,7 +254,7 @@ func TestExecuteProxy_NilPolicy_FailsClosed(t *testing.T) {
 }
 
 // TestExecuteProxy_Policy_PlatformSatisfied_ReachesMesh — with a policy that
-// admits the platform tenant, a ScopeAllowlisted proxy passes scope enforcement
+// admits the allow-listed partition, a ScopeAllowlisted proxy passes scope enforcement
 // and proceeds to mesh dispatch; the resulting error is a mesh/caller error,
 // NOT ErrScopeDenied.
 func TestExecuteProxy_Policy_PlatformSatisfied_ReachesMesh(t *testing.T) {

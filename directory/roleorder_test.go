@@ -36,11 +36,11 @@ import (
 // as given" (#M-620 ③ — that exact fixture bug survived a mutant).
 var unsortedRoles = []string{"identity", "auth", "anchor", "billing"}
 
-// fixtureTenant matches the "tenant=hstles" tag peerRecord stamps. The port
-// documents that a record stored under a tenant returns nothing for a query
-// on "" — so both implementations must be asked the SAME tenant or the
-// comparison is between a hit and a miss.
-const fixtureTenant ports.Partition = "hstles"
+// fixturePartition is the partition peerRecord tags each record with. The port
+// returns nothing for a query on "" when a record is stored under a partition,
+// so both implementations are asked for this same partition, or the comparison
+// is between a hit and a miss.
+const fixturePartition ports.Partition = "hstles"
 
 func wantSortedRoles() []string { return []string{"anchor", "auth", "billing", "identity"} }
 
@@ -108,12 +108,12 @@ func TestBothDirectoriesReturnRolesInTheSameOrder(t *testing.T) {
 	if err := sd.Ingest(context.Background(), peerRecord(t, id, pub, 1, unsortedRoles, "svc")); err != nil {
 		t.Fatal(err)
 	}
-	sm, ok, err := sd.Member(context.Background(), fixtureTenant, id)
+	sm, ok, err := sd.Member(context.Background(), fixturePartition, id)
 	if err != nil || !ok {
 		t.Fatalf("SwarmDirectory does not know the fixture node (ok=%v err=%v)", ok, err)
 	}
 
-	ladRoles := ladMemberRoles(t, string(id), string(fixtureTenant), unsortedRoles)
+	ladRoles := ladMemberRoles(t, string(id), string(fixturePartition), unsortedRoles)
 
 	if !rolesEqual(sm.Roles, wantSortedRoles()) {
 		t.Errorf("SwarmDirectory returned %q, want %q — producer order is "+
@@ -140,11 +140,11 @@ func TestSwarmRoleOrderSurvivesTheCloneOnEveryReadPath(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	one, ok, err := sd.Member(context.Background(), fixtureTenant, id)
+	one, ok, err := sd.Member(context.Background(), fixturePartition, id)
 	if err != nil || !ok {
 		t.Fatalf("Member: ok=%v err=%v", ok, err)
 	}
-	all, err := sd.Members(context.Background(), fixtureTenant)
+	all, err := sd.Members(context.Background(), fixturePartition)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -13,34 +13,31 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
-// The per-address RTT hint is CONSUMED and never PRODUCED by loom. Censused
-// per symbol across all three roots, non-test, excluding the unbuilt worktree:
+// The per-address RTT hint is CONSUMED by loom and PRODUCED only when a
+// provider is set:
 //
-//	AddressRTTProvider      declared          loom/node/peer_publisher.go:239
-//	PeerPublisher.rtts      field, assigned   :55 / :248 — READ NOWHERE
-//	SetRTTProvider          callers           ZERO
-//	publishOnce             stamps RttEstimateMs?  NO
-//	address_table.go:222    READS it          RTTEstMs: addr.RttEstimateMs
-//	address_table.go:235    RANKS on it       cands[i].RTTEstMs < cands[j].RTTEstMs
+//	AddressRTTProvider      declared          node/peer_publisher.go
+//	SetRTTProvider          callers in loom   none
+//	publishOnce             stamps RttEstimateMs only with a provider set
+//	address_table.go        READS it          RTTEstMs: addr.RttEstimateMs
+//	address_table.go        RANKS on it       cands[i].RTTEstMs < cands[j].RTTEstMs
 //
-// 🔴 So every address a loom node publishes arrives with RttEstimateMs == 0,
-// and the ranking is ASCENDING — 0 sorts first, i.e. "best". The setter's own
-// doc promises the opposite of what happens: "so peers can pick the
-// lowest-latency address from the set instead of probing every one".
+// 🔴 So with no provider every address a loom node publishes arrives with
+// RttEstimateMs == 0, and the ranking is ASCENDING — 0 sorts first, i.e.
+// "best". The setter's doc ("so peers can pick the lowest-latency address from
+// the set instead of probing every one") holds only once a caller sets one.
 //
-// ⚠ BOUNDED HONESTLY: `cands` are the addresses of ONE peer record, so these
-// zeroes tie only among that peer's own addresses — they never sort against a
-// different peer's real measurements. The consequence is therefore narrow and
-// exact: WITHIN a transport-priority tier, a loom peer's addresses are ordered
-// by wire arrival order, and the intended latency preference never applies.
+// ⚠ BOUNDED: `cands` are the addresses of ONE peer record, so these zeroes tie
+// only among that peer's own addresses — they never sort against a different
+// peer's real measurements. Within a transport-priority tier, a loom peer's
+// addresses are ordered by wire arrival order, and the intended latency
+// preference never applies.
 //
-// 🔗 And it is a fix that did not travel: ORBTR's AGENT publisher
-// (io/agent/internal/core/wire/peer_publisher.go:277) DOES stamp
-// `RttEstimateMs: rtt` through its own AgentAddressRTTProvider. The same design
-// exists, wired, one tree away.
+// A publisher given an AddressRTTProvider (PeerPublisher.SetRTTProvider) stamps
+// `RttEstimateMs: rtt` on each address; nothing in this module supplies one.
 //
 // These tests pin the CURRENT behaviour, including the zero-tie, so that
-// wiring a provider later turns them red in the place that explains why.
+// wiring a provider turns them red in the place that explains why.
 
 func addrOf(transport swarmpb.Address_Transport, host string, port uint32, rtt uint32) *swarmpb.Address {
 	return &swarmpb.Address{

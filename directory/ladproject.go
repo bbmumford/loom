@@ -67,17 +67,16 @@ func ladTopicsFor(t ports.Topic) []lad.Topic {
 // PROVENANCE — its INPUT has already lost it. "The projection never re-encodes
 // or re-signs" is true of this code and false of the pipeline.
 //
-// MEASURED against the ledger version go.mod pins: the only bulk read,
-// ChangesSinceHLC, SYNTHESISES records from the typed store —
-// `body, _ := json.Marshal(r)` — and constructs lad.Record{Topic, Partition,
-// NodeID, Seq, Body, Timestamp} with NO Signature and NO AuthorPubKey field at
-// all. So through this adapter:
+// The ledger's only bulk read, ChangesSinceHLC, synthesises records from the
+// typed store — `body, _ := json.Marshal(r)` — and constructs lad.Record{Topic,
+// Partition, NodeID, Seq, Body, Timestamp} with no Signature and no
+// AuthorPubKey field at all. So through this adapter:
 //
-//   - Signature and AuthorPubKey are ZERO-LENGTH. Not truncated, not stale —
-//     absent. The owner's signature never reaches ports.Record.
-//   - Body is a RE-MARSHAL of the typed struct, not the owner's wire bytes.
-//     ⚠ In the measurement they were the SAME LENGTH (282) and different
-//     bytes, so a length check passes and an equality check fails.
+//   - Signature and AuthorPubKey are empty: the author's signature never
+//     reaches ports.Record.
+//   - Body is a RE-MARSHAL of the typed struct, not the author's wire bytes. It
+//     can have the same length as those bytes with different content, so a
+//     length check passes where an equality check fails.
 //   - c.GetLastReachBody is the ONLY cache API that returns the received
 //     bytes, which is why that call site cannot be replaced by RecordsByTopic.
 //
@@ -86,7 +85,7 @@ func ladTopicsFor(t ports.Topic) []lad.Topic {
 // record that came through here, and do not treat a LAD Fingerprint as
 // signature-covering — fingerprintRecords hashes sha256(Signature), which is
 // sha256("") for every record on this path. Pinned by
-// TestLADReadPathCarriesNoOwnerSignature.
+// TestLADReadPathCarriesNoAuthorSignature.
 func ladToPortRecord(r lad.Record) ports.Record { return r2p(r) }
 
 func r2p(r lad.Record) ports.Record {

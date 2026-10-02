@@ -31,27 +31,27 @@ type Watermark uint64
 
 // Record is the canonical accepted-record envelope that flows through
 // LiveDirectory subscriptions and DurableJournal append/replay. Beside the
-// slot identity (Topic, NodeID, Key) and the owner's Body it carries the
+// slot identity (Topic, NodeID, Key) and the author's Body it carries the
 // ordering stamps (HLC and Lamport), the tombstone and its reason, the
 // expiry, the author's public key and signature, any observer attestation,
 // and the CID of a body held out of line.
 //
 // Provenance invariant: Body, AuthorPubKey, Signature, and Observer are the
-// owner's bytes VERBATIM. Replicas and the journal never re-encode or
+// author's bytes VERBATIM. Replicas and the journal never re-encode or
 // re-sign them — the swarm Merkle leaf hashes SHA256(sig) over the received
-// signature bytes, and re-signing a remote owner's fact destroys provenance
+// signature bytes, and re-signing a remote author's fact destroys provenance
 // and cannot pass the NodeID↔author binding TrustPolicy.VerifyNodeKey checks.
 //
-// 🛑 MEASURED LIMIT: THIS ENVELOPE IS FAITHFUL FOR SWARM-SIGNED RECORDS AND
-// LOSSY FOR LAD-SIGNED ONES. Owner-signed provenance must survive
-// PROJECTION; it does for swarm, whose signable bytes
-// are fields carried here, and it does NOT for LAD. `lad.signatureContent`
-// additionally covers Partition, Seq, Timestamp, and ExpiresAt at NANOSECOND
-// precision — none of which exist here (ExpiresAtUnixMs is milliseconds).
-// A LAD record projected into this type and mapped back FAILS
-// lad.VerifyRecord; restoring exactly those four restores it, which is the
-// complete loss set (directory.TestLADSignedRecordDoesNotSurviveThePortEnvelope
-// pins it, with a positive control that the original record verified).
+// 🛑 LIMIT: THIS ENVELOPE IS FAITHFUL FOR SWARM-SIGNED RECORDS AND LOSSY FOR
+// LAD-SIGNED ONES. Author-signed provenance must survive PROJECTION; it does
+// for swarm, whose signable bytes are fields carried here, and it does NOT for
+// LAD. `lad.signatureContent` additionally covers Partition, Seq, Timestamp,
+// and ExpiresAt at NANOSECOND precision — none of which exist here
+// (ExpiresAtUnixMs is milliseconds). A LAD record projected into this type and
+// mapped back FAILS lad.VerifyRecord; restoring exactly those four restores
+// it, which is the complete loss set
+// (directory.TestLADSignedRecordDoesNotSurviveThePortEnvelope pins it, with a
+// positive control that the original record verified).
 //
 // ⇒ CONSEQUENCE: `anchor.Generator.Generate([]lad.Record)` cannot be fed
 // from a DirectorySnapshot — every record's signature would fail to verify.
@@ -61,7 +61,7 @@ type Watermark uint64
 // input, so it is not an adapter detail.
 type Record struct {
 	Topic  Topic
-	NodeID NodeID // owner of the (topic,node,key) slot — single writer
+	NodeID NodeID // the only writer of the (topic,node,key) slot
 
 	// Key sub-divides a node's presence on a topic, mirroring swarm's
 	// Record.Key: the slot identity is (Topic, NodeID, Key), so one node can
@@ -88,12 +88,12 @@ type Record struct {
 	TombstoneReason string
 	ExpiresAtUnixMs int64 // TTL expiry; 0 = no expiry
 
-	Body         []byte // owner bytes, verbatim (ciphertext for role.secrets.*)
+	Body         []byte // author bytes, verbatim (ciphertext for role.secrets.*)
 	AuthorPubKey []byte // ed25519 public key, verbatim
 	Signature    []byte // ed25519 signature over the canonical signable bytes, verbatim
 
 	// Observer is the raw third-party attestation segment, if any, verbatim.
-	// Observer facts are never promoted to owner state; below-quorum
+	// Observer facts are never promoted to author state; below-quorum
 	// attestations must remain forwardable/reconcilable.
 	Observer []byte
 

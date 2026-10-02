@@ -47,14 +47,14 @@ func (rt *Runtime) SubsystemsHandler() http.HandlerFunc {
 	reg := rt.healthRegistry
 	// Copy the configured list so a caller mutating its Config slice after
 	// Initialize cannot race the request path. nil stays nil: it selects the
-	// built-in origins, while a non-nil empty slice admits none.
+	// built-in origin, while a non-nil empty slice admits none.
 	var allowedOrigins []string
 	if configured := rt.cfg.SubsystemsAllowedOrigins; configured != nil {
 		allowedOrigins = make([]string, len(configured))
 		copy(allowedOrigins, configured)
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
-		// CORS: the same default origins and the same replace-on-configure
+		// CORS: the same built-in origin and the same replace-on-configure
 		// rule as meshstatus.NewHandler with WithAllowedOrigins.
 		origin := r.Header.Get("Origin")
 		if subsystemsOriginAllowed(origin, allowedOrigins) {
@@ -81,15 +81,16 @@ func (rt *Runtime) SubsystemsHandler() http.HandlerFunc {
 
 // subsystemsOriginAllowed reports whether SubsystemsHandler echoes origin in
 // Access-Control-Allow-Origin. configured is Config.SubsystemsAllowedOrigins:
-// nil admits the built-in pair below; a non-nil slice replaces that pair
-// exactly. An empty origin (a request with no Origin header) is never
-// echoed, and an empty entry in configured never matches.
+// nil admits only the built-in origin https://localhost:8080; a non-nil slice
+// replaces it exactly, so an empty one admits nothing. An empty origin (a
+// request with no Origin header) is never echoed, and an empty entry in
+// configured never matches.
 func subsystemsOriginAllowed(origin string, configured []string) bool {
 	if origin == "" {
 		return false
 	}
 	if configured == nil {
-		return origin == "https://help.orbtr.io" || origin == "https://localhost:8080"
+		return origin == "https://localhost:8080"
 	}
 	for _, allowed := range configured {
 		if allowed != "" && allowed == origin {

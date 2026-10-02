@@ -485,6 +485,16 @@ func (p *PeerPublisher) publishOnce() {
 		tags = append(tags, "http_port="+hp)
 	}
 
+	// dial_partition: the transport partition peers dial this node under, read
+	// by the fleet.peer ingest into PeerInfo.DialPartition and by
+	// dialPartitionFor. Written only while the shared transport holds exactly
+	// one partition (advertisedDialPartition).
+	if p.rt != nil {
+		if partition, ok := p.rt.advertisedDialPartition(); ok {
+			tags = append(tags, dialPartitionMetaKey+"="+partition)
+		}
+	}
+
 	// saturated / backoff_until: advertise connection-budget pressure so peers
 	// stop opening fresh paths to us. The bit is recomputed here (not cached on
 	// the struct), so it is automatically correct on the 5-min TTL refresh and

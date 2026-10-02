@@ -11,20 +11,16 @@ import (
 	lad "github.com/bbmumford/ledger"
 )
 
-// Covers all four functions in pex_address.go. Censused per symbol, one level
-// out, and checked for interface satisfaction. All four are UNEXPORTED, so
-// package node is the entire possible caller population and a repo-rooted
-// search has scope equal to the claim:
+// Covers all four functions in pex_address.go. All four are UNEXPORTED and no
+// interface declares any of them, so package node holds every possible caller:
 //
-//	scopeForHost          1 <- interface_advertise.go:109 (+ scopeForSwarmHost)
-//	scopeForSwarmHost     4 <- reach_resync.go:122, peer_connections.go:2390 :2637 :3340
-//	parseHostPort         0 <- DEAD at HEAD. 2 total occurrences: its doc and its own
-//	                           declaration. Confirmed with `git grep HEAD` too.
-//	describeReachAddress  0 <- DEAD at HEAD, same evidence.
-//	no interface declares any of them.
+//	scopeForHost          <- interface_advertise.go, and scopeForSwarmHost
+//	scopeForSwarmHost     <- reach_resync.go, and three sites in peer_connections.go
+//	parseHostPort         <- no caller outside this test
+//	describeReachAddress  <- no caller outside this test
 //
 // 🔑 SCOPE INFERENCE IS TIER PLACEMENT. scopeForHost's answer decides whether an
-// address lands in Tier 0 (same-org direct dial) or Tier 1/2 (anycast/FQDN), so
+// address lands in Tier 0 (same-origin direct dial) or Tier 1/2 (anycast/FQDN), so
 // a wrong answer does not fail loudly — it silently files a dialable 6PN peer
 // under the wrong tier and the direct path is never tried.
 
@@ -45,7 +41,7 @@ var scopeCases = []struct {
 	// 🔑 DELIBERATE AND SURPRISING: loopback and link-local are "public", not
 	// "private". The doc gives the reason — they are meant to be dropped by
 	// Tier 0a's post-parse filter, and calling them private would file them as
-	// same-org direct-dial candidates instead.
+	// same-origin direct-dial candidates instead.
 	{"127.0.0.1", "public", "loopback — public so Tier 0a's filter drops it rather than mis-scoping it"},
 	{"::1", "public", "IPv6 loopback, same reason"},
 	{"fe80::1", "public", "IPv6 link-local, same reason"},

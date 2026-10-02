@@ -14,45 +14,37 @@ import (
 )
 
 // COVERAGE of sweepLocked (response_cache.go:159) and StatsDetailed (:135),
-// both at 0.0%, plus the  high-water shed and the  clone
-// property in Get/Put.
+// plus the high-water shed and the clone property in Get/Put.
 //
 // 🔑 EVERY FIXTURE HERE BUILDS THE CACHE BY STRUCT LITERAL, NOT NewResponseCache.
 // The constructor unconditionally starts a cleanupLoop goroutine that this
-// package has no way to stop (see the two findings below), so calling it in a
-// test leaks a goroutine per test AND lets a background sweep race the
-// assertions. Constructing the struct directly exercises exactly the code under
-// test with no concurrent mutator.
+// package has no way to stop (see (1) below), so calling it in a test leaks a
+// goroutine per test AND lets a background sweep race the assertions.
+// Constructing the struct directly exercises exactly the code under test with
+// no concurrent mutator.
 //
-// ── TWO FINDINGS RECORDED HERE, NEITHER FIXED IN THIS SLICE ──────────────
-//
-// 🔴 (1) the coding contract: ResponseCache IS BACKGROUND WORK WITH NO LIFECYCLE.
+// 🔴 (1) ResponseCache IS BACKGROUND WORK WITH NO LIFECYCLE.
 // NewResponseCache (:47) unconditionally runs `go rc.cleanupLoop`, and
 // cleanupLoop (:148) is `for range ticker.C` with no stop channel, no ctx and
-// no exit — so `defer ticker.Stop()` never runs either. Measured: the complete
-// method set on ResponseCache is Get, Put, Stats, StatsDetailed, cleanupLoop,
-// sweepLocked. There is NO Stop or Close. the coding contract requires "explicit
-// Start(ctx)/Close or an equivalent lifecycle ... and no work after close".
+// no exit — so `defer ticker.Stop()` never runs either. ResponseCache's method
+// set is Get, Put, Stats, StatsDetailed, cleanupLoop and sweepLocked: there is
+// no Stop or Close, and the coding contract requires "explicit Start(ctx)/Close
+// or an equivalent lifecycle ... and no work after close". The lifecycle would
+// belong to RPCServer, which constructs the cache (rpc.go, NewRPCServer) and has
+// no Stop, Close or Shutdown either, so a ResponseCache.Stop would have no
+// caller.
 //
-// ⚠ NOT FIXED HERE, DELIBERATELY. The owner would be RPCServer, which
-// constructs the cache at rpc.go:354 — and RPCServer has no Stop, Close or
-// Shutdown either (measured). Adding ResponseCache.Stop() with nothing to call
-// it would manufacture exactly the REGISTERED-but-not-REACHABLE shape this lane
-// has filed twice today. The real fix is an RPCServer lifecycle, which is a
-// design decision for @R/DESIGN, not a test lane's to invent.
+// TODO: give RPCServer a lifecycle that stops its ResponseCache.
 //
 // 🔴 (2) A NON-POSITIVE TTL PANICS IN A GOROUTINE THE CALLER CANNOT RECOVER.
 // cleanupLoop does time.NewTicker(rc.ttl / 2), and time.NewTicker panics when
 // d <= 0. Integer division makes that true for any ttl <= 1ns, including 0.
 // The panic happens on the goroutine started by the constructor, so the
-// caller's recover() cannot catch it: the process dies.
+// caller's recover() cannot catch it: the process dies. The one non-test
+// caller, NewRPCServer, passes 10*time.Second, so no deployment reaches it; it
+// is a property of the exported constructor.
 //
-// ⚠ REACHABILITY, MEASURED: the ONLY production call site is rpc.go:354, which
-// passes a hard-coded 10*time.Second. So this is NOT live today — it is an
-// exported-constructor robustness hole, the same category as the Stop
-// double-close fixed earlier: "no current caller does it" is a
-// property of today's callers, not of the API. Recorded, not fixed, because
-// the fix (clamp or reject) is a contract choice.
+// TODO: clamp or reject a non-positive ttl in NewResponseCache.
 
 func sweepFixture(ttl time.Duration) *ResponseCache {
 	return &ResponseCache{entries: map[string]*cachedResponse{}, ttl: ttl}

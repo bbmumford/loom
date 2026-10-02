@@ -116,7 +116,8 @@ const (
 	// distinguish seed-only from sealed-envelope files.
 	nodeIdentityFileVersion = 1
 
-	// nodeIdentityFilePerm restricts the seed file to owner read+write.
+	// nodeIdentityFilePerm restricts the seed file to read and write by its
+	// file-system user alone.
 	// On POSIX this is enforced by the filesystem; on Windows the file
 	// still lives inside DataDir (a per-machine private volume) so the
 	// permission is best-effort defense-in-depth.

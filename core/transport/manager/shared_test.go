@@ -157,7 +157,7 @@ func TestSharedTransport_UpdatePartitionKeys_NotFound(t *testing.T) {
 	}
 }
 
-func TestSharedTransport_Dial_NoTenantInCtx(t *testing.T) {
+func TestSharedTransport_Dial_NoPartitionInCtx(t *testing.T) {
 	st, err := NewSharedTransport(testSharedTransportConfig(t))
 	if err != nil {
 		t.Fatalf("new: %v", err)
@@ -173,7 +173,7 @@ func TestSharedTransport_Dial_NoTenantInCtx(t *testing.T) {
 	}
 }
 
-func TestSharedTransport_Dial_UnknownTenant(t *testing.T) {
+func TestSharedTransport_Dial_UnknownPartition(t *testing.T) {
 	st, err := NewSharedTransport(testSharedTransportConfig(t))
 	if err != nil {
 		t.Fatalf("new: %v", err)
