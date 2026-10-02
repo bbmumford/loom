@@ -12,19 +12,16 @@ import (
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
-// ExportToHandlerRegistry registers all handlers from the rpc.Registry
-// into an existing handlers.HandlerRegistry. This bridges the new
-// registration model with the existing RPCServer / task-executor dispatch
-// paths so an endpoint that migrates a domain into rpc.Registry (via a
-// canonical register.go) keeps working on both wire surfaces.
+// ExportToHandlerRegistry registers every handler in this rpc.Registry into a
+// node/handlers.HandlerRegistry, so the RPCServer and task-executor dispatch
+// paths reach handlers a domain registers through its register.go.
 //
 // Each handler is wrapped in a shim that implements handlers.RPCHandler
 // AND handlers.TaskHandler — the second interface is required so mesh task
 // executors (execution.Executor) can resolve the shim after the mesh
-// task path type-asserts GetMeta result to TaskHandler. Domains dispatched
-// exclusively via RPC (identity, notify, auth …) don't rely on this branch
-// but paying its cost is free because ExecuteTask is a pass-through to
-// ExecuteRPC — no allocations beyond the RPCRequest struct.
+// task path type-asserts GetMeta result to TaskHandler. A handler reached
+// only through RPC never takes the task branch; the branch costs one
+// RPCRequest per task because ExecuteTask passes through to ExecuteRPC.
 func (r *Registry) ExportToHandlerRegistry(hr *handlers.HandlerRegistry) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -42,8 +39,8 @@ func (r *Registry) ExportToHandlerRegistry(hr *handlers.HandlerRegistry) error {
 // handlers.RPCHandler and handlers.TaskHandler. The task interface is
 // required so mesh execution.Executor (which type-asserts GetMeta result
 // to TaskHandler before invoking) can dispatch handlers registered via
-// rpc.Registry — e.g. an orbtr.<domain>.<Op> handler a scanner publishes as a
-// mesh task.
+// rpc.Registry — e.g. an operation a background scanner publishes as a mesh
+// task.
 type registryShim struct {
 	handler *Handler
 }
@@ -81,6 +78,10 @@ var _ handlers.RequirementDeclarer = (*registryShim)(nil)
 // exports a RegisterProxy entry as well, so the mesh RPC server and the
 // in-process dispatcher (node/rpc_local_dispatch.go) reach this shim for an
 // operation another node executes.
+//
+// A handler that declares WebhookSignature is refused after decoding and
+// before Func, through verifyWebhookSignature as in Registry.Dispatch, on a
+// missing secret or a signature that does not verify.
 func (s *registryShim) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	if s.handler.Func == nil {
 		return nil, fmt.Errorf("%w: %s", ErrProxyDispatchLocal, s.handler.FQN())
@@ -95,6 +96,16 @@ func (s *registryShim) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest)
 				Error:   "unmarshal: " + err.Error(),
 				Latency: time.Since(start),
 			}, nil
+		}
+	}
+
+	// The signature material is the decoded request's payload and signature
+	// fields, which a proxying gateway forwards inside the marshalled request,
+	// so the check Registry.Dispatch runs applies here unchanged and refuses
+	// before Func on a missing secret or a bad signature.
+	if s.handler.WebhookSignature != nil {
+		if err := verifyWebhookSignature(s.handler.WebhookSignature, protoReq); err != nil {
+			return nil, fmt.Errorf("%s: %w", s.handler.FQN(), err)
 		}
 	}
 
@@ -128,7 +139,8 @@ func (s *registryShim) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest)
 // path so the wire semantics stay identical (same payload decoding, same
 // handler invocation, same response marshaling). The returned TaskResult
 // mirrors what BaseHandler.ExecuteTask does when its executeTaskFunc is
-// nil — keeps the migration purely cosmetic at the wire level.
+// nil, so a task executor sees the same result from an exported handler as
+// from a BaseHandler.
 func (s *registryShim) ExecuteTask(ctx context.Context, task *handlers.Task) (*handlers.TaskResult, error) {
 	resp, err := s.ExecuteRPC(ctx, &handlers.RPCRequest{
 		ID:      task.ID,
