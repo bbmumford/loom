@@ -1,9 +1,9 @@
 # VL1 Overlay Transport
 
 **Status**: ✅ Active / Production-Ready
-**Package**: `library/mesh/transport`
+**Package**: `core/transport`
 
-VL1 (Virtual Layer 1) is the secure, peer-to-peer transport layer for the HSTLES mesh. It provides a flat, encrypted address space that abstracts away the underlying network topology (NATs, firewalls, cloud/edge).
+VL1 (Virtual Layer 1) is the secure, peer-to-peer transport layer for the loom mesh. It provides a flat, encrypted address space that abstracts away the underlying network topology (NATs, firewalls, cloud/edge).
 
 ---
 
@@ -68,7 +68,7 @@ _, err = session.Write([]byte("hello"))
 
 ## Adaptive Bootstrap Flow
 
-1.  **Init**: Node starts up with `LADBootstrapHosts` (e.g., `login.hstles.com`).
+1.  **Init**: Node starts up with `BootstrapHosts` (e.g., `gateway-a.example.com`).
 2.  **Snapshot**: Attempts to download a peer snapshot.
     *   **Auth**: `X-Mesh-Auth` header signed with Network Key.
     *   **Verify**: Snapshot signature verified with Anchor Public Key.

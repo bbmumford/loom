@@ -1,6 +1,6 @@
-# Orbtr Task Mesh (mesh/task)
+# Loom Task Mesh (core/task)
 
-Task scheduling and execution primitives that run over the Orbtr VL1 overlay
+Task scheduling and execution primitives that run over the loom VL1 overlay
 and rely on LAD for discovery. This package contains the data types, queueing
 logic, bidding policy, and gateway orchestration necessary to build a
 role-based peer-to-peer work mesh.
@@ -9,8 +9,8 @@ role-based peer-to-peer work mesh.
 
 - **Task modelling** — strongly-typed `Task`, `Bid`, `Assignment`, `Result`,
   and `Progress` structures for gateway↔executor communication.
-- **Queueing** — EDF + priority aware `TaskQueue` implementation with
-  tenant fairness hooks.
+- **Queueing** — EDF + priority aware `TaskQueue` implementation; the
+  gateway applies partition fairness through its `PartitionLimiter` hook.
 - **Gateway** — orchestrates offers, collects bids, issues leases, tracks
   in-flight assignments, and handles retries or expirations.
 - **Bidding policy** — scoring helpers to evaluate executor capacity snapshots
@@ -59,17 +59,17 @@ Executors feed bids into `gateway.BidSink()` and report results through
 
 ## Integration Points
 
-- **VL1 Transport (`mesh/transport`)** — publish task offers via VL1 datagrams and
-  deliver assignments/results over Noise streams. Use `vl1.Manager.DialRole`
-  to locate executors that have advertised the required role in LAD.
-- **LAD Directory (`mesh/directory`)** — executors update their `ReachRecord`
-  with current capacity hints. Gateways query LAD to seed offer topics and
-  determine which nodes should receive invites.
-- **Storage (`mesh/storage`)** — reference large payloads via manifests.
+- **Transport (`core/task/transport`)** — `BindGateway` wires a gateway to a
+  `GatewayTransport`, which publishes task offers and assignments and streams
+  bids, results and progress back to the gateway.
+- **LAD Directory (`directory`, gossip in `core/directory/gossip`)** — executors
+  update their `ReachRecord` with current capacity hints. Gateways query LAD to
+  seed offer topics and determine which nodes should receive invites.
+- **Storage (`node/storage`)** — reference large payloads via manifests.
   Tasks can include `Payload` metadata that points to content-addressed blobs;
   executors hydrate data through the storage leech.
-- **DB Mesh (`mesh/control`)** — schedule schema migrations or consistency
-  checks by enqueuing tasks targeting MeshDB nodes.
+- **DB Mesh** — schedule schema migrations or consistency checks by enqueuing
+  tasks targeting MeshDB nodes.
 
 ## Executors & Bids
 
@@ -106,7 +106,8 @@ diversity weights when selecting a winner.
 
 - Lease renewal and expiry detection to reclaim stalled tasks.
 - Automatic retry with exponential backoff and attempt counters.
-- Tenant fairness limiter hook to avoid noisy-neighbour amplification.
+- Partition fairness limiter hook (`PartitionLimiter`, set with `WithLimiter`)
+  to avoid noisy-neighbour amplification.
 - Progress channel for streaming execution telemetry.
 
 ## Observability

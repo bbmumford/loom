@@ -125,7 +125,7 @@ type LatencySample struct {
 
 // HandlerAdvert is a typed RPC-handler advertisement (who serves a name).
 type HandlerAdvert struct {
-	Name   string // FQN, e.g. "orbtr.<domain>.<Op>"
+	Name   string // FQN, e.g. "example.<domain>.<Op>"
 	NodeID NodeID
 	Roles  []string
 }

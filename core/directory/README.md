@@ -1,9 +1,9 @@
 # LAD: Ledger-as-Directory
 
 **Status**: ✅ Active / Production-Ready
-**Package**: `library/mesh/directory`
+**Package**: `core/directory` (gossip in `core/directory/gossip`, query cache in `github.com/bbmumford/ledger/cache`)
 
-LAD (Ledger-as-Directory) is the distributed service discovery and state propagation layer of the HSTLES mesh. It acts as a decentralized "DNS" and "Routing Table", storing information about nodes, their roles, and their reachability.
+LAD (Ledger-as-Directory) is the distributed service discovery and state propagation layer of the loom mesh. It acts as a decentralized "DNS" and "Routing Table", storing information about nodes, their roles, and their reachability.
 
 ---
 
@@ -32,8 +32,8 @@ An in-memory, queryable view of the current mesh state.
 ## Components
 
 *   **Ledger** (`github.com/bbmumford/ledger/storage`): The persistent store. The node runtime keeps it in memory or in a local file encrypted under a key derived from the node identity (`node/lad_store.go`).
-*   **`directory/gossip`**: The synchronization engine. Handles the exchange of records with peers.
-*   **`directory/cache`**: The in-memory query engine.
+*   **`core/directory/gossip`**: The synchronization engine. Handles the exchange of records with peers.
+*   **`github.com/bbmumford/ledger/cache`**: The in-memory query engine (`DirectoryCache`).
 
 ---
 
@@ -41,15 +41,15 @@ An in-memory, queryable view of the current mesh state.
 
 ```go
 // Initialize
-cache := lad.NewDirectoryCache()
+dc := cache.NewDirectoryCache()
 ledger, _ := storage.NewLocalDBLedger(db, storage.LedgerConfig{RetentionDays: 30})
-syncer := gossip.NewSynchronizer(ledger, cache)
+syncer := gossip.NewSynchronizer(ledger, dc)
 
 // Start Sync
 go syncer.Sync(ctx, startWatermark, nil)
 
 // Query
-peers, err := cache.Reach(ctx, "hstles", lad.ReachQuery{
+peers, err := dc.Reach(ctx, "p1", cache.ReachQuery{
     Role: "auth",
 })
 ```

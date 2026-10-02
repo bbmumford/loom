@@ -21,10 +21,11 @@ var ErrProxyDispatchLocal = errors.New("rpc: proxy handler cannot dispatch local
 // Enforces Scope before invoking the handler; returns ErrScopeDenied
 // (wrapped) when the call fails the handler's declared scope tier.
 //
-// This is the server-side dispatch path — used by the RPCServer adapter and
-// by any other in-process caller that wants the registry's full enforcement
-// (scope, then marshal/unmarshal, then handler). HTTP/CLI callers that need
-// per-handler Middleware should go through the HTTP bridge instead.
+// Dispatch runs scope, unmarshal, the webhook check and the handler for an
+// in-process caller holding this Registry. The mesh RPC server does not call
+// it: it reaches handlers exported by ExportToHandlerRegistry through
+// registryShim.ExecuteRPC. HTTP/CLI callers that need per-handler Middleware
+// should go through the HTTP bridge instead.
 func (r *Registry) Dispatch(ctx context.Context, fqn string, payload []byte) ([]byte, error) {
 	h, ok := r.Get(fqn)
 	if !ok {
@@ -70,11 +71,12 @@ func (r *Registry) Dispatch(ctx context.Context, fqn string, payload []byte) ([]
 	return out, nil
 }
 
-// ExtractRole returns "namespace.domain" from a well-formed
-// "namespace.domain.Operation" FQN. Returns "" for inputs that lack at
-// least two dot-separated components — previous implementation silently
-// returned the whole string on inputs like "bogus" or "....", masking
-// caller bugs and feeding malformed roles into routing.
+// ExtractRole returns "namespace.domain" (everything before the last dot) from
+// a "namespace.domain.Operation" FQN. It returns "" unless fqn has at least two
+// dots, a non-empty segment before the first dot and after the last, and a
+// non-empty stretch between them, so a malformed FQN such as "bogus" or "...."
+// never becomes a routing role. Inner segments are not checked ("a.b..c"
+// yields "a.b.").
 func ExtractRole(fqn string) string {
 	if fqn == "" {
 		return ""

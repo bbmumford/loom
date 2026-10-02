@@ -118,7 +118,7 @@ func (m *rpcMetrics) Stats() map[string]map[string]int64 {
 // common case (handler already registered) and only takes the LoadOrStore
 // slow path on first sight of a handler name.
 //
-// Cardinality is bounded by the handler registry — each orbtr.<domain>.<Op>-style
+// Cardinality is bounded by the handler registry — each example.<domain>.<Op>-style
 // FQN gets exactly one entry, and there is no per-call or per-partition key
 // component, so the map size stays at O(handlers) regardless of traffic.
 type dispatchLatencyRegistry struct {
@@ -588,15 +588,15 @@ func callerNodeFromCtx(ctx context.Context) string {
 // process-global namespace, read at step 0a before any principal is bound and
 // written for every successful local execution with a 10s TTL. Keyed on it
 // alone, any two requests sharing an id collide regardless of who sent them or
-// what they called — peer A's `orbtr.auth.Login` response answers peer B's
-// `orbtr.dhcp.ListLeases`, because the only thing compared is "42" == "42".
+// what they called — peer A's `example.auth.Login` response answers peer B's
+// `example.dhcp.ListLeases`, because the only thing compared is "42" == "42".
 // pkg/dispatch mints these ids from a process-global base36 counter
 // (buildRPCRequestCtx in hwp_dispatch.go), so two nodes booting together
 // emit the same low ids.
 //
 // 🔑 LENGTH-PREFIXED, NOT DELIMITER-JOINED. requestID is fully caller-
 // controlled, so any fixed separator is forgeable: with "a|b|c" a caller could
-// send Id = "|orbtr.auth.Login|42" and land on another handler's entry.
+// send Id = "|example.auth.Login|42" and land on another handler's entry.
 // Length prefixes make the encoding injective — one key can be produced by
 // exactly one triple — so no choice of requestID can impersonate a different
 // (caller, handler) pair.
@@ -952,7 +952,7 @@ func (s *RPCServer) HandleIncomingSessionsForPartition(ctx context.Context, list
 			// (e.g. a handler reached via the non-bidi path, before
 			// Stream 1 wires up) doesn't take down the entire node
 			// process. The bidi recovery only protects the BidiRPC
-			// path; this is the outer defence (M-ServeSession-NoRecover).
+			// path; this is the outer defence.
 			func(sess aether.Connection, sCtx context.Context) {
 				safeGo("rpc.ServeSession", func() {
 					defer sess.Close()

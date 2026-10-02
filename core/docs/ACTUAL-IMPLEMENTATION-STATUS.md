@@ -1,4 +1,4 @@
-# HSTLES Mesh: Remaining Implementation & Optimization Roadmap
+# Loom Mesh: Remaining Implementation & Optimization Roadmap
 
 **Status**: Active Development
 **Focus**: Security Hardening, Optimization, and Missing Critical Components
@@ -45,7 +45,7 @@
 - ✅ `descriptor.go`: Root descriptor types exist.
 
 **Missing / Needs Verification**:
-- **Full Verification Logic**: Ensure `SecureBootstrap` fully implements the dual-signature verification (Tenant Root + Platform Root) for Root Descriptors.
+- **Full Verification Logic**: Ensure root descriptors are verified against the configured anchor keys before they are accepted.
 - **Manifest Fetching**: Verify `FetchSeedManifest` correctly handles HTTPS fetching and signature validation.
 
 ### 2. Handler Metadata Publishing

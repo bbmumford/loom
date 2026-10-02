@@ -1,6 +1,6 @@
-# Orbtr P2P Task Mesh – Operations & Execution (v2)
+# Loom P2P Task Mesh – Operations & Execution
 
-> A flat, ephemeral-friendly P2P task mesh running over **Orbtr Core VL1** with a **Ledger-as-Directory (LAD)**. This version adds full **task management & execution** mechanics: queues, matching, leases, retries, preemption, work stealing, draining, autoscaling, and observability.
+> A flat, ephemeral-friendly P2P task mesh running over **loom VL1** with a **Ledger-as-Directory (LAD)**. It covers the **task management & execution** mechanics: queues, matching, leases, retries, preemption, work stealing, draining, autoscaling, and observability.
 
 ---
 
@@ -26,7 +26,7 @@ graph LR
     C2[Core App B]
   end
 
-  subgraph Orbtr Flat Mesh (VL1)
+  subgraph Loom Flat Mesh (VL1)
     N1((Node N1)):::gw
     N2((Node N2)):::id
     N3((Node N3)):::auth
@@ -59,7 +59,7 @@ graph LR
 
 ---
 
-## 2) Orbtr VL1 Overlay (On‑Wire & Sessions)
+## 2) Loom VL1 Overlay (On‑Wire & Sessions)
 
 ### VL1 Packet (v1)
 
@@ -113,7 +113,7 @@ MemberRecord = {
 
 ```
 request.type == "verify_identity" &&
-request.tenant in ["t1","t2"] &&
+request.partition in ["p1","p2"] &&
 request.slo.prio <= 7
 ```
 
@@ -125,7 +125,7 @@ request.slo.prio <= 7
 
 ### 5.1 Task object
 
-`Task = { tid, type, tags[], tenant, slo{lat_ms, prio, rel}, idem, payload_ref }`
+`Task = { tid, type, tags[], partition, slo{lat_ms, prio, rel}, idem, payload_ref }`
 
 ### 5.2 Queues
 
@@ -137,7 +137,7 @@ score = w_prio*prio + w_deadline*EDF(deadline) - w_age*wait_ms
 ```
 
 * **EDF(deadline)** = inverse time to deadline; late tasks get a bump.
-* **Tenant fairness:** token buckets per tenant (rate, burst) and per‑tenant max in‑flight.
+* **Partition fairness:** token buckets per partition (rate, burst) and per‑partition max in‑flight.
 
 ### 5.3 Offers & Bids
 
@@ -178,7 +178,7 @@ admit = capacity.score >= S && predictedETA <= SLO.latency
 
 ## 7) Autoscaling Signals
 
-* Gateways export: queue depth by role/tenant/SLO bucket, P50/P95 wait, timeout counts, drop counts, bid acceptance ratios.
+* Gateways export: queue depth by role/partition/SLO bucket, P50/P95 wait, timeout counts, drop counts, bid acceptance ratios.
 * Simple scaler rule:
 
 ```
@@ -193,7 +193,7 @@ if utilization(role) < low_water for K windows => Deactivate(role)
 ## 8) Security Model
 
 * **AuthN:** Node identities via ed25519; Noise XK binds peers.
-* **AuthZ:** OPA/CEL at gateway and executor; scopes/tenants checked twice.
+* **AuthZ:** OPA/CEL at gateway and executor; scopes/partitions checked twice.
 * **DoS controls:** per‑peer rate limits, tiny PoW/macaroons on offers, banlist via revocation.
 * **Replay:** Session nonce windows; LAD records use short `exp` and monotonic `nonce`.
 * **Privacy:** Payload minimization; use content‑addressed blobs with per‑task envelope keys.
@@ -211,9 +211,9 @@ if utilization(role) < low_water for K windows => Deactivate(role)
 ## 10) Config (Example)
 
 ```yaml
-orbtr:
+loom:
   noise:
-    prologue: "orbtr-vl1-v1"
+    prologue: "loom-vl1-v1"
     rekey_after: "10m"       # or 1 GiB
   nat:
     punch_hello_ms: 250

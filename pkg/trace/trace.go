@@ -14,9 +14,9 @@
 // no-op in production traffic. Tests that paste a trace ID get exact
 // correlation across the gateway, mesh dispatch, and target node logs.
 //
-// Header format: `e2e-<unix-nano>-<6-hex>` (set by the framework's
-// `framework/observe/trace` package). The Library treats the value as
-// opaque — any string up to 128 chars passes through.
+// Header format: `e2e-<unix-nano>-<6-hex>`, set by the test harness that
+// injects the header. loom treats the value as opaque — any string up to 128
+// chars passes through.
 package trace
 
 import (
@@ -28,7 +28,7 @@ import (
 const HeaderName = "X-E2E-Trace-ID"
 
 // MaxLen caps inbound trace IDs to bound log-line growth and reject
-// pathological inputs. The framework's format fits in ~40 chars.
+// pathological inputs. The `e2e-<unix-nano>-<6-hex>` format fits in 30 chars.
 const MaxLen = 128
 
 // ctxKey is unexported to prevent accidental collisions.

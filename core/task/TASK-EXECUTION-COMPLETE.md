@@ -252,7 +252,7 @@ if assignment.Primary == executor.nodeID {
 
 ## Integration Points
 
-### In `node.hstles.com/main.go`:
+### In the composition root's main package:
 
 ```go
 // Create Gateway
@@ -333,7 +333,7 @@ bridge := meshhttp.NewHTTPBridge(
 - Task submission HTTP API
 - Metrics and observability
 - Integration tests
-- Deployment to node.hstles.com
+- Deployment to a node endpoint
 
 ## Files Modified/Created
 
@@ -343,4 +343,4 @@ bridge := meshhttp.NewHTTPBridge(
 
 ---
 
-**Next Steps**: Wire up Gateway + Executor in `node.hstles.com/main.go` to enable task-based execution in production.
+**Next Steps**: Wire up Gateway + Executor in the composition root's main package to enable task-based execution in production.

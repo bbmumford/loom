@@ -20,9 +20,8 @@ import (
 )
 
 // AssertRegisterTypesParity is the shared parity assertion for the
-// canonical Register/Types contract that every domain under
-// library/domain/* declares (see rpc.StripFuncs for the canonical
-// single-source-of-truth pattern).
+// canonical Register/Types contract a domain package declares (see
+// rpc.StripFuncs for the single-source-of-truth pattern).
 //
 // Purpose
 // -------
@@ -33,27 +32,29 @@ import (
 // but not Types, or a Scope changed on one side only — gateways either
 // fail to surface the op at all or surface it under a stale scope.
 //
-// Drift on the Scope field is purely cosmetic at runtime (the proxy
-// path bypasses EnforceScope) but lies to anything reading the manifest:
-// directory listings, scope-linters, security review tools. This helper
-// fails loudly the moment a future edit forgets to update both lists in
-// lockstep.
+// Drift on the Scope field changes runtime behaviour: the HTTP bridge's
+// proxy path runs EnforceScope with the gateway registry's policy against
+// the Types() scope (pkg/rpc/http/bridge.go executeProxy), so a stale scope
+// is enforced at the gateway. It also misstates the manifest to directory
+// listings and scope linters. This helper fails the moment an edit updates
+// one list and not the other.
 //
-// The helper enforces four invariants:
+// The helper enforces five invariants:
 //   - Every FQN Register() emits appears in Types() with matching Scope.
 //   - Every FQN Types() emits appears in Register() (no strays).
 //   - Types() emits no duplicate FQN entries.
 //   - Register() leaves no Func=nil on any registered handler
-//     (catches typeStubs/funcsByOp drift on the receiver-taking pattern).
+//     (catches a receiver-taking Register whose handler list and Func table
+//     drifted apart).
 //   - Types() never returns a non-nil Func (proxy-registration contract).
 //
-// Usage — no-receiver pattern (identity / anchor / storage / …):
+// Usage — a Register that takes no receiver:
 //
 //	func TestRegisterTypesParity(t *testing.T) {
 //	    rpctest.AssertRegisterTypesParity(t, Register, Types)
 //	}
 //
-// Usage — receiver-taking pattern (audit / device / plugins / …):
+// Usage — a Register that takes a handler receiver:
 //
 //	func TestRegisterTypesParity(t *testing.T) {
 //	    var h *handlers.Handler // nil is safe — Wrap only binds the method
@@ -80,12 +81,12 @@ func AssertRegisterTypesParity(
 
 	// Build FQN -> Scope map from the registered handlers. Also assert
 	// each has a non-nil Func — a nil Func here means the caller wired
-	// Register incorrectly (e.g. typeStubs / funcsByOp keys drifted).
+	// Register incorrectly (e.g. its handler list and Func table drifted apart).
 	registered := make(map[string]rpc.ScopeTag, reg.Count())
 	for _, hh := range reg.All() {
 		registered[hh.FQN()] = hh.Scope
 		if hh.Func == nil {
-			t.Errorf("Register left Func=nil on %q — typeStubs/funcsByOp drift", hh.FQN())
+			t.Errorf("Register left Func=nil on %q", hh.FQN())
 		}
 	}
 

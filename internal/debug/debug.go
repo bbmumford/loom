@@ -75,7 +75,7 @@ func IsEnabled() bool {
 // states. Namespace conventions:
 //
 //	"mesh.vl1", "mesh.lad", "mesh.rpc"     — dotted hierarchy
-//	"endpoint.help.monitoring"             — endpoint-scoped feature
+//	"endpoint.<name>.<feature>"            — endpoint-scoped feature
 //
 // DEBUG=mesh.* enables all of mesh.vl1 + mesh.lad + mesh.rpc.
 // DEBUG=mesh.vl1 enables only that one.

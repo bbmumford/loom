@@ -218,7 +218,7 @@ func (d *LADDirectory) RoleAdverts(ctx context.Context, partition ports.Partitio
 // Reach flattens the node's signed ReachRecord addresses into priority-ordered
 // dial candidates. The reach layer names the Noise transport "udp" while the
 // mesh address table names it "noise-udp"; that mapping is normalised here and
-// must stay consistent with transportString (plan B.5).
+// must stay consistent with transportString (swarmlive.go).
 func (d *LADDirectory) Reach(ctx context.Context, partition ports.Partition, id ports.NodeID) ([]ports.ReachAddress, error) {
 	rs, err := d.cache.Reach(ctx, string(partition), ladcache.ReachQuery{NodeID: string(id)})
 	if err != nil {

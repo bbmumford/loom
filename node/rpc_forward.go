@@ -60,7 +60,7 @@ type runtimeForwarder struct {
 // the RPC. If no direct path exists, it forwards to any connected peer
 // (which will forward onward, up to MaxRPCHops).
 func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse, error) {
-	// Extract role from FQN: "orbtr.health.CheckHealth" → "orbtr.health"
+	// Extract role from FQN: "example.health.CheckHealth" → "example.health"
 	// Uses last dot to split namespace.domain from Operation.
 	role := req.Handler
 	if dot := strings.LastIndexByte(req.Handler, '.'); dot > 0 {
@@ -263,18 +263,17 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 	})
 
 	// Hard grade-gate for the operation class. The wire context "opClass"
-	// hint is the opt-in signal: the originating dispatcher derives it from
-	// the handler's registered rpc.Handler.OpClass (dispatch.WithOpClass →
-	// req.Context["opClass"]). Critical/Realtime/Standard operations must
+	// hint is the opt-in signal: a caller sets it with dispatch.WithOpClass
+	// and buildRPCRequestCtx copies it to req.Context["opClass"].
+	// Critical/Realtime/Standard operations must
 	// not land on a transport below their MinGrade, so if NO available path
 	// meets the minimum we fail closed with rpc.ErrGradeTooLow rather than
 	// silently forwarding over an emergency-fallback link. Callers
 	// distinguish this from transport failures via errors.Is.
 	//
-	// Fail-closed is gated behind an explicitly-set, non-bulk opClass so
-	// existing flows do not regress: an empty opClass — the zero/default
-	// OpClass, or any handler that never declared one — skips this block
-	// entirely and keeps the prior best-effort behavior. OpClassBulk maps
+	// Fail-closed is gated behind an explicitly set, non-bulk opClass: an
+	// empty opClass, which is what every caller that never sets the hint
+	// sends, skips this block and forwards best-effort. OpClassBulk maps
 	// to MinGrade GradeF, which every connected path satisfies, so it can
 	// never trip the gate either.
 	if opClass := req.Context["opClass"]; opClass != "" {

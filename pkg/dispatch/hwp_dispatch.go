@@ -24,7 +24,7 @@ import (
 )
 
 // ────────────────────────────────────────────────────────────────────────────
-// Session health tracking (mirrors old DispatchMux health model)
+// Session health tracking
 // ────────────────────────────────────────────────────────────────────────────
 
 // cachedSession wraps an HWP session with health tracking, idle eviction,
@@ -39,9 +39,9 @@ type cachedSession struct {
 	pool                *StreamPool
 }
 
-// isHealthy returns true if the session is alive and responsive.
-// Matches DispatchMux logic: closed=unhealthy, 3+ consecutive timeouts=unhealthy,
-// but recovers after 30 seconds (prevents permanent blacklisting during churn).
+// isHealthy returns true if the session is alive and responsive: closed or 3+
+// consecutive timeouts is unhealthy, recovering after 30 seconds so churn
+// never blacklists a session permanently.
 func (cs *cachedSession) isHealthy() bool {
 	if cs.session.IsClosed() {
 		return false
@@ -89,7 +89,7 @@ func (cs *cachedSession) idleSince() time.Duration {
 // Each RPC call opens a dynamic stream (from pool or fresh) to avoid
 // contention with well-known streams (0-3) managed by AcceptHWPConnection.
 //
-// Resilience model (matches and exceeds old DispatchMux/SessionPool):
+// Resilience model:
 //   - 5-minute session cache with 30s eviction tick
 //   - Per-session health tracking (consecutive timeouts + recovery window)
 //   - Per-role circuit breaker (open/half-open/closed, 5 failures → trip)
@@ -105,10 +105,9 @@ type HWPCaller struct {
 	sessions map[string]*cachedSession // role → cached session
 	finder   SessionFinder
 	// findGroup coalesces concurrent getOrFindSession callers for the
-	// same role onto one in-flight result. Without this, a cache miss
-	// for a hot role spawned N parallel FindSession calls that all
-	// walked the directory/LAD then raced to overwrite the cache —
-	// each loser leaked its StreamPool fill. M-FindSession-Stampede fix.
+	// same role onto one in-flight result, so one cache miss runs one
+	// FindSession and one StreamPool fill instead of N that overwrite
+	// each other.
 	findGroup singleflight.Group
 
 	stopCh   chan struct{}
@@ -158,15 +157,16 @@ type cachedResult struct {
 // that window so we don't pin a route past a real topology change.
 const routeCacheTTL = 5 * time.Second
 
-// defaultProbeTimeout caps a single BidiRPC.Call when the caller's
-// context has no deadline. Applied by both the parallel-probe path in
-// Call (every fan-out probe goroutine) and the warm callOnce path
-// (every cached-session RPC). Without this cap a wedged bidi stream
-// blocks dispatch until Fly's edge timeout (~60s), since BidiRPC.Call
-// selects on ctx.Done() AND b.done — neither fires when the stream is
-// flow-control-deadlocked but technically still open. 10s gives healthy
-// probes ample headroom (typical mesh RPC RTT < 50 ms) while bounding
-// the wedge to one timeout instead of one edge timeout.
+// defaultProbeTimeout caps a single BidiRPC.Call. Applied by both the
+// parallel-probe path in Call (every fan-out probe goroutine) and the warm
+// callOnce path (every cached-session RPC), each through context.WithTimeout,
+// which keeps a stricter caller deadline and clamps a longer or absent one.
+// Without this cap a wedged bidi stream blocks dispatch until an edge proxy's
+// request timeout, since BidiRPC.Call selects on ctx.Done() AND b.done —
+// neither fires when the stream is flow-control-deadlocked but technically
+// still open. 10s gives healthy probes ample headroom (typical mesh RPC RTT
+// < 50 ms) while bounding the wedge to one timeout instead of one edge
+// timeout.
 const defaultProbeTimeout = 10 * time.Second
 
 // bidiProbeTimeout is the inner cap on a single BidiRPC attempt inside the
@@ -198,9 +198,9 @@ type SessionFinder interface {
 }
 
 const (
-	callerMaxIdle      = 5 * time.Minute  // session cache TTL (matches old SessionPool)
+	callerMaxIdle      = 5 * time.Minute  // session cache TTL
 	callerMaintainTick = 30 * time.Second // background eviction + pool refill interval
-	callerRequestTTL   = 30 * time.Second // per-request timeout (matches old DispatchMux)
+	callerRequestTTL   = 30 * time.Second // per-request timeout
 	callerPoolSize     = 2                // pre-opened streams per session
 )
 
@@ -514,29 +514,22 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 	}
 	resultCh := make(chan probeResult, len(routes))
 
-	// Probe context: caller's ctx, unless it has no deadline — in which
-	// case cap at defaultProbeTimeout so a wedged session can't hang the
-	// caller for Fly's full 60 s edge timeout (which surfaces to the
-	// user as a 502). bidi.Call selects on ctx.Done() AND b.done — if
-	// the bidi's underlying stream is stuck but not yet closed (e.g.
-	// flow-control deadlock with inflight>0 + zero ACK progress for
-	// minutes — observed on stream 1 with progressAge=28m in fleet),
-	// neither channel fires and Call blocks until ctx.Done(). Without
-	// a deadline that's effectively forever from dispatch's view.
+	// Probe context: always capped at defaultProbeTimeout; WithTimeout keeps
+	// a stricter caller deadline and clamps a longer or absent one, so a
+	// wedged session can't hang the caller until an edge proxy's request
+	// timeout. bidi.Call selects on ctx.Done() AND b.done — if the bidi's
+	// underlying stream is stuck but not yet closed (e.g. flow-control
+	// deadlock with inflight>0 + zero ACK progress for minutes), neither
+	// channel fires and Call blocks until ctx.Done(). Without a deadline
+	// that's effectively forever from dispatch's view.
 	//
-	// HTTP handler contexts (the OAuth callback path) never carry a
-	// deadline — Go's net/http defaults to a per-server cap which Fly's
-	// edge supersedes well before a gateway's handler is willing to
-	// stop. Capping per-call at 10 s gives healthy probes ample time
-	// (typical mesh RPC RTT is < 50 ms) and forces dispatch off a
-	// wedged path within one timeout instead of one edge timeout.
-	// Always cap probes at defaultProbeTimeout. WithTimeout returns
-	// MIN(parent_deadline, now + timeout) per the context contract — a
-	// caller with a stricter deadline retains it, while a caller with no
-	// deadline OR a deadline LONGER than defaultProbeTimeout gets clamped
-	// down. The point is "a probe must fail fast on a wedged path even if
-	// the caller is patient" — e.g. the 15s RequestTimeout middleware on
-	// /rpc/{handler} should NOT prevent the 10s probe cap from firing.
+	// An HTTP handler context from r.Context() carries no deadline by
+	// default. Capping per-call at 10 s gives healthy probes ample time
+	// (typical mesh RPC RTT is < 50 ms) and forces dispatch off a wedged
+	// path within one timeout instead of one edge timeout. A probe must
+	// fail fast on a wedged path even if the caller is patient: a longer
+	// caller deadline (e.g. a 15 s gateway timeout) must not keep the 10 s
+	// probe cap from firing.
 	probeCtx, probeCancel := context.WithTimeout(ctx, defaultProbeTimeout)
 	defer probeCancel()
 
@@ -708,24 +701,22 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 
 	// Try BidiRPC first (Stream 1) — avoids dynamic stream overhead.
 	//
-	// Cap the bidi call at defaultProbeTimeout when the caller's ctx has
-	// no deadline. The parallel-probe path in Call (above, ~lines 487-506)
-	// installs the same cap and the rationale applies identically here:
-	// BidiRPC.Call selects on ctx.Done() AND b.done — if the bidi's
-	// underlying stream is wedged (flow-control deadlock, inflight>0,
-	// zero ACK progress for minutes — observed on stream 1 with
-	// progressAge=28m in fleet) but not closed, neither channel fires
-	// and Call blocks until ctx.Done(). HTTP handler contexts from
-	// r.Context() have no deadline by default, so without this cap the
-	// gateway hangs every cached-session RPC until Fly's edge timeout
-	// (~60s), surfacing as a 502 to the user.
+	// Bidi context: always capped at defaultProbeTimeout; WithTimeout keeps
+	// a stricter caller deadline and clamps a longer or absent one. The
+	// parallel-probe path in Call installs the same cap and the rationale
+	// applies identically here: BidiRPC.Call selects on ctx.Done() AND
+	// b.done — if the bidi's underlying stream is wedged (flow-control
+	// deadlock, inflight>0, zero ACK progress for minutes) but not closed,
+	// neither channel fires and Call blocks until ctx.Done(). An HTTP
+	// handler context from r.Context() has no deadline by default, so
+	// without this cap a gateway hangs every cached-session RPC until an
+	// edge proxy's request timeout.
 	if c.finder != nil {
 		// Always cap bidi at defaultProbeTimeout. WithTimeout returns
 		// MIN(parent_deadline, now + timeout) — a stricter caller deadline
-		// is preserved; a longer one (e.g. /rpc/{handler}'s 15s gateway
-		// timeout) gets clamped to give the dispatch caller a chance to
-		// react to a wedged bidi within 10s instead of riding the full
-		// gateway deadline.
+		// is preserved; a longer one (e.g. a 15 s gateway timeout) gets
+		// clamped to give the dispatch caller a chance to react to a wedged
+		// bidi within 10s instead of riding the full gateway deadline.
 		bidiCtx, cancel := context.WithTimeout(ctx, defaultProbeTimeout)
 		defer cancel()
 		var remaining time.Duration
@@ -1131,8 +1122,10 @@ func (c *HWPCaller) Close() {
 // Ensure HWPCaller implements Caller at compile time.
 var _ Caller = (*HWPCaller)(nil)
 
-// rpcTimeoutForProtocol returns the RPC timeout for a given protocol.
-// Inlined from the removed Grade system to avoid importing mesh/node.
+// rpcTimeoutForProtocol returns the RPC timeout for a protocol from its
+// capabilities. It is defined in this package because node depends on this
+// package through pkg/rpc, so reading a node timeout here would be an import
+// cycle.
 func rpcTimeoutForProtocol(proto aether.Protocol) time.Duration {
 	caps := proto.Capabilities()
 	if !caps.NativeReliability && caps.NativeEncryption {

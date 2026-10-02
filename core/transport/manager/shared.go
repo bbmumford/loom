@@ -22,7 +22,7 @@ var (
 	ErrSharedNoKeysForPartition = errors.New("shared: no keys registered for partition")
 )
 
-// SharedTransport wraps a single NoiseTransport to serve multiple platform
+// SharedTransport wraps a single NoiseTransport to serve multiple
 // partitions on the same UDP port. It uses the preamble protocol to identify
 // which partition a connection belongs to, allowing per-partition PSK selection.
 //

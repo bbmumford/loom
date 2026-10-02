@@ -57,8 +57,8 @@ type Envelope struct {
 	Role string `json:"role"`
 
 	// ConfigKeys lists the cfgload names inside the bundle — exactly the
-	// role's capabilities.RoleRequirement.Configs (e.g. auth → ["auth",
-	// "session", "platform"]). Cleartext by design: recipients decide
+	// role's capabilities.RoleRequirement.Configs (e.g. a role → ["db",
+	// "keys"]). Cleartext by design: recipients decide
 	// eligibility before decrypting.
 	ConfigKeys []string `json:"configKeys"`
 

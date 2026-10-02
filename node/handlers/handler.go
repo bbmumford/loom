@@ -37,10 +37,10 @@ const (
 	ScopeNone = scope.ScopeNone // Opts out of scope enforcement.
 
 	// The declarable tags, each naming what must be present on the identity.
-	ScopeAllowlisted     = scope.ScopeAllowlisted     // pinned axis the policy admits
-	ScopePartition       = scope.ScopePartition       // pinned axis present
-	ScopeWithinPartition = scope.ScopeWithinPartition // pinned + within-transport axes
-	ScopeSubject         = scope.ScopeSubject         // pinned axis + authenticated subject
+	ScopeAllowlisted     = scope.ScopeAllowlisted     // partition the policy admits
+	ScopePartition       = scope.ScopePartition       // partition present
+	ScopeWithinPartition = scope.ScopeWithinPartition // partition present (evaluated as ScopePartition)
+	ScopeSubject         = scope.ScopeSubject         // partition + authenticated subject
 
 	// ScopeUnknown is the fail-closed sentinel for a scope the scope package does
 	// not recognise. validateScope rejects any handler bound to it, so holding it
@@ -57,7 +57,7 @@ const (
 // Both RPCHandler and TaskHandler embed this interface.
 type HandlerMeta interface {
 	// Name returns the operation name the registry keys on (e.g.
-	// "orbtr.<domain>.<Op>")
+	// "example.<domain>.<Op>")
 	Name() string
 
 	// Role returns the domain role (e.g., "auth", "identity", "notify")
@@ -151,7 +151,7 @@ type DualHandler interface {
 // RPCRequest represents a direct RPC call
 type RPCRequest struct {
 	ID        string                 `json:"id"`        // Request ID (idempotency)
-	Handler   string                 `json:"handler"`   // "orbtr.<domain>.<Op>"
+	Handler   string                 `json:"handler"`   // "example.<domain>.<Op>"
 	Payload   []byte                 `json:"payload"`   // Proto-encoded operation data
 	Context   map[string]interface{} `json:"context"`   // Session, trace IDs
 	Timeout   time.Duration          `json:"timeout"`   // Max execution time
