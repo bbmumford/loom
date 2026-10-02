@@ -28,7 +28,7 @@ unset DEBUG
 ### Programmatic Configuration
 
 ```go
-import "github.com/hstles/library/platform/debug"
+import "github.com/bbmumford/loom/internal/debug"
 
 // Enable debug logging
 debug.SetEnabled(true)
@@ -49,7 +49,7 @@ if debug.IsEnabled() {
 ```go
 package mypackage
 
-import "github.com/hstles/library/platform/debug"
+import "github.com/bbmumford/loom/internal/debug"
 
 var dbg = debug.New("mesh.vl1")
 
@@ -114,13 +114,13 @@ func ComplexFlow() {
 
 ```go
 import (
-    "github.com/hstles/library/platform/debug"
-    "github.com/hstles/library/mesh/node"
+    "github.com/bbmumford/loom/internal/debug"
+    "github.com/bbmumford/loom/node"
 )
 
-func initMeshNode(cfg node.Config) (*node.Runtime, error) {
+func initMeshNode(cfg node.Config, debugEnabled bool) (*node.Runtime, error) {
     // Enable debug if configured
-    debug.SetEnabled(cfg.DebugEnabled)
+    debug.SetEnabled(debugEnabled)
     
     dbg := debug.New("mesh.node")
     dbg.Printf("Initializing mesh node: %s", cfg.ServiceName)
@@ -138,7 +138,7 @@ func initMeshNode(cfg node.Config) (*node.Runtime, error) {
 ### Endpoint Initialization
 
 ```go
-import "github.com/hstles/library/platform/debug"
+import "github.com/bbmumford/loom/internal/debug"
 
 func main() {
     // Load config

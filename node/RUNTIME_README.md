@@ -48,7 +48,7 @@ Provides structured logging for security-critical events (e.g., login attempts, 
 ### Initialization
 
 ```go
-import "github.com/hstles/library/mesh/runtime/node"
+import "github.com/bbmumford/loom/node"
 
 func main() {
     cfg := node.Config{
@@ -88,7 +88,7 @@ rt.RPCServer().RegisterHandler("my.ping", &MyHandler{})
 
 The runtime automatically handles the connection to the mesh:
 
-1.  **Snapshot (Fast Path)**: Tries to fetch a signed peer list from `LADBootstrapHosts` via HTTPS (`GET /mesh/snapshot`).
+1.  **Snapshot (Fast Path)**: Tries to fetch a signed peer list from `BootstrapHosts` via HTTPS (`GET /mesh/snapshot`).
 2.  **Tunnel (Slow Path)**: If snapshot fails, opens a secure HTTPS tunnel (`POST /mesh/vl1`) to gossip and discover peers.
 3.  **P2P (Steady State)**: Once peers are known, switches to direct UDP communication.
 
