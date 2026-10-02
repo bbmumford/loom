@@ -67,8 +67,8 @@ The mesh uses an **Adaptive Bootstrap** mechanism to maximize performance while 
 
 ### Configuration
 Nodes only need to know the **Bootstrap Hosts** (Gateways).
-*   **Config**: `LADBootstrapHosts` (e.g., `login.hstles.com,api.hstles.com`)
-*   **Note**: Explicit `Anchor.URLs` are **deprecated** and removed. The node uses `LADBootstrapHosts` for both snapshot fetching and tunneling.
+*   **Config**: `BootstrapHosts` (e.g., `gateway-a.example.com,gateway-b.example.com`)
+*   **Note**: Explicit `Anchor.URLs` are **deprecated** and removed. The node uses `BootstrapHosts` for both snapshot fetching and tunneling.
 
 ### Scenario A: Active Mesh (Fast Path)
 *Used when the Bootstrap Host has a valid list of peers in its LAD Database.*
@@ -77,7 +77,7 @@ Nodes only need to know the **Bootstrap Hosts** (Gateways).
 [ NEW NODE ]                                          [ BOOTSTRAP GATEWAY ]
      |                                                        (Login/API)
      | 1. LOAD CONFIG                                              |
-     |    - LADBootstrapHosts (Source: Config)                     |
+     |    - BootstrapHosts (Source: Config)                        |
      |    - Network Key (Source: Config)                           |
      |                                                             |
      | 2. GENERATE AUTH TOKEN                                      |
@@ -185,10 +185,10 @@ library/mesh/
 | :--- | :--- |
 | `ServiceName` | Logical name of the service (e.g., "login"). |
 | `NetworkKeys` | List of PSKs for authorization. |
-| `LADBootstrapHosts` | Comma-separated list of bootstrap gateways (e.g., `login.hstles.com`). |
+| `BootstrapHosts` | Comma-separated list of bootstrap gateways (e.g., `gateway-a.example.com`). |
 | `Anchor.PublicKey` | Ed25519 Public Key for verifying snapshots. |
 | `Anchor.PrivateKey` | Ed25519 Private Key for signing snapshots (Gateways only). |
-| `VL1UDPPort` | Local UDP port for mesh traffic (default: 41641). |
+| `UDPPort` | Local UDP port for mesh traffic (default: 41641). |
 
 ### Environment Variables
 
@@ -201,17 +201,17 @@ library/mesh/
 ## Usage Example
 
 ```go
-import "github.com/hstles/library/mesh/runtime/node"
+import "github.com/bbmumford/loom/node"
 
 func main() {
     cfg := node.Config{
         ServiceName: "my-service",
         NetworkKeys: []string{"..."},
-        LADBootstrapHosts: "login.hstles.com,api.hstles.com",
+        BootstrapHosts: "gateway-a.example.com,gateway-b.example.com",
         Anchor: node.AnchorConfig{
             PublicKey: "...",
         },
-        VL1UDPPort: 41641,
+        UDPPort: 41641,
     }
 
     // Initialize Runtime
