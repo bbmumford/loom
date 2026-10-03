@@ -200,7 +200,7 @@ func normaliseRung(r int) int {
 // normaliseRung. A depth of 0 or less becomes 1, a single-rung chain.
 func resolveChainPosition(rung, depth int) (int, int) {
 	if depth <= 0 {
-		depth = 1 // single-rung chain: every node ranks equally on rung
+		depth = 1 // a depth of 0 or less is a single-rung chain
 	}
 	if rung < 0 {
 		rung = 0 // a negative declaration is no declaration; publish absent
@@ -649,8 +649,8 @@ func (e *TakeoverEngine) withdrawClaim(role string) {
 // is claiming, and the last rung is emergency-thick operation rather than
 // absence.
 //
-// HLC remains the tie-break WITHIN a rung, so a flat (single-rung) chain —
-// what ChainDepth defaults to — keeps the anti-thundering-herd
+// HLC remains the tie-break WITHIN a rung, so nodes that publish the same rung
+// (every unconfigured node publishes none) keep the anti-thundering-herd
 // first-N-by-HLC order.
 //
 // An unset rung normalises to rungUnset and therefore sorts last; see the
