@@ -1,10 +1,9 @@
 go 1.25.0
 
-// Local dev bridge: loom/go.mod pins a swarm release whose Node interface
-// names the partition rebind SetTenant, but the stubSwarmNode in
-// node/lad_reach_bridge_ingest_test.go implements swarm.Node with
-// SetPartition, which exists only in the unpublished ../swarm working tree.
-// Resolve swarm locally until it is published and loom bumps its pin.
+// Local dev bridge: the stubSwarmNode in node/lad_reach_bridge_ingest_test.go
+// implements swarm.Node with SetPartition, which the swarm release loom/go.mod
+// pins does not declare; it exists only in the unpublished ../swarm working
+// tree. Resolve swarm locally until it is published and loom bumps its pin.
 // Consumers replace loom and swarm in their own go.work.
 use .
 use ../swarm
@@ -21,9 +20,8 @@ use ../aether
 // the directory code reads ledger.Record.Partition and calls
 // storage.RequirePartitionColumn, which exist only in the unpublished
 // ../ledger working tree. reach is resolved locally with it because the
-// published reach still writes ledger.Record.TenantID and would not compile
-// against the local ledger. Resolve both locally until they are published and
-// loom bumps its pins.
+// published reach does not compile against the local ledger's Record.
+// Resolve both locally until they are published and loom bumps its pins.
 use ../ledger
 
 use ../reach
