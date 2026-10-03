@@ -18,6 +18,7 @@ var (
 	ErrPartitionNotRegistered = errors.New("manager: partition transport not registered")
 	ErrPartitionAlreadyExists = errors.New("manager: partition transport already registered")
 	ErrManagerClosed          = errors.New("manager: transport manager is closed")
+	ErrEmptyPartition         = errors.New("manager: empty partition ID")
 )
 
 // TransportManager routes transport operations to per-partition NoiseTransport instances.
@@ -35,9 +36,15 @@ func New() *TransportManager {
 	}
 }
 
-// Register adds a transport for a partition. Returns ErrPartitionAlreadyExists
-// if the partition is already registered.
+// Register adds a transport for a partition. Returns ErrEmptyPartition for an
+// empty partitionID and ErrPartitionAlreadyExists if the partition is already
+// registered. The manager's keys are partitions and "" means bound to no
+// partition, so a PartitionSession that Dial returned under "" would carry a
+// partition ID that names none; it is refused here.
 func (m *TransportManager) Register(partitionID aether.ScopeID, t aether.Transport) error {
+	if partitionID == "" {
+		return ErrEmptyPartition
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

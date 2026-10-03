@@ -20,6 +20,7 @@ var (
 	ErrSharedPartitionExists    = errors.New("shared: partition already registered")
 	ErrSharedNoPartitionInCtx   = errors.New("shared: no partition ID in context (use TransportManager.Dial)")
 	ErrSharedNoKeysForPartition = errors.New("shared: no keys registered for partition")
+	ErrSharedEmptyPartition     = errors.New("shared: empty partition ID")
 )
 
 // SharedTransport wraps a single NoiseTransport to serve multiple
@@ -63,7 +64,15 @@ func NewSharedTransport(cfg noise.NoiseTransportConfig) (*SharedTransport, error
 // RegisterPartition adds a partition with its network keys. The first key is used
 // for outbound connections (active key); additional keys are accepted for
 // inbound connections (key rotation overlap).
+//
+// An empty partitionID is refused with ErrSharedEmptyPartition. No session can
+// use keys stored under it: Dial refuses an empty partition in its context and
+// the listener's preamble decode refuses an empty ID. Partitions would still
+// list it, and the node's advertised dial partition is read from that list.
 func (s *SharedTransport) RegisterPartition(partitionID aether.ScopeID, keys [][]byte) error {
+	if partitionID == "" {
+		return ErrSharedEmptyPartition
+	}
 	if len(keys) == 0 {
 		return ErrSharedNoKeysForPartition
 	}

@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
+	"errors"
 	"testing"
 
 	"github.com/ORBTR/aether"
@@ -66,6 +67,26 @@ func TestSharedTransport_RegisterPartition_NoKeys(t *testing.T) {
 	err = st.RegisterPartition("tenant-A", nil)
 	if err != ErrSharedNoKeysForPartition {
 		t.Fatalf("err = %v, want ErrSharedNoKeysForPartition", err)
+	}
+}
+
+// An empty partition ID is refused even with keys, and nothing is stored, so
+// Partitions (which the node's advertised dial partition reads) never lists "".
+func TestSharedTransport_RegisterPartition_EmptyIDRefused(t *testing.T) {
+	st, err := NewSharedTransport(testSharedTransportConfig(t))
+	if err != nil {
+		t.Fatalf("new: %v", err)
+	}
+
+	err = st.RegisterPartition("", [][]byte{[]byte("psk-empty")})
+	if !errors.Is(err, ErrSharedEmptyPartition) {
+		t.Fatalf("err = %v, want ErrSharedEmptyPartition", err)
+	}
+	if n := st.PartitionCount(); n != 0 {
+		t.Errorf("count = %d, want 0", n)
+	}
+	if got := st.Partitions(); len(got) != 0 {
+		t.Errorf("Partitions() = %v, want none", got)
 	}
 }
 
