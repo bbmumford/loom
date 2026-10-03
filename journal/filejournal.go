@@ -382,11 +382,10 @@ func (j *FileJournal) dropSub(id uint64) {
 }
 
 // fanoutLocked pushes a newly-durable record to live subscribers. Caller
-// holds mu. A full subscriber buffer does NOT block the append path — the
-// record is already durable, so a slow consumer recovers by resuming a
-// fresh Replay from its last processed watermark (resume from a watermark,
-// no silent gap — the file is the source of truth, the live channel is only
-// a latency optimisation).
+// holds mu. A full subscriber buffer does NOT block the append path: the
+// record is already durable in the file and the send is skipped. TODO: a
+// skipped record is a silent gap for that subscriber; Record carries no
+// watermark, so it cannot tell where to resume a Replay.
 func (j *FileJournal) fanoutLocked(w ports.Watermark, rec ports.Record) {
 	for _, sub := range j.subs {
 		if w <= sub.from {
