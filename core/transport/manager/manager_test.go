@@ -102,6 +102,23 @@ func TestRegister_Duplicate(t *testing.T) {
 	}
 }
 
+// An empty partition ID is refused and nothing is stored, so Get, Dial and
+// ListPartitions never answer for "".
+func TestRegister_EmptyIDRefused(t *testing.T) {
+	mgr := New()
+
+	err := mgr.Register("", &mockTransport{})
+	if !errors.Is(err, ErrEmptyPartition) {
+		t.Fatalf("err = %v, want ErrEmptyPartition", err)
+	}
+	if n := mgr.Count(); n != 0 {
+		t.Errorf("count = %d, want 0", n)
+	}
+	if _, err := mgr.Get(""); !errors.Is(err, ErrPartitionNotRegistered) {
+		t.Errorf("Get(\"\") err = %v, want ErrPartitionNotRegistered", err)
+	}
+}
+
 func TestRemove_Happy(t *testing.T) {
 	mgr := New()
 	tr := &mockTransport{id: "orbtr"}
