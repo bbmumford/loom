@@ -350,14 +350,12 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 		// fresh redeploys.
 		//
 		// Falls back to G1 when:
-		//   - No reconcile driver registered (test paths)
+		//   - No reconcile driver registered (ReconcileDriver() is nil until a host calls SetReconcileDriver)
 		//   - peerNodeID is empty (no per-peer state to track)
 		//   - G4 round itself errors at the wire layer
 		//
-		// G4 frames travel on the same gossip stream as G1; the
-		// peer's engine routes them by magic so capability gating
-		// happens implicitly (peers without the handler installed
-		// see G4 frames as unknown magic and fall back).
+		// G4 frames travel on reconcileConn (streams.StreamReconcile), never on
+		// the G1 stream; a G4 round that errors falls back to G1 as listed above.
 		if since.IsZero() && peerNodeID != "" {
 			if rd := ReconcileDriver(); rd != nil {
 				// G4 always rides the dedicated reconcile
@@ -520,7 +518,7 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 	// state (fewer exchanges when nothing is changing). The bounds come from a
 	// cadence source the host wires via SetGossipCadence (link type / loss /
 	// battery aware); with none wired they fall back to interval + built-in floor
-	// and ceiling, preserving the previous fixed behaviour.
+	// and ceiling.
 	cadBase, cadMin, cadMax := gossipCadenceBounds(interval, 2*time.Second, 60*time.Second)
 	adaptive := NewAdaptiveInterval(cadBase, cadMin, cadMax)
 	timer := time.NewTimer(cadBase)
