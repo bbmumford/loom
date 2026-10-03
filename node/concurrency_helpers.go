@@ -15,7 +15,7 @@ import (
 // goroutine in the recovery log so an unexpected panic in any spawned
 // helper is debuggable without losing the rest of the call's progress.
 //
-// Use safeGo for every goroutine in mesh/node — bare `go fn()` lets a
+// Use safeGo for every goroutine in the node package — bare `go fn()` lets a
 // panic in one fan-out kill the entire process, defeating BidiRPC's own
 // per-request recovery. The forwarder probe loop and HandleIncomingSessions
 // are the documented exposures; safeGo closes them via a single helper so

@@ -5,7 +5,7 @@
 package gossip
 
 // Re-export Whisper types into the gossip namespace so existing consumers
-// (sync.go, stream_gossip.go, mesh/node/*.go) continue to compile.
+// (sync.go, stream_gossip.go, the node package) continue to compile.
 // These aliases will be removed when consumers import whisper directly.
 
 import "github.com/bbmumford/whisper"
