@@ -605,7 +605,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 	// Install the local-dispatch short-circuit: rpc.Call / rpc.CallRaw
 	// now consult this registry FIRST and skip the mesh when the handler
 	// is hosted here. Avoids round-tripping to ourselves over a stream.
-	// See mesh/node/rpc_local_dispatch.go for the adapter.
+	// See rpc_local_dispatch.go (installLocalDispatcher) for the adapter.
 	installLocalDispatcher(registry)
 
 	// Enable mesh-routed RPC forwarding — unknown handlers are forwarded to
@@ -1525,7 +1525,7 @@ func (rt *Runtime) Config() Config {
 // ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 //
 // Runtime.Go and Runtime.GoCtx are the canonical entry points for every
-// long-running goroutine spawned by mesh/node, dispatch, and domain handlers.
+// long-running goroutine spawned by the node package, dispatch, and domain handlers.
 // Every spawn that should keep the runtime alive — accept loops, walkers,
 // publishers, snapshot loops, gossip/upgrade reconcilers — MUST go through
 // one of these helpers instead of bare `go fn()`.

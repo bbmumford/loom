@@ -31,7 +31,7 @@ func LADRumorID(rec lad.Record) string {
 // FreshnessPayloadMagic is the first byte that marks a reach-freshness
 // payload (as opposed to a LAD record JSON object). Matches
 // node.FreshnessMagicPrefix — duplicated here to avoid an import cycle
-// (mesh/node imports this package).
+// (the node package imports this package).
 const FreshnessPayloadMagic byte = 0xF0
 
 // FreshnessDeliverer receives magic-prefixed freshness payloads from the

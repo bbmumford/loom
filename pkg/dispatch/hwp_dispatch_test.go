@@ -125,7 +125,7 @@ func TestBuildRequest_NoPartitionKeyOnTheWire(t *testing.T) {
 }
 
 // TestBuildRequestCtx_OpClassIsCamelCase pins the wire key for op-class
-// hints. The receiving side (mesh/node.rpc_forward.go) reads
+// hints. The receiving side (node/rpc_forward.go) reads
 // req.Context["opClass"]; a snake_case writer silently downgrades every
 // realtime/critical RPC to the Standard band.
 func TestBuildRequestCtx_OpClassIsCamelCase(t *testing.T) {
