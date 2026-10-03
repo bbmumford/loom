@@ -202,6 +202,55 @@ func TestRegistryShimExecuteTaskDelegates(t *testing.T) {
 	}
 }
 
+// TestExportCarriesOnlyHandlersWithAFunc: ExportToHandlerRegistry puts a
+// handler carrying a Func into the mesh handler registry and leaves out a
+// RegisterProxy entry and a Register call that supplied no Func, so GetMeta
+// finds only what this node executes. Without the negative leg,
+// localDispatcherAdapter.HasHandler answers true for a proxied operation and
+// Call and CallRaw return a refusal rather than reaching the node that holds
+// the Func.
+func TestExportCarriesOnlyHandlersWithAFunc(t *testing.T) {
+	echo := func(ctx context.Context, req proto.Message) (proto.Message, error) { return req, nil }
+	executing := Handler{
+		Namespace: "test", Domain: "export", Operation: "Run", Func: echo,
+		Request: (*wrapperspb.StringValue)(nil), Response: (*wrapperspb.StringValue)(nil),
+		Scope: ScopeNone,
+	}
+	registeredWithNoFunc := Handler{
+		Namespace: "test", Domain: "export", Operation: "NoFunc",
+		Request: (*wrapperspb.StringValue)(nil), Response: (*wrapperspb.StringValue)(nil),
+		Scope: ScopeNone,
+	}
+	// RegisterProxy strips Func, so a gateway's advertisement reaches the
+	// registry Func-less even though Types() supplied one.
+	proxied := Handler{
+		Namespace: "test", Domain: "remote", Operation: "Run", Func: echo,
+		Request: (*wrapperspb.StringValue)(nil), Response: (*wrapperspb.StringValue)(nil),
+		Scope: ScopeNone,
+	}
+
+	source := NewRegistry()
+	if err := source.RegisterAll([]Handler{executing, registeredWithNoFunc}); err != nil {
+		t.Fatalf("RegisterAll: %v", err)
+	}
+	if err := source.RegisterProxy([]Handler{proxied}); err != nil {
+		t.Fatalf("RegisterProxy: %v", err)
+	}
+
+	target := handlers.NewHandlerRegistry()
+	if err := source.ExportToHandlerRegistry(target); err != nil {
+		t.Fatalf("ExportToHandlerRegistry: %v", err)
+	}
+	if _, ok := target.GetMeta(executing.FQN()); !ok {
+		t.Errorf("%s carries a Func and is missing from the mesh handler registry", executing.FQN())
+	}
+	for _, h := range []Handler{registeredWithNoFunc, proxied} {
+		if _, ok := target.GetMeta(h.FQN()); ok {
+			t.Errorf("%s has no Func on this node and was exported to the mesh handler registry", h.FQN())
+		}
+	}
+}
+
 // TestRegistryShimRefusesAHandlerWithNoFunc: a shim runs its handler while the
 // handler carries a Func, and once the Func is cleared on the stored handler
 // it answers ExecuteRPC with ErrProxyDispatchLocal and ExecuteTask with a

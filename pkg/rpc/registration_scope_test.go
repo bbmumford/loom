@@ -6,9 +6,12 @@
 package rpc
 
 import (
+	"context"
 	"reflect"
 	"strings"
 	"testing"
+
+	"google.golang.org/protobuf/proto"
 
 	"github.com/bbmumford/loom/node/handlers"
 )
@@ -124,7 +127,10 @@ func TestRegistryExportPreservesExplicitScopeNone(t *testing.T) {
 		Namespace: "test",
 		Domain:    "scope",
 		Operation: "ExportedPublic",
-		Scope:     ScopeNone,
+		// ExportToHandlerRegistry carries only a handler this node executes,
+		// so the scope under test reaches the target registry only with a Func.
+		Func:  func(ctx context.Context, req proto.Message) (proto.Message, error) { return req, nil },
+		Scope: ScopeNone,
 	}
 	if err := source.Register(h); err != nil {
 		t.Fatalf("Register explicit ScopeNone: %v", err)

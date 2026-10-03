@@ -12,21 +12,35 @@ import (
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
-// ExportToHandlerRegistry registers every handler in this rpc.Registry into a
-// node/handlers.HandlerRegistry, so the RPCServer and task-executor dispatch
-// paths reach handlers a domain registers through its register.go.
+// ExportToHandlerRegistry registers every handler in this rpc.Registry that
+// carries a Func into a node/handlers.HandlerRegistry, so the RPCServer and
+// task-executor dispatch paths reach handlers a domain registers through its
+// register.go.
 //
-// Each handler is wrapped in a shim that implements handlers.RPCHandler
-// AND handlers.TaskHandler — the second interface is required so mesh task
-// executors (execution.Executor) can resolve the shim after the mesh
-// task path type-asserts GetMeta result to TaskHandler. A handler reached
-// only through RPC never takes the task branch; the branch costs one
-// RPCRequest per task because ExecuteTask passes through to ExecuteRPC.
+// A handler with no Func is left out: it is a RegisterProxy entry, or a
+// Register call that supplied none, so this node does not execute it and the
+// node holding the Func must. Every reader of hr takes GetMeta finding a name
+// as "this node runs it", and localDispatcherAdapter.HasHandler
+// (node/rpc_local_dispatch.go) is one of them: it answers true for any
+// RPC-shaped entry, so an exported Func-less handler makes Call and CallRaw
+// return tryLocalDispatch's refusal instead of falling through to the mesh,
+// and makes RPCServer.handleRequest answer in place of forwarding.
+//
+// Each exported handler is wrapped in a shim that implements
+// handlers.RPCHandler AND handlers.TaskHandler — the second interface is
+// required so mesh task executors (execution.Executor) can resolve the shim
+// after the mesh task path type-asserts GetMeta result to TaskHandler. A
+// handler reached only through RPC never takes the task branch; the branch
+// costs one RPCRequest per task because ExecuteTask passes through to
+// ExecuteRPC.
 func (r *Registry) ExportToHandlerRegistry(hr *handlers.HandlerRegistry) error {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
 	for _, h := range r.handlers {
+		if h.Func == nil {
+			continue
+		}
 		shim := newRegistryShim(h)
 		if err := hr.RegisterRPC(shim); err != nil {
 			return err
@@ -75,9 +89,9 @@ var _ handlers.RequirementDeclarer = (*registryShim)(nil)
 //
 // A handler with no Func is refused with ErrProxyDispatchLocal, the refusal
 // Registry.Dispatch gives, before the payload is read. ExportToHandlerRegistry
-// exports a RegisterProxy entry as well, so the mesh RPC server and the
-// in-process dispatcher (node/rpc_local_dispatch.go) reach this shim for an
-// operation another node executes.
+// exports no such handler, so the check guards the window the shared pointer
+// opens: the shim holds the registry's stored *Handler, which Get, All and
+// ByRole hand out, so a caller can clear Func on it after the export.
 //
 // A handler that declares WebhookSignature is refused after decoding and
 // before Func, through verifyWebhookSignature as in Registry.Dispatch, on a
