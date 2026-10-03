@@ -62,17 +62,16 @@ type TakeoverConfig struct {
 	// node only wins a role when no lower-numbered rung claims it: the chain
 	// descends only as far as needed.
 	//
-	// Default: ChainDepth — the LAST rung. An unconfigured node is the LEAST
-	// preferred candidate, never the most. Defaulting to 1 would make every
-	// node that forgot to set this outrank every node that set it
-	// deliberately, which is the absent-sorts-as-best failure this codebase
-	// keeps hitting.
+	// Default 0 publishes no rung: publishClaim sends ChainRung as declared,
+	// claimBody omits a zero, and every peer's normaliseRung maps an absent rung
+	// to rungUnset, which rankClaims sorts after every declared rung. An
+	// unconfigured node is therefore the least-preferred candidate.
 	ChainRung int
 
-	// ChainDepth bounds the chain — the "failover chain depth"
-	// as a limit and states "All fail-closed", so a rung beyond the depth is
-	// clamped to the last rung rather than being trusted. Default 1 — a
-	// single-rung chain, where every node ranks equally on rung.
+	// ChainDepth is this node's local count of rungs. Only the takeover log's
+	// rungNote reads it, to mark the last rung EMERGENCY-THICK; it is not on
+	// claimBody and never bounds ChainRung, because rankClaims compares rungs
+	// across nodes. 0 resolves to 1, a single-rung chain.
 	ChainDepth int
 }
 
@@ -189,39 +188,16 @@ func normaliseRung(r int) int {
 	return r
 }
 
-// resolveChainPosition applies the fail-closed bound to this
-// node's declared chain position, returning (rung, depth).
+// resolveChainPosition normalises this node's declared chain position and
+// returns (rung, depth). StartTakeover calls it once; publishClaim puts the
+// rung on the claim record and rungNote reads the depth.
 //
-// Extracted from StartTakeover deliberately: mutation showed the clamp was
-// unreachable from any test, because StartTakeover needs a live swarm Node.
-// An untestable safety default is not a safety default, and this
-// is the highest-consequence one in the file — see the rung==1 case below.
-// 🔴 THE RUNG IS A GLOBAL CLASS AND MUST NOT BE CLAMPED TO A LOCAL BOUND.
-//
-// ChainDepth is PRIVATE — it is not on the claim record (see claimBody), is
-// never negotiated and is never validated against a peer. Clamping the rung to
-// it converted a GLOBAL CLASS into a LOCAL INDEX, so published rungs from
-// different nodes were not comparable:
-//
-//	node A: ChainRung 3, ChainDepth 4   → published Rung 3
-//	node B: ChainRung 3, ChainDepth 0   → published Rung 1  ← MOST preferred
-//
-// A thin application deliberately placed at the last rung, whose depth was left
-// at its zero value, published itself as class 1 and beat every correctly
-// configured thick node at the comparator — where rung returns before HLC is
-// consulted — so a dormant rung outranked a live one, and a cross-node
-// decision was driven by a value only one node can see.
-//
-// The rung is a CLASS, so it is now published exactly as declared:
-//
-//   - undeclared (≤0) publishes ABSENT, which every peer's normaliseRung maps
-//     to rungUnset and therefore sorts LAST.
-//   - a rung past the local depth is NOT clamped down. A larger rung sorts
-//     later, so an over-range value fails toward LESS preference; clamping it
-//     toward depth was what made a misconfiguration more preferred.
-//
-// depth is still returned, but it now bounds only the local "am I the last
-// rung" log note — never the value that goes on the wire.
+// The rung is returned as declared and never bounded by depth: rankClaims
+// compares rungs from different nodes and ChainDepth is not on claimBody, so
+// a bound by it would make two nodes declaring one class publish different
+// rungs. A rung past the local depth sorts later, toward less preference. A
+// rung below 0 becomes 0, which publishes absent and ranks last through
+// normaliseRung. A depth of 0 or less becomes 1, a single-rung chain.
 func resolveChainPosition(rung, depth int) (int, int) {
 	if depth <= 0 {
 		depth = 1 // single-rung chain: every node ranks equally on rung
@@ -284,7 +260,7 @@ func (rt *Runtime) StartTakeover(cfg TakeoverConfig, opener secrets.Opener) (*Ta
 	if cfg.CheckInterval <= 0 {
 		cfg.CheckInterval = 15 * time.Second
 	}
-	// Chain bounds, fail closed.
+	// Normalise the declared chain position: the rung as declared, the depth at least 1.
 	cfg.ChainRung, cfg.ChainDepth = resolveChainPosition(cfg.ChainRung, cfg.ChainDepth)
 
 	e := &TakeoverEngine{
