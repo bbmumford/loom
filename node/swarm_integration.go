@@ -84,37 +84,59 @@ func (si *SwarmIntegration) ShadowParity(ctx context.Context, authoritative port
 	return directory.CompareDirectories(ctx, authoritative, si.trustShadow.Directory(), partition, roles)
 }
 
-// newSwarmTrustGate builds the inbound trust-gate check for the given mode, or
-// returns (nil, nil) when the gate is off ("" / "off"). The check verifies each
-// signature-verified record's NodeID binds to its key under loom's aether scheme
-// via TrustPolicy.VerifyNodeKey — for an observer attestation the bound
-// identity is the observer, whose key signed the record. "observe" counts a
-// would-reject and ACCEPTS (the shadow-parity step); "enforce" rejects. The
-// baseline PolicyConfig covers the binding, revocation and topic publish
-// rule; partition and role entitlement need a seeded PolicyConfig (see the
-// seed comment below).
-func newSwarmTrustGate(mode string) (func(swarm.Record) error, *trustGateCounters) {
+// swarmTrustPolicy returns the PolicyConfig the trust gate and the trust
+// shadow build their Policy from: the supplied one, or
+// directory.BaselinePolicyConfig when it is nil, with every self-owned prefix
+// present. The result shares nothing with the supplied config, so the
+// shadow's partitions never reach the composition root's value.
+func swarmTrustPolicy(supplied *directory.PolicyConfig) directory.PolicyConfig {
+	if supplied == nil {
+		return directory.BaselinePolicyConfig()
+	}
+	cfg := supplied.Clone()
+	have := make(map[string]bool, len(cfg.OpenPublishPrefixes))
+	for _, p := range cfg.OpenPublishPrefixes {
+		have[p] = true
+	}
+	for _, p := range directory.SelfOwnedPublishPrefixes {
+		if !have[p] {
+			cfg.OpenPublishPrefixes = append(cfg.OpenPublishPrefixes, p)
+		}
+	}
+	return cfg
+}
+
+// swarmTrustGate builds the inbound trust gate from the runtime's Config:
+// SwarmTrustMode picks the mode and SwarmTrustPolicy the trust material.
+// InitSwarm wires the check as swarm's TrustCheck.
+func (rt *Runtime) swarmTrustGate() (func(swarm.Record) error, *trustGateCounters) {
+	return newSwarmTrustGate(rt.cfg.SwarmTrustMode, swarmTrustPolicy(rt.cfg.SwarmTrustPolicy))
+}
+
+// newSwarmTrustGate builds the inbound trust-gate check for the given mode
+// from policyCfg, or returns (nil, nil) when the gate is off ("" / "off").
+// The check runs TrustPolicy.AuthorizePublish on each signature-verified
+// record: the NodeID must bind to its key under loom's aether scheme (for an
+// observer attestation the bound identity is the observer, whose key signed
+// the record) and the topic must match a publish rule in policyCfg. "observe"
+// counts a would-reject and ACCEPTS (the shadow-parity step); "enforce"
+// rejects.
+//
+// Loom's zero SwarmTrustMode "" leaves the gate off; the composition root
+// picks the mode, and library/endpoint's SwarmTrustMode defaults to
+// "enforce". Under enforce a topic outside policyCfg is refused: with the
+// baseline that admits a node's own PeerRecord, latency, mesh database member
+// and route records, and the role takeover topics only once the composition
+// root supplies its role entitlements (directory.WithRoleEntitlements).
+func newSwarmTrustGate(mode string, policyCfg directory.PolicyConfig) (func(swarm.Record) error, *trustGateCounters) {
 	if mode != "observe" && mode != "enforce" {
 		return nil, nil
 	}
 	gate := &trustGateCounters{enforce: mode == "enforce"}
-	// Seed directory.SelfOwnedPublishPrefixes (fleet.peer, fleet.latency. and
-	// the mesh database member topic) as open-publish rules so a node's own
-	// PeerRecord, latency and member records pass: a Policy built from the
-	// zero PolicyConfig rejects every publish ("topic matches no publish
-	// rule"). This gate exists only when Config.SwarmTrustMode is "observe" or
-	// "enforce". Loom's zero value "" leaves it off; the composition root picks
-	// the mode, and a root that defaults to "enforce" runs this baseline seed
-	// unchanged. Nothing beyond the baseline is seeded here. The principal
-	// below carries no partition, so it skips the partition gate. The topics
-	// loom's own writers publish outside the baseline match no rule:
-	// fleet.route (the swarmRoutePublisher InitRoute wires) and role.claim.<role> /
-	// role.secrets.<role> (the role takeover writers). "observe" counts them
-	// as would-rejects and "enforce" rejects them.
-	// TODO: take a seeded PolicyConfig from Config (fleet.route as a self-owned
-	// open prefix; role.claim.<role> and role.secrets.<role> from the
-	// endpoint's role entitlements) so "enforce" admits those topics.
-	policy := directory.NewPolicy(directory.BaselinePolicyConfig())
+	// The principal below carries no partition, so the gate skips the
+	// partition check; partition scope applies in the trust shadow, whose seed
+	// adds the configured partitions.
+	policy := directory.NewPolicy(policyCfg)
 	check := func(r swarm.Record) error {
 		bindID := r.NodeID
 		if r.IsObserverAttestation() {
@@ -179,12 +201,14 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	}
 
 	// Inbound trust gate: loom's TrustPolicy wired as swarm's TrustCheck
-	// hook (see newSwarmTrustGate). Off by default; "observe" counts would-rejects
-	// without rejecting (the shadow-parity step), "enforce" rejects. NOT the swarm
+	// hook (see newSwarmTrustGate). Off at loom's zero SwarmTrustMode, which
+	// library/endpoint replaces with "enforce" unless configured otherwise;
+	// "observe" counts would-rejects without rejecting (the shadow-parity
+	// step), "enforce" rejects. NOT the swarm
 	// RequireNodeKeyBinding bool — its hex(pubkey) NodeID derivation is incompatible
 	// with aether's vl1_ fingerprint and would reject every record on this fleet.
 	var trustGate *trustGateCounters
-	if check, gate := newSwarmTrustGate(rt.cfg.SwarmTrustMode); check != nil {
+	if check, gate := rt.swarmTrustGate(); check != nil {
 		cfg.TrustCheck = check
 		trustGate = gate
 		log.Printf("[SWARM] InitSwarm: trust gate wired mode=%s (aether NodeID↔key bind)", rt.cfg.SwarmTrustMode)
@@ -194,9 +218,10 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	// Swarm-backed directory so ShadowParity can compare its state against the
 	// live LAD directory before the LAD→Swarm cutover. nil in every mode but
 	// "observe"; the feed (cfg.OnAccepted below) is non-blocking, so it never
-	// slows swarm accept. The seed opens the self-owned topics plus the
-	// configured partitions — anything else surfaces as a would-reject to observe.
-	seed := directory.BaselinePolicyConfig()
+	// slows swarm accept. The seed is the gate's own trust material
+	// (swarmTrustPolicy) plus the configured partitions — anything else
+	// surfaces as a would-reject to observe.
+	seed := swarmTrustPolicy(rt.cfg.SwarmTrustPolicy)
 	for _, tc := range rt.cfg.Partitions {
 		if tc.PartitionID != "" {
 			seed.Partitions = append(seed.Partitions, tc.PartitionID)

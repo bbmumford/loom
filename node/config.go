@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/bbmumford/loom/directory"
 	"github.com/bbmumford/loom/pkg/rpc"
 	"github.com/bbmumford/loom/ports"
 )
@@ -75,6 +76,16 @@ type Config struct {
 	// fingerprint, so on this fleet it would reject EVERY record. TrustCheck
 	// with the aether scheme (wired from this field) is the correct gate.
 	SwarmTrustMode string
+
+	// SwarmTrustPolicy is the trust material the gate SwarmTrustMode selects
+	// authorizes publishes against, and the seed of the trust shadow. nil is
+	// directory.BaselinePolicyConfig. A composition root builds it from
+	// BaselinePolicyConfig and directory.WithRoleEntitlements over the roles
+	// it entitles, so "enforce" admits the role takeover topics from entitled
+	// nodes. The self-owned prefixes (directory.SelfOwnedPublishPrefixes) are
+	// added to whatever is supplied, because a Policy without them refuses
+	// every node's own PeerRecord.
+	SwarmTrustPolicy *directory.PolicyConfig
 
 	// ShadowParityInterval, when > 0, paces a periodic comparison of the live
 	// LADDirectory (rt.liveDir) against the Swarm-backed trust-shadow
