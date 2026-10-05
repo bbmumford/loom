@@ -8,12 +8,54 @@ package node
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
+	"github.com/bbmumford/loom/core/directory/gossip"
 	"github.com/bbmumford/whisper"
 )
+
+// The declared bounds of the persisted delta watermarks, the same the device
+// agent uses. The tracker saves every deltaWatermarkSaveInterval and once more
+// when the runtime's context ends; on load it drops a watermark older than
+// deltaWatermarkMaxAge, because the peer has likely evicted the records it
+// marks and a delta from it would miss them.
+const (
+	deltaWatermarkSaveInterval = 30 * time.Second
+	deltaWatermarkMaxAge       = 20 * time.Minute
+)
+
+// startDeltaTracker gives this runtime generation its own gossip delta
+// tracker, which the gossip loops mesh_connection.go starts read and advance,
+// so no other runtime in the process shares its watermarks. On a runtime with
+// durable storage (persistsToDataDir) it attaches NewJSONDeltaPersistence
+// under the data directory: the persisted watermarks load now, so a peer whose
+// watermark is still fresh gets a delta on its first exchange after a restart
+// instead of a full snapshot. Without durable storage the watermarks live in
+// memory only.
+func (rt *Runtime) startDeltaTracker() {
+	rt.deltaTracker = gossip.NewDeltaTracker()
+	if !rt.persistsToDataDir() {
+		return
+	}
+	rt.deltaTracker.AttachPersistence(rt.ctx, NewJSONDeltaPersistence(rt.cfg.DataDir),
+		deltaWatermarkSaveInterval, deltaWatermarkMaxAge)
+	log.Printf("[NODE] gossip delta watermarks persisted under %s (save %v, max age %v)",
+		filepath.Join(rt.cfg.DataDir, ".mesh"), deltaWatermarkSaveInterval, deltaWatermarkMaxAge)
+}
+
+// persistsToDataDir reports whether this runtime keeps state under its data
+// directory across restarts: a data directory is set and LAD storage is
+// neither disabled nor "memory". A node on memory storage (a bootstrap anchor
+// with no mounted volume) has no durable filesystem, so writing there would
+// churn the container's ephemeral layer without ever surviving a restart. The
+// peer store and the delta watermarks both follow this rule.
+func (rt *Runtime) persistsToDataDir() bool {
+	return rt.cfg.DataDir != "" && rt.cfg.LAD.Storage != "" && rt.cfg.LAD.Storage != "memory"
+}
 
 // jsonDeltaPersistence stores DeltaTracker watermarks as a single JSON
 // file under <dataDir>/.mesh/watermarks.json. Atomic write (temp +

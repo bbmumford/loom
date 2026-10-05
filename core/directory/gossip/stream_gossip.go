@@ -14,27 +14,6 @@ import (
 	"github.com/bbmumford/ledger/cache"
 )
 
-// sharedDeltaTracker is the process-wide DeltaTracker that
-// RunGossipLoopWithPeer and RunGossipResponder use whenever the peer's NodeID
-// is known. It keeps per-peer watermarks so delta sync continues across
-// connection restarts within one process.
-//
-// No DeltaPersistence is attached to it, so the watermarks live only in
-// memory: after a process restart every peer's first exchange is a full
-// snapshot (80-150 KB, against 1-40 KB for a delta), and each one needs
-// creditFullSyncFloor of stream credit before deltaExchange will send it.
-// TODO: attach a DeltaPersistence (node.NewJSONDeltaPersistence under the
-// runtime's data directory) through AttachPersistence with a declared save
-// interval and maximum age, and give each runtime generation its own tracker
-// so two runtimes in one process do not share watermarks.
-var sharedDeltaTracker = NewDeltaTracker()
-
-// SharedDeltaTracker returns the package-level tracker so a runtime can
-// attach persistence to the same tracker the gossip loops read. It returns the
-// pointer rather than a copy because RunGossipLoopWithPeer and
-// RunGossipResponder read sharedDeltaTracker directly.
-func SharedDeltaTracker() *DeltaTracker { return sharedDeltaTracker }
-
 // RunGossipLoopWithPeer runs gossip exchanges natively over an Aether stream,
 // with delta sync enabled for the given peer; it needs no net.Conn or
 // PingableConn.
@@ -42,6 +21,14 @@ func SharedDeltaTracker() *DeltaTracker { return sharedDeltaTracker }
 // The Aether stream handles reliability, ordering, and keepalive independently.
 // No SetDeadline, no PingableConn, no gossip-level pings. Transient errors
 // (timeout) continue the loop. Fatal errors (EOF, reset) exit.
+//
+// dt holds the per-peer watermarks delta sync reads and advances. The caller
+// owns it: node's Runtime passes the one tracker of its runtime generation
+// (Runtime.startDeltaTracker), so watermarks survive connection restarts
+// within that generation, persist across process restarts where the runtime
+// has durable storage, and are never shared with another runtime in the same
+// process. A nil dt, or an empty peerNodeID, runs every exchange as a full
+// sync.
 //
 // onExchange is called after each successful exchange with RTT and sync results.
 // metaProvider, if non-nil, returns ExchangeMeta for connection signaling.
@@ -53,7 +40,7 @@ func SharedDeltaTracker() *DeltaTracker { return sharedDeltaTracker }
 // read path on a shared stream (surfacing as "invalid magic 0x4734").
 // Both streams are required.
 func RunGossipLoopWithPeer(ctx context.Context, stream aether.Stream, reconcileStream aether.Stream, c *cache.DirectoryCache,
-	interval time.Duration, peerNodeID string, onExchange func(GossipResult), metaProvider ...func() *ExchangeMeta) {
+	interval time.Duration, peerNodeID string, dt *DeltaTracker, onExchange func(GossipResult), metaProvider ...func() *ExchangeMeta) {
 
 	if interval <= 0 {
 		interval = 10 * time.Second
@@ -72,10 +59,10 @@ func RunGossipLoopWithPeer(ctx context.Context, stream aether.Stream, reconcileS
 	streamConn := adapter.NewStreamConn(stream, ctx)
 	reconcileConn := adapter.NewStreamConn(reconcileStream, ctx)
 
-	// Use delta tracker when peer is known (reduces gossip from ~100KB to ~1KB per exchange)
-	var dt *DeltaTracker
-	if peerNodeID != "" {
-		dt = sharedDeltaTracker
+	// Delta sync needs the peer's identity to key its watermark (it cuts an
+	// exchange from ~100KB to ~1KB).
+	if peerNodeID == "" {
+		dt = nil
 	}
 	runGossipLoopInternal(ctx, streamConn, reconcileConn, c, interval, onExchange, getMeta, dt, peerNodeID, nil, nil)
 	dbgGossipStream.Printf("Loop exited: streamID=%d, ctxErr=%v", stream.StreamID(), ctx.Err())
@@ -93,9 +80,10 @@ func RunGossipLoopWithPeer(ctx context.Context, stream aether.Stream, reconcileS
 //
 // reconcileStream is the dedicated aether stream for G4/G5 frames; a parallel
 // responder loop dispatches G4 (IBLT) and G5 (snapshot) frames on that stream
-// while G1/G2/G3 stay on `stream`. Both streams are required.
+// while G1/G2/G3 stay on `stream`. Both streams are required. dt is the
+// caller's delta tracker, as for RunGossipLoopWithPeer.
 func RunGossipResponder(ctx context.Context, stream aether.Stream, reconcileStream aether.Stream, c *cache.DirectoryCache,
-	peerNodeID string, onExchange func(GossipResult),
+	peerNodeID string, dt *DeltaTracker, onExchange func(GossipResult),
 	metaProvider ...func() *ExchangeMeta) {
 
 	var getMeta func() *ExchangeMeta
@@ -109,9 +97,8 @@ func RunGossipResponder(ctx context.Context, stream aether.Stream, reconcileStre
 	streamConn := adapter.NewStreamConn(stream, ctx)
 	reconcileConn := adapter.NewStreamConn(reconcileStream, ctx)
 
-	var dt *DeltaTracker
-	if peerNodeID != "" {
-		dt = sharedDeltaTracker
+	if peerNodeID == "" {
+		dt = nil
 	}
 
 	runGossipResponderLoop(ctx, streamConn, reconcileConn, c, onExchange, getMeta, dt, peerNodeID)

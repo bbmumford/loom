@@ -900,7 +900,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 					dbgAether.Printf("%s: gossip initiator starting (grade=%s, interval=%v)",
 						truncID(nodeID), ourGrade, m.rt.cfg.GossipInterval)
 					gossip.RunGossipLoopWithPeer(gossipCtx, gossipStream, reconcileStream, m.rt.cache, m.rt.cfg.GossipInterval, nodeID,
-						gossipCallback)
+						m.rt.deltaTracker, gossipCallback)
 					gossipCancel()
 
 					// Clear the slot only if we still own it. A
@@ -942,7 +942,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			for connCtx.Err() == nil {
 				dbgAether.Printf("%s: gossip responder starting", truncID(nodeID))
 				gossip.RunGossipResponder(connCtx, gossipStream, reconcileStream, m.rt.cache, nodeID,
-					gossipCallback)
+					m.rt.deltaTracker, gossipCallback)
 				if connCtx.Err() != nil {
 					break
 				}
