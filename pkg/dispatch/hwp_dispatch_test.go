@@ -491,7 +491,7 @@ func TestClose_StopsMaintenance(t *testing.T) {
 	// Add a session with a pool
 	sess := &rpcMockSession{resp: &pb.RPCResponse{Success: true}}
 	pool := NewStreamPool(2)
-	pool.Fill(sess)
+	pool.Fill(context.Background(), sess)
 	caller.mu.Lock()
 	caller.sessions["test"] = &cachedSession{
 		session:      sess,

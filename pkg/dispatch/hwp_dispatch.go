@@ -6,7 +6,9 @@ package dispatch
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"sort"
@@ -92,11 +94,14 @@ func (cs *cachedSession) idleSince() time.Duration {
 // Resilience model:
 //   - 5-minute session cache with 30s eviction tick
 //   - Per-session health tracking (consecutive timeouts + recovery window)
-//   - Per-role circuit breaker (open/half-open/closed, 5 failures → trip)
+//   - One circuit per capability, destination node and session generation
+//     (open/half-open/closed, 5 availability failures → trip, one leased
+//     half-open probe)
 //   - 2-attempt retry: evict dead session, find fresh session, retry once
-//   - Pre-opened stream pool (2 per session, background refill)
+//   - Pre-opened stream pool (2 per session, background refill under the
+//     caller's lifecycle context and the session's lifetime)
 //   - Deadline propagation via RPCRequest.Timeout
-//   - Unique request IDs for tracing and future multiplexing
+//   - Collision-resistant logical request IDs (newRequestID)
 //   - Per-role RPC metrics (calls, latency, timeouts, circuit trips)
 //   - Load-aware routing via LAD latency records
 //   - Forwarding sessions NOT cached (prevents lock-in)
@@ -110,10 +115,18 @@ type HWPCaller struct {
 	// each other.
 	findGroup singleflight.Group
 
-	stopCh   chan struct{}
-	bmu      sync.RWMutex               // separate lock for breakers (reduces contention)
-	breakers map[string]*CircuitBreaker // nodeID → breaker (per-node, not per-role)
-	metrics  *RPCMetrics
+	stopCh chan struct{}
+	// lifeCtx is the caller's lifecycle context: pool fills and refills run
+	// under it, and Close cancels it, so no fill outlives the caller.
+	lifeCtx    context.Context
+	lifeCancel context.CancelFunc
+
+	bmu      sync.RWMutex                   // separate lock for breakers (reduces contention)
+	breakers map[breakerKey]*CircuitBreaker // one circuit per capability, node and session generation
+	// breakerReset is the open period of each circuit before a half-open
+	// probe; NewHWPCaller sets it to callerBreakerReset.
+	breakerReset time.Duration
+	metrics      *RPCMetrics
 
 	// routeCache memoizes the result of finder.FindRoutes per
 	// (role, method) for routeCacheTTL. FindRoutes walks the latency +
@@ -202,18 +215,49 @@ const (
 	callerMaintainTick = 30 * time.Second // background eviction + pool refill interval
 	callerRequestTTL   = 30 * time.Second // per-request timeout
 	callerPoolSize     = 2                // pre-opened streams per session
+
+	callerBreakerThreshold = 5                // availability failures that open a circuit
+	callerBreakerWindow    = 60 * time.Second // window the failures must fall in
+	callerBreakerReset     = 30 * time.Second // open period before a half-open probe
 )
 
-// requestIDCounter generates unique IDs across all HWPCaller instances.
+// requestIDCounter numbers the requests this process mints. It is only the
+// trace suffix of a request id: it starts at zero in every process, so an id
+// built from it alone collides across processes.
 var requestIDCounter uint64
+
+// newRequestID mints a logical request id: 128 random bits in hex, then this
+// process's counter in base 36 as a trace suffix. The receiving RPCServer
+// keys its dedup cache on the id, and the parallel probes of one call share
+// it, so it must not collide with an id another process minted.
+func newRequestID() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read does not fail on the platforms Go supports
+	return hex.EncodeToString(b[:]) + "-" + strconv.FormatUint(atomic.AddUint64(&requestIDCounter, 1), 36)
+}
+
+// breakerKey is the failure domain of one circuit: the exact capability (the
+// handler FQN the call names), the destination node, and the session
+// generation, the ConnectionID aether assigns each session at creation. A
+// failing capability or a dead session therefore opens its own circuit and
+// never another capability's or the replacement session's.
+type breakerKey struct {
+	capability string
+	node       string
+	generation aether.ConnectionID
+}
 
 // NewHWPCaller creates a native HWP dispatch caller with background maintenance.
 func NewHWPCaller(finder SessionFinder) *HWPCaller {
+	lifeCtx, lifeCancel := context.WithCancel(context.Background())
 	c := &HWPCaller{
 		sessions:     make(map[string]*cachedSession),
 		finder:       finder,
 		stopCh:       make(chan struct{}),
-		breakers:     make(map[string]*CircuitBreaker),
+		lifeCtx:      lifeCtx,
+		lifeCancel:   lifeCancel,
+		breakers:     make(map[breakerKey]*CircuitBreaker),
+		breakerReset: callerBreakerReset,
 		metrics:      NewRPCMetrics(),
 		routeCache:   make(map[string]*cachedRoutes),
 		resultCache:  make(map[string]*cachedResult),
@@ -372,6 +416,21 @@ func (c *HWPCaller) maintain() {
 			c.evictIdle()
 			c.refillPools()
 			c.evictExpiredCaches()
+			c.evictIdleBreakers()
+		}
+	}
+}
+
+// evictIdleBreakers drops circuits that carry no state a fresh one would not
+// (CircuitBreaker.idle). Circuits are keyed by session generation, so without
+// this every replaced session would leave its circuits in the map for good.
+func (c *HWPCaller) evictIdleBreakers() {
+	now := time.Now()
+	c.bmu.Lock()
+	defer c.bmu.Unlock()
+	for k, cb := range c.breakers {
+		if cb.idle(now) {
+			delete(c.breakers, k)
 		}
 	}
 }
@@ -448,13 +507,14 @@ func (c *HWPCaller) refillPools() {
 		if atomic.LoadInt32(&cs.consecutiveTimeouts) > 0 {
 			continue
 		}
-		cs.pool.Fill(cs.session)
+		cs.pool.Fill(c.lifeCtx, cs.session)
 	}
 }
 
 // Call sends an RPC to the mesh node serving the given role.
 // Computes up to 3 routes via LAD and probes them in parallel.
-// First response wins. Circuit breakers are per-node. When the FQN
+// First response wins. Each probe is governed by the circuit for (method,
+// first-hop node, first-hop session generation). When the FQN
 // "role/method" appears in the cacheable-handlers config the response
 // is served from / stored in the caller-side cache automatically.
 func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byte) ([]byte, error) {
@@ -478,10 +538,10 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 	routes := c.findRoutesCached(ctx, role, method)
 	if len(routes) == 0 {
 		// Fallback: sequential callOnce (no routes means LAD has no data)
-		resp, nodeID, err := c.callOnce(ctx, role, method, payload)
+		resp, cb, err := c.callOnce(ctx, role, method, payload)
 		if err == nil {
-			if nodeID != "" {
-				c.getBreaker(nodeID).RecordSuccess()
+			if cb != nil {
+				cb.RecordSuccess()
 			}
 			c.metrics.RecordCall(role, time.Since(start), true)
 			if ttl > 0 {
@@ -510,7 +570,8 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 		payload        []byte
 		nodeID         string
 		err            error
-		breakerHandled bool // true if probe already recorded success/failure on breaker
+		cb             *CircuitBreaker
+		breakerHandled bool // true if the probe already settled its circuit, or the circuit refused it
 	}
 	resultCh := make(chan probeResult, len(routes))
 
@@ -535,10 +596,12 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 
 	for i, route := range routes {
 		go func(idx int, r aether.ProbeRoute) {
-			// Per-node circuit breaker check
-			cb := c.getBreaker(r.NodeID)
+			// The circuit for this capability over this first hop. Its own
+			// refusal is not an availability failure, so it is reported as
+			// already handled and never recorded against the circuit.
+			cb := c.getBreaker(method, r.NodeID, r.Session)
 			if !cb.Allow() {
-				resultCh <- probeResult{nodeID: r.NodeID, err: ErrCircuitOpen}
+				resultCh <- probeResult{nodeID: r.NodeID, err: ErrCircuitOpen, cb: cb, breakerHandled: true}
 				return
 			}
 
@@ -565,17 +628,17 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 					// caller's ctx is still healthy AND probeCtx has time
 					// left, try the dynamic-stream fallback.
 					if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-						resultCh <- probeResult{nodeID: r.NodeID, err: err}
+						resultCh <- probeResult{nodeID: r.NodeID, err: err, cb: cb}
 						return
 					}
 					// fall through to dynamic stream below using probeCtx
 				} else {
 					cb.RecordSuccess() // transport worked regardless of app result
 					if !resp.Success {
-						resultCh <- probeResult{nodeID: r.NodeID, err: NewHandlerError(resp.Error), breakerHandled: true}
+						resultCh <- probeResult{nodeID: r.NodeID, err: NewHandlerError(resp.Error), cb: cb, breakerHandled: true}
 						return
 					}
-					resultCh <- probeResult{payload: resp.Payload, nodeID: r.NodeID, breakerHandled: true}
+					resultCh <- probeResult{payload: resp.Payload, nodeID: r.NodeID, cb: cb, breakerHandled: true}
 					return
 				}
 			}
@@ -584,36 +647,36 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 			// bounded by defaultProbeTimeout) so any time left after the
 			// bidi attempt is available here.
 			if r.Session == nil || r.Session.IsClosed() {
-				resultCh <- probeResult{nodeID: r.NodeID, err: fmt.Errorf("session closed")}
+				resultCh <- probeResult{nodeID: r.NodeID, err: fmt.Errorf("session closed"), cb: cb}
 				return
 			}
 			reqData, _ := pb.MarshalRequest(req)
 			stream, err := c.openDynamicStream(probeCtx, r.Session, priorityForOpClass(req.Context["opClass"]))
 			if err != nil {
-				resultCh <- probeResult{nodeID: r.NodeID, err: err}
+				resultCh <- probeResult{nodeID: r.NodeID, err: err, cb: cb}
 				return
 			}
 			defer releaseDynamicStream(r.Session, stream)
 			if err := stream.Send(probeCtx, reqData); err != nil {
-				resultCh <- probeResult{nodeID: r.NodeID, err: err}
+				resultCh <- probeResult{nodeID: r.NodeID, err: err, cb: cb}
 				return
 			}
 			respData, err := stream.Receive(probeCtx)
 			if err != nil {
-				resultCh <- probeResult{nodeID: r.NodeID, err: err}
+				resultCh <- probeResult{nodeID: r.NodeID, err: err, cb: cb}
 				return
 			}
 			dynResp, err := pb.UnmarshalResponse(respData)
 			if err != nil {
-				resultCh <- probeResult{nodeID: r.NodeID, err: err}
+				resultCh <- probeResult{nodeID: r.NodeID, err: err, cb: cb}
 				return
 			}
 			cb.RecordSuccess() // transport worked regardless of app result
 			if !dynResp.Success {
-				resultCh <- probeResult{nodeID: r.NodeID, err: NewHandlerError(dynResp.Error), breakerHandled: true}
+				resultCh <- probeResult{nodeID: r.NodeID, err: NewHandlerError(dynResp.Error), cb: cb, breakerHandled: true}
 				return
 			}
-			resultCh <- probeResult{payload: dynResp.Payload, nodeID: r.NodeID, breakerHandled: true}
+			resultCh <- probeResult{payload: dynResp.Payload, nodeID: r.NodeID, cb: cb, breakerHandled: true}
 		}(i, route)
 	}
 
@@ -633,8 +696,15 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 				return result.payload, nil
 			}
 			lastErr = result.err
-			if !result.breakerHandled {
-				c.getBreaker(result.nodeID).RecordFailure()
+			if !result.breakerHandled && result.cb != nil {
+				// An error after the caller's context ended is the
+				// caller's cancellation, not the path's availability:
+				// it releases a half-open lease instead of counting.
+				if ctx.Err() != nil {
+					result.cb.Release()
+				} else {
+					result.cb.RecordFailure()
+				}
 			}
 		case <-ctx.Done():
 			c.metrics.RecordCall(role, time.Since(start), false)
@@ -678,25 +748,27 @@ func (c *HWPCaller) CallCacheable(ctx context.Context, role, method string, payl
 }
 
 // callOnce performs a single RPC attempt: find session → get stream → send → receive.
-// Returns the response payload, the target nodeID (for per-node circuit breaker), and any error.
-func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload []byte) ([]byte, string, error) {
+// Returns the response payload, the circuit that governed the attempt (nil
+// when no session was found), and any error. The circuit is the one for
+// (method, the session's node, the session's generation).
+func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload []byte) ([]byte, *CircuitBreaker, error) {
 	session, cs, err := c.getOrFindSession(ctx, role, method)
 	if err != nil {
-		return nil, "", fmt.Errorf("find session: %w", err)
+		return nil, nil, fmt.Errorf("find session: %w", err)
 	}
 
 	nodeID := string(session.RemoteNodeID())
 
-	// Per-node circuit breaker check (after session discovery)
-	cb := c.getBreaker(nodeID)
+	cb := c.getBreaker(method, nodeID, session)
 	if !cb.Allow() {
 		c.metrics.RecordCircuitTrip(role)
-		return nil, nodeID, fmt.Errorf("dispatch %s/%s: %w (node %s)", role, method, ErrCircuitOpen, nodeID[:12])
+		return nil, nil, fmt.Errorf("dispatch %s/%s: %w (node %s)", role, method, ErrCircuitOpen, shortNodeID(nodeID))
 	}
 
 	// Pre-flight: skip obviously dead sessions
 	if session.IsClosed() {
-		return nil, nodeID, fmt.Errorf("session closed before send")
+		cb.Release()
+		return nil, cb, fmt.Errorf("session closed before send")
 	}
 
 	// Try BidiRPC first (Stream 1) — avoids dynamic stream overhead.
@@ -736,12 +808,17 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 				if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
 					// no breaker failure here — the fallback attempt
 					// will record its own success/failure
+				} else if ctx.Err() != nil {
+					// The caller's context ended: its cancellation is
+					// not the path's availability.
+					cb.Release()
+					return nil, cb, fmt.Errorf("bidi: %w", err)
 				} else {
 					if cs != nil {
 						cs.recordTimeout()
 					}
 					cb.RecordFailure()
-					return nil, nodeID, fmt.Errorf("bidi: %w", err)
+					return nil, cb, fmt.Errorf("bidi: %w", err)
 				}
 			} else {
 				if cs != nil {
@@ -749,9 +826,9 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 				}
 				cb.RecordSuccess()
 				if !resp.Success {
-					return nil, nodeID, NewHandlerError(resp.Error)
+					return nil, cb, NewHandlerError(resp.Error)
 				}
-				return resp.Payload, nodeID, nil
+				return resp.Payload, cb, nil
 			}
 		}
 	}
@@ -771,7 +848,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 		if cs != nil {
 			cs.recordTimeout()
 		}
-		return nil, nodeID, fmt.Errorf("open stream: %w", err)
+		return nil, cb, fmt.Errorf("open stream: %w", err)
 	}
 	defer releaseDynamicStream(session, stream)
 
@@ -784,7 +861,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 	req := buildRPCRequestCtx(ctx, role, method, payload, remaining, rpcTimeout)
 	reqData, err := pb.MarshalRequest(req)
 	if err != nil {
-		return nil, nodeID, fmt.Errorf("marshal: %w", err)
+		return nil, cb, fmt.Errorf("marshal: %w", err)
 	}
 	rpcCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
@@ -795,7 +872,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 			cs.recordTimeout()
 		}
 		c.metrics.RecordTimeout(role)
-		return nil, nodeID, fmt.Errorf("send: %w", err)
+		return nil, cb, fmt.Errorf("send: %w", err)
 	}
 
 	// Receive response
@@ -805,27 +882,27 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 			cs.recordTimeout()
 		}
 		c.metrics.RecordTimeout(role)
-		return nil, nodeID, fmt.Errorf("receive: %w", err)
+		return nil, cb, fmt.Errorf("receive: %w", err)
 	}
 
 	// Decode response
 	resp, err := pb.UnmarshalResponse(respData)
 	if err != nil {
-		return nil, nodeID, fmt.Errorf("unmarshal: %w", err)
+		return nil, cb, fmt.Errorf("unmarshal: %w", err)
 	}
 	if !resp.Success {
 		// Application-level error — session is healthy, request was processed
 		if cs != nil {
 			cs.recordSuccess()
 		}
-		return nil, nodeID, NewHandlerError(resp.Error)
+		return nil, cb, NewHandlerError(resp.Error)
 	}
 
 	// Success
 	if cs != nil {
 		cs.recordSuccess()
 	}
-	return resp.Payload, nodeID, nil
+	return resp.Payload, cb, nil
 }
 
 // buildRPCRequest creates an RPCRequest with deadline propagation and unique ID.
@@ -851,8 +928,8 @@ func buildRPCRequest(role, method string, payload []byte, remaining time.Duratio
 // a node that has just been placed is precisely the node with no bidi yet.
 //
 // Deliberate omission: this path does NOT record circuit-breaker state. The
-// breakers are shared per-node and are driven by the role-dispatch probe loop's
-// own success/failure accounting; having a second, differently-shaped caller
+// circuits are driven by the role-dispatch probe loop's and callOnce's own
+// success/failure accounting; having a second, differently-shaped caller
 // mutate them would corrupt that signal. A targeted call that fails returns the
 // error to its caller and lets the placement layer decide.
 func (c *HWPCaller) CallNode(ctx context.Context, nodeID, role, method string, payload []byte) ([]byte, error) {
@@ -904,7 +981,7 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 	if remaining > 0 && remaining < timeout {
 		timeout = remaining
 	}
-	id := strconv.FormatUint(atomic.AddUint64(&requestIDCounter, 1), 36)
+	id := newRequestID()
 	rpcCtx := map[string]string{"role": role}
 	if oc := opClassFromContext(ctx); oc != "" {
 		rpcCtx["opClass"] = oc
@@ -990,7 +1067,7 @@ func (c *HWPCaller) getOrFindSession(ctx context.Context, role, handler string) 
 			lastUsedNano: time.Now().UnixNano(),
 			pool:         NewStreamPool(callerPoolSize),
 		}
-		cs.pool.Fill(session)
+		cs.pool.Fill(c.lifeCtx, session)
 		c.mu.Lock()
 		c.sessions[role] = cs
 		c.mu.Unlock()
@@ -1079,12 +1156,16 @@ func priorityForOpClass(opClass string) uint8 {
 	}
 }
 
-// getBreaker returns the per-node circuit breaker, creating one if needed.
-// Keyed by nodeID so one bad node doesn't block healthy nodes serving the same role.
-func (c *HWPCaller) getBreaker(nodeID string) *CircuitBreaker {
+// getBreaker returns the circuit for one capability over one node's session,
+// creating it if needed. sess may be nil, which keys the zero generation.
+func (c *HWPCaller) getBreaker(capability, nodeID string, sess aether.Session) *CircuitBreaker {
+	key := breakerKey{capability: capability, node: nodeID}
+	if sess != nil {
+		key.generation = sess.ConnectionID()
+	}
 	// Fast path: read lock
 	c.bmu.RLock()
-	cb, ok := c.breakers[nodeID]
+	cb, ok := c.breakers[key]
 	c.bmu.RUnlock()
 	if ok {
 		return cb
@@ -1093,12 +1174,20 @@ func (c *HWPCaller) getBreaker(nodeID string) *CircuitBreaker {
 	c.bmu.Lock()
 	defer c.bmu.Unlock()
 	// Double-check after acquiring write lock
-	if cb, ok = c.breakers[nodeID]; ok {
+	if cb, ok = c.breakers[key]; ok {
 		return cb
 	}
-	cb = NewCircuitBreaker(5, 60*time.Second, 30*time.Second)
-	c.breakers[nodeID] = cb
+	cb = NewCircuitBreaker(callerBreakerThreshold, callerBreakerWindow, c.breakerReset)
+	c.breakers[key] = cb
 	return cb
+}
+
+// shortNodeID is the first 12 characters of a node id, or all of a shorter one.
+func shortNodeID(id string) string {
+	if len(id) > 12 {
+		return id[:12]
+	}
+	return id
 }
 
 // Metrics returns the RPC metrics for monitoring endpoints.
@@ -1106,9 +1195,13 @@ func (c *HWPCaller) Metrics() *RPCMetrics {
 	return c.metrics
 }
 
-// Close shuts down the caller, stops maintenance, and clears the cache.
+// Close shuts down the caller, stops maintenance, and clears the cache. The
+// lifecycle context is cancelled before the session lock is taken, because
+// refillPools holds that lock's read side across a pool fill, and the
+// cancellation is what ends a fill blocked on a stalled session.
 func (c *HWPCaller) Close() {
 	close(c.stopCh)
+	c.lifeCancel()
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	for role, cs := range c.sessions {
