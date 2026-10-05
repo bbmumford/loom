@@ -15,6 +15,7 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/bbmumford/loom/pkg/rpc"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestPublishRPCHandlersToLAD_RoleTableGolden pins the whole role-discovery
@@ -25,12 +26,15 @@ import (
 //
 // The exact lists are deliberately registered out of order. This guards both
 // identity shape (handler FQNs, not role names) and deterministic publication.
+// Each handler holds a Func, because the record carries only the FQNs this
+// node executes.
 func TestPublishRPCHandlersToLAD_RoleTableGolden(t *testing.T) {
+	run := func(ctx context.Context, req proto.Message) (proto.Message, error) { return req, nil }
 	reg := rpc.NewRegistry()
 	for _, handler := range []rpc.Handler{
-		{Namespace: "orbtr", Domain: "device", Operation: "List", Scope: rpc.ScopeNone},
-		{Namespace: "orbtr", Domain: "audit", Operation: "Write", Scope: rpc.ScopeNone},
-		{Namespace: "orbtr", Domain: "device", Operation: "Get", Scope: rpc.ScopeNone},
+		{Namespace: "orbtr", Domain: "device", Operation: "List", Scope: rpc.ScopeNone, Func: run},
+		{Namespace: "orbtr", Domain: "audit", Operation: "Write", Scope: rpc.ScopeNone, Func: run},
+		{Namespace: "orbtr", Domain: "device", Operation: "Get", Scope: rpc.ScopeNone, Func: run},
 	} {
 		if err := reg.Register(handler); err != nil {
 			t.Fatalf("Register(%s): %v", handler.FQN(), err)

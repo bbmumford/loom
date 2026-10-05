@@ -419,14 +419,24 @@ func (p *PeerPublisher) publishOnce() {
 		}
 	}
 
-	// Gather handler FQNs from rpc.Registry (snapshot taken under lock
-	// above — reg may be nil when Runtime.Initialize wired the publisher
-	// before any handler registry was published).
+	// Gather the FQNs this node executes from rpc.Registry (snapshot taken
+	// under lock above — reg may be nil when Runtime.Initialize wired the
+	// publisher before any handler registry was published). A handler with
+	// no Func is a RegisterProxy entry or a Register call that supplied
+	// none: another node executes it, and rpc.ExportToHandlerRegistry
+	// leaves it out of the registry RPCServer dispatches from. The record's
+	// handler list is what RoleTable.Lookup(role, fqn) matches when the
+	// forwarder and findNodeForRole pick a node for an FQN, so carrying such
+	// an entry would send its callers here for a forwarding hop, or to the
+	// "not found on target node" refusal when they target this node.
 	var handlers []string
 	if reg != nil {
 		registered := reg.All() // sorted by FQN
 		handlers = make([]string, 0, len(registered))
 		for _, handler := range registered {
+			if handler.Func == nil {
+				continue
+			}
 			handlers = append(handlers, handler.FQN())
 		}
 	}
