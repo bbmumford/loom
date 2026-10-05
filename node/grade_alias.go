@@ -22,6 +22,7 @@ var (
 	GradeFromCapabilities = grade.GradeFromCapabilities
 	ProtocolGrade         = grade.ProtocolGrade
 	MaxSupportedGrade     = grade.MaxSupportedGrade
+	ParseOperationClass   = grade.ParseOperationClass
 )
 
 type OperationClass = grade.OperationClass

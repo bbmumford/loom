@@ -7,7 +7,6 @@ package node
 
 import (
 	"bytes"
-	"context"
 	"log"
 	"strings"
 	"sync"
@@ -15,94 +14,14 @@ import (
 	"time"
 )
 
-// COVERAGE of the mesh concurrency helpers: safeGo (:28), safeGoCh
-// (:43), mergeCtxWithTimeout (:81) — all at 0.0%.
+// Covers the mesh concurrency helpers safeGo and safeGoCh. safeGo wraps the
+// RPC server's exported accept loop; safeGoCh wraps the forwarder's parallel
+// probe fan-out.
 //
-// CENSUSED FIRST: each has 1 non-test caller. safeGo <- rpc.go:820 (the exported
-// accept loop), safeGoCh <- the forwarder's parallel probe fan-out,
-// mergeCtxWithTimeout <- the forward hop's budget extension.
-//
-// 🔑 THESE THREE ARE THE MESH'S BLAST DOORS. safeGo is the only thing between a
-// panicking RPC handler and process death on an exported accept loop; safeGoCh
-// is what stops a fan-out collector blocking forever on a result that exploded;
-// mergeCtxWithTimeout is what stops a slow cross-region hop being killed by a
-// shorter caller deadline. Each fails silently, and each failure is an outage.
-
-// ── mergeCtxWithTimeout ─────────────────────────────────────────────────────
-
-// 🔴 THE WHOLE REASON THIS HELPER EXISTS, stated in its own doc:
-// "context.WithTimeout(parent, timeout) is the wrong choice here because it
-// takes MIN(parent_deadline, now+timeout)". The implementation derives from
-// context.Background() precisely so the full budget survives a shorter parent
-// deadline. Replace Background with parent and a cross-region hop the code
-// believes has seconds is killed at the caller's residual milliseconds.
-func TestTheMergedBudgetSurvivesAShorterParentDeadline(t *testing.T) {
-	parent, pcancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
-	defer pcancel()
-
-	merged, cancel := mergeCtxWithTimeout(parent, 10*time.Second)
-	defer cancel()
-
-	dl, ok := merged.Deadline()
-	if !ok {
-		t.Fatal("merged context has no deadline — the timeout budget was lost entirely")
-	}
-	if remaining := time.Until(dl); remaining < time.Second {
-		t.Fatalf("merged deadline is only %v away, but a 10s budget was requested "+
-			"against a 40ms parent — the helper is taking MIN(parent, timeout), "+
-			"which is the exact bug its doc says it exists to avoid. A slow "+
-			"cross-region forward hop would be killed at the caller's residual "+
-			"deadline", remaining)
-	}
-}
-
-// 🔴 AND THE OTHER HALF, WHICH THE FIRST ONE ALONE WOULD LET YOU BREAK: parent
-// cancellation must still propagate. Fan-out probes up to 3 candidate paths and
-// cancels the losers on first win; without propagation the two losers keep their
-// forward hop alive for the FULL extended budget.
-func TestParentCancellationStillReachesTheMergedContext(t *testing.T) {
-	parent, pcancel := context.WithCancel(context.Background())
-	merged, cancel := mergeCtxWithTimeout(parent, 30*time.Second)
-	defer cancel()
-
-	select {
-	case <-merged.Done():
-		t.Fatal("merged context was already done before the parent was cancelled")
-	default:
-	}
-
-	pcancel()
-
-	select {
-	case <-merged.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("parent was cancelled and the merged context is still live — the " +
-			"first-win cancellation of sibling probes does not propagate, so every " +
-			"losing forward hop runs for its full extended budget")
-	}
-}
-
-// The returned cancel must end the merged context even when neither the parent
-// nor the timeout has fired — it is deferred on every happy path, and if it did
-// not cancel, the watcher goroutine would outlive the call.
-func TestTheReturnedCancelEndsTheMergedContext(t *testing.T) {
-	merged, cancel := mergeCtxWithTimeout(context.Background(), time.Hour)
-
-	select {
-	case <-merged.Done():
-		t.Fatal("merged context done before cancel was called")
-	default:
-	}
-
-	cancel()
-
-	select {
-	case <-merged.Done():
-	case <-time.After(2 * time.Second):
-		t.Fatal("the returned cancel did not end the merged context — every caller " +
-			"defers it, so the watcher goroutine leaks once per forward hop")
-	}
-}
+// safeGo is the only thing between a panicking RPC handler and process death on
+// an exported accept loop; safeGoCh is what stops a fan-out collector blocking
+// forever on a result that exploded. Each fails silently, and each failure is an
+// outage.
 
 // ── safeGo ──────────────────────────────────────────────────────────────────
 

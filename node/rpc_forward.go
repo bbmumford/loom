@@ -55,6 +55,87 @@ type runtimeForwarder struct {
 	forwardLADRouted int64 // atomic
 }
 
+// GradeTooLowError is Forward's refusal when no candidate path meets the floor
+// of the request's operation class, or when the request names a class the gate
+// does not know. It unwraps to rpc.ErrGradeTooLow, which callers test with
+// errors.Is. Current is the best grade among the candidates and Required the
+// class's floor; for an unknown class both are zero, since it has no floor.
+type GradeTooLowError struct {
+	Handler      string
+	Class        string // the "opClass" hint as the request carried it; "" is Standard
+	Current      Grade
+	Required     Grade
+	UnknownClass bool
+}
+
+func (e *GradeTooLowError) Error() string {
+	if e.UnknownClass {
+		return fmt.Sprintf("forward %s: operation class %q is not declared: %v",
+			e.Handler, e.Class, rpc.ErrGradeTooLow)
+	}
+	class := e.Class
+	if class == "" {
+		class = OpClassStandard.String()
+	}
+	return fmt.Sprintf("forward %s: best path grade %s is below the %s floor of operation class %q: %v",
+		e.Handler, e.Current, e.Required, class, rpc.ErrGradeTooLow)
+}
+
+func (e *GradeTooLowError) Unwrap() error { return rpc.ErrGradeTooLow }
+
+// RouteDeadlineError is Forward's refusal when the caller's remaining deadline
+// is shorter than every graded candidate's need, adaptiveRPCTimeout of its
+// session. It unwraps to rpc.ErrRouteDeadline. Need is the smallest need among
+// the candidates, so Remaining < Need always holds.
+type RouteDeadlineError struct {
+	Handler   string
+	Remaining time.Duration
+	Need      time.Duration
+}
+
+func (e *RouteDeadlineError) Error() string {
+	return fmt.Sprintf("forward %s: %v left, the next hop needs %v: %v",
+		e.Handler, e.Remaining, e.Need, rpc.ErrRouteDeadline)
+}
+
+func (e *RouteDeadlineError) Unwrap() error { return rpc.ErrRouteDeadline }
+
+// hopFits reports whether ctx's remaining deadline covers a forward over
+// session, whose need is adaptiveRPCTimeout(session). A context without a
+// deadline always fits, because there is no budget to exceed.
+func hopFits(ctx context.Context, session aether.Session) bool {
+	dl, ok := ctx.Deadline()
+	if !ok {
+		return true
+	}
+	return time.Until(dl) >= adaptiveRPCTimeout(session)
+}
+
+// keepCallerBudget sets a forwarded request's TimeoutNs and Deadline to no more
+// than the time ctx has left. RPCServer.handleRequest at the next hop bounds
+// its handler with TimeoutNs from the moment the request arrives, so a
+// TimeoutNs copied unchanged from the origin restarts the clock at every hop;
+// Deadline is the absolute instant it refuses an expired request at. A ctx
+// without a deadline leaves both as the request carried them.
+func keepCallerBudget(ctx context.Context, req *pb.RPCRequest) {
+	dl, ok := ctx.Deadline()
+	if !ok {
+		return
+	}
+	left := time.Until(dl)
+	if left <= 0 {
+		// TimeoutNs 0 means "unbounded" to the next hop, so an exhausted
+		// budget travels as the smallest bound instead.
+		left = time.Nanosecond
+	}
+	if req.TimeoutNs <= 0 || time.Duration(req.TimeoutNs) > left {
+		req.TimeoutNs = int64(left)
+	}
+	if abs := dl.UnixNano(); req.Deadline <= 0 || req.Deadline > abs {
+		req.Deadline = abs
+	}
+}
+
 // Forward sends an RPC request to the correct handler node.
 // It discovers which node handles the method, finds a path to it, and sends
 // the RPC. If no direct path exists, it forwards to any connected peer
@@ -69,19 +150,45 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 
 	selfID := string(f.rt.identity.NodeID)
 
+	// The operation class sets the lowest route grade this request may leave
+	// on. The "opClass" hint is what dispatch.WithOpClass put in req.Context; a
+	// request that names none is Standard. A name ParseOperationClass does not
+	// know is refused here, before any path is tried, rather than held to some
+	// other class's floor.
+	opClass := req.Context["opClass"]
+	class, known := ParseOperationClass(opClass)
+	if !known {
+		return nil, &GradeTooLowError{Handler: req.Handler, Class: opClass, UnknownClass: true}
+	}
+	minGrade := class.MinGrade()
+
 	// FAST PATH: If request has a RouteList, try the intended hop first.
 	// This is the common case for relayed requests from parallel probing.
+	// The hop is held to the same floor and budget as a re-routed path; one
+	// that falls short is not sent to, and the re-route below either finds
+	// another path or returns the typed refusal.
 	if len(req.RouteList) > 0 {
 		nextHop := req.RouteList[0]
 		remaining := req.RouteList[1:]
 
 		session, ok := f.rt.getSession(nextHop)
-		if ok && !session.IsClosed() {
+		switch {
+		case !ok || session.IsClosed():
+			log.Printf("[RPC] Forward %s: no session to routed hop %s, re-routing via LAD",
+				req.Handler, aether.NodeID(nextHop).Short())
+		case SessionGrade(session) < minGrade:
+			log.Printf("[RPC] Forward %s: routed hop %s grades %s, below the %s floor of operation class %s; re-routing via LAD",
+				req.Handler, aether.NodeID(nextHop).Short(), SessionGrade(session), minGrade, class)
+		case !hopFits(ctx, session):
+			log.Printf("[RPC] Forward %s: routed hop %s needs %v, more than the caller has left; re-routing via LAD",
+				req.Handler, aether.NodeID(nextHop).Short(), adaptiveRPCTimeout(session))
+		default:
 			dbgForward.Printf("Forward %s (hop %d) → %s (routed)", req.Handler, req.Hops, aether.NodeID(nextHop).Short())
 
 			// Pop the route and forward
 			fwdReq := proto.Clone(req).(*pb.RPCRequest)
 			fwdReq.RouteList = remaining
+			keepCallerBudget(ctx, fwdReq)
 			resp, err := f.callOverMeshSession(ctx, session, fwdReq)
 			if err == nil {
 				atomic.AddInt64(&f.forwardLADRouted, 1)
@@ -102,9 +209,6 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 			// Intended path broken — fall through to re-route
 			log.Printf("[RPC] Forward %s: intended route to %s broken (%v), re-routing via LAD",
 				req.Handler, aether.NodeID(nextHop).Short(), err)
-		} else {
-			log.Printf("[RPC] Forward %s: no session to routed hop %s, re-routing via LAD",
-				req.Handler, aether.NodeID(nextHop).Short())
 		}
 	}
 
@@ -262,48 +366,47 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 		return SessionGrade(paths[i].session) > SessionGrade(paths[j].session)
 	})
 
-	// Hard grade-gate for the operation class. The wire context "opClass"
-	// hint is the opt-in signal: a caller sets it with dispatch.WithOpClass
-	// and buildRPCRequestCtx copies it to req.Context["opClass"].
-	// Critical/Realtime/Standard operations must
-	// not land on a transport below their MinGrade, so if NO available path
-	// meets the minimum we fail closed with rpc.ErrGradeTooLow rather than
-	// silently forwarding over an emergency-fallback link. Callers
-	// distinguish this from transport failures via errors.Is.
-	//
-	// Fail-closed is gated behind an explicitly set, non-bulk opClass: an
-	// empty opClass, which is what every caller that never sets the hint
-	// sends, skips this block and forwards best-effort. OpClassBulk maps
-	// to MinGrade GradeF, which every connected path satisfies, so it can
-	// never trip the gate either.
-	if opClass := req.Context["opClass"]; opClass != "" {
-		var oc OperationClass
-		switch opClass {
-		case "critical":
-			oc = OpClassCritical
-		case "realtime":
-			oc = OpClassRealtime
-		case "standard":
-			oc = OpClassStandard
-		default:
-			oc = OpClassBulk
+	// The grade gate, for every request: only paths at or above the class's
+	// floor stay candidates. With none left the request is refused with the
+	// best grade on offer and the floor it missed, rather than forwarded over
+	// a transport the class does not admit.
+	best := GradeF
+	graded := paths[:0]
+	for _, p := range paths {
+		g := SessionGrade(p.session)
+		if g > best {
+			best = g
 		}
-		minGrade := oc.MinGrade()
-		filtered := paths[:0]
+		if g >= minGrade {
+			graded = append(graded, p)
+		}
+	}
+	if len(graded) == 0 {
+		return nil, &GradeTooLowError{Handler: req.Handler, Class: opClass, Current: best, Required: minGrade}
+	}
+	paths = graded
+
+	// The remaining budget: a path whose need exceeds what the caller has left
+	// is not tried. The forward runs on the caller's context and never gains
+	// time, so with no path that fits the request is refused here, before
+	// anything is sent, instead of being handed to a hop that cannot finish it.
+	if dl, ok := ctx.Deadline(); ok {
+		left := time.Until(dl)
+		var need time.Duration
+		fit := paths[:0]
 		for _, p := range paths {
-			if SessionGrade(p.session) >= minGrade {
-				filtered = append(filtered, p)
+			n := adaptiveRPCTimeout(p.session)
+			if need == 0 || n < need {
+				need = n
+			}
+			if left >= n {
+				fit = append(fit, p)
 			}
 		}
-		if len(filtered) > 0 {
-			paths = filtered
-		} else if minGrade > GradeF {
-			// Every candidate path is below the required grade and the
-			// operation declared a real minimum — fail closed instead of
-			// forwarding over an unacceptable transport.
-			return nil, fmt.Errorf("forward %s: no path meets minimum grade %s for opClass %q: %w",
-				req.Handler, minGrade, opClass, rpc.ErrGradeTooLow)
+		if len(fit) == 0 {
+			return nil, &RouteDeadlineError{Handler: req.Handler, Remaining: left, Need: need}
 		}
+		paths = fit
 	}
 
 	// Bound fan-out to the ORIGIN. Each probe forwards to a next-hop
@@ -344,25 +447,12 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 				dbgForward.Printf("Forward %s (hop %d) → %s (parallel re-route)",
 					req.Handler, req.Hops, aether.NodeID(fc.nodeID).Short())
 
-				// Multi-hop deadline extension. If the caller's remaining
-				// deadline is too tight for the forward hop's path, extend
-				// it via mergeCtxWithTimeout — that gives the call the
-				// full hop budget while STILL propagating probeCtx's
-				// first-win cancellation. Rebuilding with WithTimeout(
-				// context.Background(), minTimeout) would orphan the
-				// goroutine from probeCtx, so a sibling probe winning
-				// couldn't stop it.
-				fwdCtx := probeCtx
-				minTimeout := adaptiveRPCTimeout(fc.session)
-				var cancel context.CancelFunc
-				if callerDeadline, hasDeadline := probeCtx.Deadline(); hasDeadline {
-					if remaining := time.Until(callerDeadline); remaining < minTimeout {
-						fwdCtx, cancel = mergeCtxWithTimeout(probeCtx, minTimeout)
-						defer cancel()
-					}
-				}
-
-				resp, err := f.callOverMeshSession(fwdCtx, fc.session, fwdReq)
+				// The probe runs on probeCtx, derived from the caller's
+				// context: its deadline and a sibling probe's first-win
+				// cancellation both reach the hop, and the request carries
+				// no more time than that context has left.
+				keepCallerBudget(probeCtx, fwdReq)
+				resp, err := f.callOverMeshSession(probeCtx, fc.session, fwdReq)
 				resultCh <- probeResult{resp: resp, err: err, winner: fc, originalTarget: originalTarget}
 			})
 	}
