@@ -75,8 +75,9 @@ type TakeoverConfig struct {
 	ChainDepth int
 }
 
-// rungUnset is the rank given to a claim carrying no chain rung — an older
-// node, or a hand-crafted record. It sorts AFTER every declared rung.
+// rungUnset is the rank given to a claim carrying no chain rung — a node with
+// no declared rung, a peer whose claim body has no rung field, or a
+// hand-crafted record. It sorts AFTER every declared rung.
 //
 // 🔴 This is deliberate and load-bearing. `Rung` is `omitempty` on the wire, so
 // a claim carrying no rung decodes to 0 — and 0 would be the
@@ -89,12 +90,12 @@ type claimBody struct {
 	Role     string `json:"role"`
 	NodeID   string `json:"nodeId"`
 	AtUnixMs int64  `json:"atUnixMs"`
-	// Rung is the claimant's failover-chain position. omitempty for
-	// wire compatibility with nodes that predate the chain; see rungUnset for
-	// how an absent value is ranked.
+	// Rung is the claimant's failover-chain position. omitempty, so a node
+	// with no declared rung sends none and a body without the field decodes
+	// to 0 on every peer; see rungUnset for how an absent value is ranked.
 	Rung int `json:"rung,omitempty"`
 	// MinHolders is the claimant's declared cardinality FLOOR for the role —
-	// "at least N holders". omitempty, same wire-compat reason as Rung.
+	// "at least N holders". omitempty, for the same reason as Rung.
 	//
 	// 🔑 WHY IT IS HERE NOW RATHER THAN LATER, AND WHY IT DOES NOT RANK.
 	// Rung and MinHolders ship together: both qualify the same claim record, and
@@ -140,8 +141,8 @@ type roleClaim struct {
 	sig []byte
 }
 
-// floorUnset marks a claim that declared no cardinality floor — an older peer,
-// or one that has not been configured with MinReplicas.
+// floorUnset marks a claim that declared no cardinality floor — a peer whose
+// claim body has no minHolders field, or one not configured with MinReplicas.
 //
 // It is a distinct value rather than 0 because "declared no floor" and
 // "declared a floor of zero" are different facts, and collapsing them is the
@@ -171,7 +172,8 @@ func normaliseFloor(f int) int {
 // under-covered in production.
 //
 // An UNSET floor on either side is not a disagreement — it is silence, and
-// silence is not contradiction (an older peer predates the field entirely).
+// silence is not contradiction (a peer whose claim body has no minHolders
+// field sends none).
 func claimFloorDisagreement(local, remote int) bool {
 	if local == floorUnset || remote == floorUnset {
 		return false

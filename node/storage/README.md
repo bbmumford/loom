@@ -88,18 +88,21 @@ leech, _ := manager.NewLeech() // hydrates via local store + fetchers
   resolves names to manifest IDs.
 4. Configure signing keys for publishers; verify keys during leech operations.
 5. Optionally, implement `AnnounceProvides` to push reachability hints into LAD
-  (`mesh/directory`).
+  (loom `directory/`).
 
 ## Integration with LAD and VL1
 
-- **Reachability** — after publishing a manifest, call `lad.DirectoryCache.Apply`
-  with a `ReachRecord` describing which node serves the content. VL1 peers can
-  then discover the node using `PathSelector`.
+- **Reachability** — after publishing a manifest, apply a `lad.Record` on topic
+  `lad.TopicReach` whose body is a `lad.ReachRecord` naming the node that serves
+  the content, through `ladcache.DirectoryCache.Apply` (`lad` is
+  `github.com/bbmumford/ledger`, `ladcache` its `cache` package). Peers then
+  find that node's addresses in the directory, and aether's `PathSelector`
+  ranks the paths to it.
 - **Transport** — pair the storage `FetchBackend` with a VL1 session manager so
   chunk fetches can reuse Noise-encrypted UDP streams. For example, implement a
-  `p2pFetchBackend` that dials `vl1.Manager.DialNode` and streams chunk bytes
-  over the resulting session.
-- **Task Mesh Hooks** — expose publish/retrieve via `mesh/task` handlers so
+  `p2pFetchBackend` that dials the serving node over the runtime's aether
+  transport and streams chunk bytes over the resulting session.
+- **Task Mesh Hooks** — expose publish/retrieve via `core/task` handlers so
   gateways can request staged data migrations or deliver artifacts to executors.
 
 ## Typical Flows

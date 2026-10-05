@@ -179,43 +179,32 @@ func (rt *Runtime) DialAndAcceptMesh(ctx context.Context, conn net.Conn,
 	// SESSION RESUMPTION: the ordinary noise-UDP mesh dial DOES attempt aether's
 	// 0.5-RTT resume, so no resume call belongs here.
 	// The chain is dialWithProtocol -> Runtime.dialNoiseUDP (runtime.go) ->
-	// tr.Dial -> NoiseTransport.Dial (aether/noise/transport.go:424), and
-	// tryResumeDial lives inside that function at :462. So by the time a conn
-	// reaches DialAndAcceptMesh the resume attempt has already happened or been
-	// declined upstream.
+	// tr.Dial -> aether's NoiseTransport.Dial, which runs tryResumeDial. So by
+	// the time a conn reaches DialAndAcceptMesh the resume attempt has already
+	// happened or been declined upstream.
 	//
-	// ⚠ THE TRAP THAT MAKES THIS EASY TO GET BACKWARDS, recorded because I did:
-	// this function's parameter is a net.Conn and the call sites pass
+	// ⚠ THIS FUNCTION'S PARAMETER IS A net.Conn and the call sites pass
 	// baseConn.Conn, which READS like a raw socket dialled locally. It is not —
 	// it is the connection returned by the resume-capable transport dial, with
 	// the aether.BaseConnection wrapper stripped off. Tracing SetupMeshSession
-	// downward shows no ticket lookup and invites the conclusion that resumption
-	// is unreachable from the mesh; the conclusion is wrong because the dial
-	// happened one layer UP, before the handoff. Follow a conn parameter back to
-	// its origin before concluding anything about what its dial did or did not do.
+	// downward shows no ticket lookup because the dial happened one layer UP,
+	// before the handoff, so a conn parameter has to be followed back to its
+	// origin to say what its dial did.
 	//
-	// ALL FOUR mesh dial sites are traced, and every one of them reaches the
-	// resume-capable dial for noise-UDP:
+	// Every mesh dial site reaches the resume-capable dial for noise-UDP:
 	//
-	//   peer_connections.go:2940  <- dialWithProtocol
-	//   multipath_dial.go:345     <- dialWithProtocol
-	//   upgrade_walker.go:457     <- dialWithProtocol (assigned at :398)
-	//   holepunch.go:317          <- nat.ExecutePunch, whose dial closure at
-	//                                holepunch.go:283-285 IS rt.dialNoiseUDP
+	//   ConnectionManager.connectPeer        <- dialWithProtocol
+	//   ConnectionManager.dialAdditionalPath <- dialWithProtocol
+	//   ConnectionManager.probeUpgrade       <- dialWithProtocol
+	//   ConnectionManager.attemptHolePunch   <- nat.ExecutePunch, whose dial
+	//                                           closure IS rt.dialNoiseUDP
 	//
-	// The hole-punch case is the one that looked most likely to be a genuine
-	// bypass — it hands over a NAT-punched socket — and it is not: the punch
-	// coordinator is handed a dial closure that routes through the same
-	// transport. Every path converges on dialNoiseUDP -> tr.Dial ->
-	// NoiseTransport.Dial, takes its resume attempt there, and then hands the
-	// unwrapped conn down here to be re-wrapped as the mesh-level session.
-	//
-	// The prior comment here claimed wiring "needs unification of AetherSession
-	// and aether.Session" plus ticket storage and reconnect-path passing. That
-	// part was genuinely stale and is worth keeping noted: AetherSession exists
-	// nowhere in loom/ or aether/ except in that sentence, and reconnect-path
-	// ticket passing is already implemented in aether. A TODO that overstates its
-	// own blockers reads as a considered estimate and stops anyone re-measuring.
+	// The hole-punch case hands over a NAT-punched socket, and it still takes
+	// the resume attempt: the punch coordinator is handed a dial closure that
+	// routes through the same transport. Every path converges on dialNoiseUDP ->
+	// tr.Dial -> NoiseTransport.Dial, takes its resume attempt there, and then
+	// hands the unwrapped conn down here to be re-wrapped as the mesh-level
+	// session.
 
 	if rt.connMgr != nil {
 		rt.connMgr.AcceptMeshConnection(ctx, AcceptMeshConnectionOpts{

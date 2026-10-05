@@ -281,23 +281,18 @@ func TestAFlatChainRanksExactlyAsBefore(t *testing.T) {
 	}
 }
 
-// 🔴 THE SAFETY DEFAULT, NOW REACHABLE. Mutation proved this clamp was
-// untestable while it lived inline in StartTakeover (which needs a live swarm
-// Node), so a mutant defaulting an unconfigured node to rung 1 — THE MOST
-// PREFERRED — survived. Extracting it made the highest-consequence default in
-// the file assertable.
+// resolveChainPosition is the normalisation StartTakeover applies to the
+// configured rung and depth, kept a pure function so its default for an
+// unconfigured node is assertable without a live swarm Node. That default
+// decides whether a node that never configured the chain outranks one that
+// did: resolving it to rung 1 would make it THE MOST PREFERRED candidate.
 func TestAnUnconfiguredNodeResolvesToTheLastRungNeverTheFirst(t *testing.T) {
-	// This table encodes the RANKING RULE, not the shape of any one input.
-	// It asserted {0,0} → (1,1): an entirely unconfigured node resolving to rung
-	// 1, the MOST preferred class. The guard below it only probed depth=5, so it
-	// never reached the depth=0 case where the inversion actually lived. A test
-	// written against current behaviour pins that behaviour as correct — the
-	// exact rule this lane cites elsewhere, broken here by the lane itself.
-	//
-	// Corrected semantics: the rung is a GLOBAL CLASS. An undeclared rung
-	// publishes ABSENT (0) and sorts last on every peer via rungUnset; a
-	// declared rung publishes exactly as declared and is never clamped to the
-	// private local depth.
+	// This table encodes the RANKING RULE, not the shape of any one input:
+	// the rung is a GLOBAL CLASS. An undeclared rung publishes ABSENT (0) and
+	// sorts last on every peer via rungUnset; a declared rung publishes
+	// exactly as declared and is never clamped to the private local depth.
+	// The depth=0 rows matter as much as the depth=4 ones, because 0 is
+	// ChainDepth's default.
 	for _, tc := range []struct {
 		name              string
 		rung, depth       int
@@ -318,9 +313,9 @@ func TestAnUnconfiguredNodeResolvesToTheLastRungNeverTheFirst(t *testing.T) {
 		}
 	}
 
-	// 🔴 THE CASE THE OLD GUARD COULD NOT REACH. depth=0 is ChainDepth's
-	// documented default, so this is the ordinary shape of an unconfigured node
-	// — and it is precisely where the old code produced rung 1.
+	// depth=0 is ChainDepth's documented default, so (0, 0) is the ordinary
+	// shape of an unconfigured node; it must not resolve to rung 1, and
+	// neither may an unset rung on a deeper chain.
 	if r, _ := resolveChainPosition(0, 0); r == 1 {
 		t.Fatal("a fully unconfigured node (rung 0, depth 0) resolved to rung 1 — the " +
 			"MOST preferred class. This is ChainDepth's default, so every node that " +
@@ -332,13 +327,14 @@ func TestAnUnconfiguredNodeResolvesToTheLastRungNeverTheFirst(t *testing.T) {
 	}
 }
 
-// 🔴 CROSS-NODE COMPARABILITY (the design 🔑 note: "a cross-node decision cannot
-// be driven by a value only one node can see").
+// CROSS-NODE COMPARABILITY: a cross-node decision cannot be driven by a value
+// only one node can see.
 //
 // ChainDepth is private — it is not on claimBody, never negotiated, never
-// validated against a peer. So two nodes that declare the SAME class must
-// publish the SAME rung regardless of what each believes the chain depth to be.
-// The old clamp broke exactly this, and no test compared two nodes at all.
+// validated against a peer — while rankClaims compares the rungs of claims
+// from different nodes. So two nodes that declare the SAME class must publish
+// the SAME rung regardless of what each believes the chain depth to be; a
+// rung clamped to the local depth would split one class across nodes.
 func TestTwoNodesDeclaringTheSameClassPublishTheSameRungWhateverTheirPrivateDepth(t *testing.T) {
 	for _, depth := range []int{0, 1, 2, 4, 99} {
 		got, _ := resolveChainPosition(3, depth)

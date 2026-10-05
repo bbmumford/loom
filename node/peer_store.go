@@ -208,8 +208,8 @@ func (s *FilePeerStore) All() []PersistedPeer {
 //
 // ⚠ THE GOROUTINE IT SPAWNS IS NOT ENROLLED IN ANY WaitGroup, so a caller
 // that cancels ctx and exits does not wait for the final save. Runtime.Go's
-// own doc (runtime.go:1470-1475) states the rule this breaks: "bare `go
-// fn()` callers are invisible to wg.Wait and may outlive Close". Prefer
+// doc states the rule this breaks: bare `go fn()` callers are invisible to
+// wg.Wait and may outlive Close. Prefer
 // runPeriodicSave under a tracked goroutine — Runtime does exactly that at
 // its call site, so the final save is drained by `rt.cancel(); rt.wg.Wait()`.
 // This wrapper is kept for callers outside Runtime that have no waitgroup to
