@@ -97,7 +97,38 @@ func canDispatchOn(stream aether.Stream) bool {
 	return stream.IsOpen()
 }
 
+// sessionCloser is the close signal aether.BaseSession exposes; the adapter
+// sessions embed BaseSession, so a live mesh session satisfies it.
+type sessionCloser interface {
+	CloseSignal() <-chan struct{}
+}
+
+// sessionScope returns a context that ends when parent ends or when sess
+// closes. A session without a close signal is bounded by parent alone. The
+// returned cancel ends the watcher goroutine and must always be called.
+func sessionScope(parent context.Context, sess aether.Session) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	if sc, ok := sess.(sessionCloser); ok {
+		if closed := sc.CloseSignal(); closed != nil {
+			go func() {
+				select {
+				case <-closed:
+					cancel()
+				case <-ctx.Done():
+				}
+			}()
+		}
+	}
+	return ctx, cancel
+}
+
 // Fill pre-opens streams up to capacity on the given session.
+//
+// Every OpenStream runs under ctx narrowed to the session's lifetime
+// (sessionScope): HWPCaller passes its own lifecycle context, so a fill
+// blocked on a stalled peer ends when the session closes or when the caller
+// closes. Fill holds the pool mutex across OpenStream, so an unbounded open
+// would also stall every Get on this pool.
 //
 // Cap-exhausted backoff: if a prior OpenStream returned
 // aether.ErrStreamCapExhausted, Fill short-circuits until
@@ -105,17 +136,19 @@ func canDispatchOn(stream aether.Stream) bool {
 // streams otherwise produces a steady cap-hit cycle — each Fill
 // burning one OpenStream attempt every refill loop — and floods the
 // session's streamRefused counter.
-func (p *StreamPool) Fill(sess aether.Session) {
+func (p *StreamPool) Fill(ctx context.Context, sess aether.Session) {
 	if p.inCapBackoff() {
 		return
 	}
+	ctx, cancel := sessionScope(ctx, sess)
+	defer cancel()
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	for len(p.streams) < p.capacity {
-		if sess.IsClosed() {
+		if sess.IsClosed() || ctx.Err() != nil {
 			return
 		}
-		stream, err := openDynamicStreamOn(context.Background(), sess, aether.StreamConfig{
+		stream, err := openDynamicStreamOn(ctx, sess, aether.StreamConfig{
 			Reliability: aether.ReliableOrdered,
 			Priority:    128,
 		})

@@ -65,7 +65,7 @@ func (s *mockStream) Conn() net.Conn                              { return nil }
 func TestStreamPool_GetReturnsPreOpenedStream(t *testing.T) {
 	sess := &mockSession{}
 	pool := NewStreamPool(2)
-	pool.Fill(sess)
+	pool.Fill(context.Background(), sess)
 
 	if atomic.LoadInt32(&sess.openCount) != 2 {
 		t.Fatalf("expected 2 pre-opened streams, got %d", sess.openCount)
@@ -103,7 +103,7 @@ func TestStreamPool_FallsBackToFreshStream(t *testing.T) {
 func TestStreamPool_DrainClosesAll(t *testing.T) {
 	sess := &mockSession{}
 	pool := NewStreamPool(2)
-	pool.Fill(sess)
+	pool.Fill(context.Background(), sess)
 	pool.Drain()
 	if pool.Len() != 0 {
 		t.Fatalf("expected 0 after drain, got %d", pool.Len())
