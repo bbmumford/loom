@@ -12,19 +12,33 @@ import (
 )
 
 // ErrGradeTooLow is returned when the best available connection grade is below
-// the minimum required for the operation class. Callers can use errors.Is to
-// distinguish grade failures from transport failures.
+// the minimum required for the operation class, and when the request names an
+// operation class the grade gate does not know. Callers can use errors.Is to
+// distinguish grade failures from transport failures; node's forwarder
+// returns it wrapped in a *node.GradeTooLowError carrying the current and
+// required grade.
 var ErrGradeTooLow = errors.New("connection grade too low for operation")
+
+// ErrRouteDeadline is returned when the caller's remaining deadline cannot
+// cover the next hop, before anything is sent. node's forwarder returns it
+// wrapped in a *node.RouteDeadlineError carrying the remaining budget and the
+// hop's need, because a forwarded call keeps the caller's deadline and never
+// gains time.
+var ErrRouteDeadline = errors.New("remaining deadline does not cover the next hop")
 
 // OperationClass is the class a Handler declares for its transport
 // requirements. node's grade gate uses grade.OperationClass
 // (node/grade_alias.go) and reads the "opClass" context hint set by
 // dispatch.WithOpClass, not this value; nothing converts between the two.
+//
+// The zero value is OpStandard, the class a Handler that declares none
+// carries, matching the gate, which holds a request naming no class to the
+// Standard floor.
 type OperationClass int
 
 const (
-	OpBulk     OperationClass = iota // Telemetry, inventory — any connection works
-	OpStandard                       // CRUD, queries — reliable transport minimum
+	OpStandard OperationClass = iota // CRUD, queries — reliable transport minimum; the default
+	OpBulk                           // Telemetry, inventory — any connection works
 	OpRealtime                       // Remote access, streaming — fast transport minimum
 	OpCritical                       // Key rotation, auth — fast transport + retry
 )
@@ -91,7 +105,7 @@ type Handler struct {
 	Scope            ScopeTag                // opaque scope label a PresencePolicy evaluates at mesh dispatch
 	Requirement      *scope.Requirement      // two-arm authorization; when set it supersedes Scope at the enforcement seam. nil = fall back to Scope/PresencePolicy.
 	Tags             []string                // Classification: "status", "write", "feature:policy.full"
-	OpClass          OperationClass          // declared operation class (zero value: OpBulk); loom does not read it, a caller forwards a class as the opClass hint via dispatch.WithOpClass
+	OpClass          OperationClass          // declared operation class (zero value: OpStandard); loom does not read it, a caller forwards a class as the opClass hint via dispatch.WithOpClass
 	WebhookSignature *WebhookSignatureConfig // optional: declare this handler is a webhook-class receiver; the registry runs signature verification pre-dispatch
 }
 

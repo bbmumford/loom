@@ -151,16 +151,42 @@ func MaxSupportedGrade(natType aether.NATType) Grade {
 	}
 }
 
-// OperationClass categorizes RPC operations by transport requirements.
+// OperationClass categorizes RPC operations by transport requirements. The
+// zero value is OpClassStandard, the class node's forwarder applies to a
+// request that names none.
 type OperationClass int
 
 const (
-	OpClassBulk OperationClass = iota
-	OpClassStandard
+	OpClassStandard OperationClass = iota
+	OpClassBulk
 	OpClassRealtime
 	OpClassCritical
 )
 
+// ParseOperationClass maps the "opClass" request hint that
+// dispatch.WithOpClass sets to its class. An empty hint is OpClassStandard.
+// Any other name returns false: node's forwarder refuses such a request
+// rather than holding it to some other class's floor, so a misspelt or
+// invented class can never select the weakest floor.
+func ParseOperationClass(name string) (OperationClass, bool) {
+	switch name {
+	case "", "standard":
+		return OpClassStandard, true
+	case "bulk":
+		return OpClassBulk, true
+	case "realtime":
+		return OpClassRealtime, true
+	case "critical":
+		return OpClassCritical, true
+	default:
+		return 0, false
+	}
+}
+
+// MinGrade is the lowest route grade the class may be forwarded over. A value
+// outside the four declared classes has no floor of its own and gets
+// Standard's; the forwarder never reaches it, because ParseOperationClass
+// refuses an unknown name first.
 func (oc OperationClass) MinGrade() Grade {
 	switch oc {
 	case OpClassBulk:
