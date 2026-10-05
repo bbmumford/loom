@@ -23,13 +23,194 @@ func TestStreamIDsAreFixedWireValues(t *testing.T) {
 		{"StreamKeepalive", StreamKeepalive, 2},
 		{"StreamControl", StreamControl, 3},
 		{"StreamReconcile", StreamReconcile, 4},
+		{"DynamicRPCBase", DynamicRPCBase, 10},
 		{"ApplicationBand", ApplicationBand, 100},
 		{"StreamSwarm", StreamSwarm, 100},
 		{"StreamMeshDB", StreamMeshDB, 101},
+		{"StreamTunnelBase", StreamTunnelBase, 200},
+		{"StreamTunnelLast", StreamTunnelLast, 299},
+		{"StreamFileTransferBase", StreamFileTransferBase, 300},
+		{"StreamFileTransferLast", StreamFileTransferLast, 399},
+		{"StreamTelemetry", StreamTelemetry, 400},
+		{"StreamPolicyPush", StreamPolicyPush, 500},
+		{"StreamPolicyAck", StreamPolicyAck, 501},
+		{"StreamDynamicBase", StreamDynamicBase, 600},
+		{"StreamDynamicLast", StreamDynamicLast, 699},
+		{"StreamRemoteTerminal", StreamRemoteTerminal, 600},
+		{"StreamRemoteFilesData", StreamRemoteFilesData, 601},
+		{"StreamRemoteFilesControl", StreamRemoteFilesControl, 602},
+		{"StreamRemoteScreenVideo", StreamRemoteScreenVideo, 603},
+		{"StreamRemoteScreenInput", StreamRemoteScreenInput, 604},
+		{"StreamRemoteScreenControl", StreamRemoteScreenControl, 605},
+		{"StreamRemoteWeb", StreamRemoteWeb, 606},
+		{"RemoteAccessDynamicFloor", RemoteAccessDynamicFloor, 610},
+		{"StreamPlatformConversation", StreamPlatformConversation, 700},
+		{"StreamPlatformCoordination", StreamPlatformCoordination, 701},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)
 		}
+	}
+}
+
+// Every ID the registry declares is declared once: a second entry covering an
+// ID would let two consumers open the same number, and aether hands the second
+// OPEN the stream the first already holds.
+func TestRegistryAssignsEveryIDOnce(t *testing.T) {
+	owner := map[uint64]string{}
+	names := map[string]bool{}
+	for _, e := range Registry() {
+		if e.Name == "" {
+			t.Errorf("entry [%d, %d] has no name", e.First, e.Last)
+		}
+		if names[e.Name] {
+			t.Errorf("two entries are named %q", e.Name)
+		}
+		names[e.Name] = true
+		if e.Last < e.First {
+			t.Errorf("%s: last %d is below first %d", e.Name, e.Last, e.First)
+		}
+		if e.Latency == 0 {
+			t.Errorf("%s names no latency class", e.Name)
+		}
+		if e.OpenedBy == "" {
+			t.Errorf("%s names no opener", e.Name)
+		}
+		for id := e.First; id <= e.Last; id++ {
+			if other, dup := owner[id]; dup {
+				t.Errorf("stream ID %d is assigned to both %s and %s", id, other, e.Name)
+			}
+			owner[id] = e.Name
+		}
+	}
+	if len(owner) == 0 {
+		t.Fatal("the registry is empty")
+	}
+}
+
+// A remote-access channel is numbered inside the dynamic peer band, so the
+// device's dynamic accept path admits it; each channel number is its own, so
+// the two ends of a channel cannot bind different channels to one ID.
+func TestRemoteAccessChannelsSitInsideTheDynamicBand(t *testing.T) {
+	seen := map[uint64]string{}
+	names := map[string]bool{}
+	for _, ch := range RemoteAccessChannels() {
+		if ch.ID < StreamDynamicBase || ch.ID > StreamDynamicLast {
+			t.Errorf("channel %s = %d, outside the dynamic band [%d, %d]", ch.Name, ch.ID, StreamDynamicBase, StreamDynamicLast)
+		}
+		if ch.ID >= RemoteAccessDynamicFloor {
+			t.Errorf("channel %s = %d, at or above the floor %d a session numbers unnamed channels from", ch.Name, ch.ID, RemoteAccessDynamicFloor)
+		}
+		if other, dup := seen[ch.ID]; dup {
+			t.Errorf("channels %s and %s share ID %d", ch.Name, other, ch.ID)
+		}
+		seen[ch.ID] = ch.Name
+		if names[ch.Name] {
+			t.Errorf("two channels are named %q", ch.Name)
+		}
+		names[ch.Name] = true
+		if ch.Latency == 0 {
+			t.Errorf("channel %s names no latency class", ch.Name)
+		}
+	}
+	if len(seen) == 0 {
+		t.Fatal("no remote-access channel is declared")
+	}
+}
+
+// Every exported ID the package declares is covered by the registry: a
+// constant outside it would be a stream number no table accounts for.
+func TestEveryDeclaredConstantIsInTheRegistry(t *testing.T) {
+	declared := map[string]uint64{
+		"StreamGossip":               StreamGossip,
+		"StreamRPC":                  StreamRPC,
+		"StreamKeepalive":            StreamKeepalive,
+		"StreamControl":              StreamControl,
+		"StreamReconcile":            StreamReconcile,
+		"DynamicRPCBase":             DynamicRPCBase,
+		"StreamSwarm":                StreamSwarm,
+		"StreamMeshDB":               StreamMeshDB,
+		"StreamTunnelBase":           StreamTunnelBase,
+		"StreamTunnelLast":           StreamTunnelLast,
+		"StreamFileTransferBase":     StreamFileTransferBase,
+		"StreamFileTransferLast":     StreamFileTransferLast,
+		"StreamTelemetry":            StreamTelemetry,
+		"StreamPolicyPush":           StreamPolicyPush,
+		"StreamPolicyAck":            StreamPolicyAck,
+		"StreamDynamicBase":          StreamDynamicBase,
+		"StreamDynamicLast":          StreamDynamicLast,
+		"StreamRemoteTerminal":       StreamRemoteTerminal,
+		"StreamRemoteFilesData":      StreamRemoteFilesData,
+		"StreamRemoteFilesControl":   StreamRemoteFilesControl,
+		"StreamRemoteScreenVideo":    StreamRemoteScreenVideo,
+		"StreamRemoteScreenInput":    StreamRemoteScreenInput,
+		"StreamRemoteScreenControl":  StreamRemoteScreenControl,
+		"StreamRemoteWeb":            StreamRemoteWeb,
+		"StreamPlatformConversation": StreamPlatformConversation,
+		"StreamPlatformCoordination": StreamPlatformCoordination,
+	}
+	for name, id := range declared {
+		covered := false
+		for _, e := range Registry() {
+			if id >= e.First && id <= e.Last {
+				covered = true
+				break
+			}
+		}
+		if !covered {
+			t.Errorf("%s = %d is in no registry entry", name, id)
+		}
+	}
+}
+
+// DefaultLatencyClass answers from the registry, and a channel's class wins
+// over the band it sits in: the scheduler must put screen video ahead of the
+// bulk peer traffic sharing that band.
+func TestDefaultLatencyClassAnswersTheRegistry(t *testing.T) {
+	for _, e := range Registry() {
+		if e.First >= StreamDynamicBase && e.First <= StreamDynamicLast {
+			continue // the named channels own their IDs inside this band
+		}
+		if got := DefaultLatencyClass(e.First); got != e.Latency {
+			t.Errorf("DefaultLatencyClass(%d) = %v, want %v for %s", e.First, got, e.Latency, e.Name)
+		}
+	}
+	for _, ch := range RemoteAccessChannels() {
+		if got := DefaultLatencyClass(ch.ID); got != ch.Latency {
+			t.Errorf("DefaultLatencyClass(%d) = %v, want %v for channel %s", ch.ID, got, ch.Latency, ch.Name)
+		}
+	}
+}
+
+// An ID the registry assigns to nothing gets the lowest class, so an
+// unrecognised stream cannot be scheduled ahead of a declared one.
+func TestAnUnassignedIDGetsTheBulkClass(t *testing.T) {
+	for _, id := range []uint64{5, 102, 450, 1000} {
+		for _, e := range Registry() {
+			if id >= e.First && id <= e.Last {
+				t.Fatalf("%d is assigned to %s; pick an ID the registry leaves free", id, e.Name)
+			}
+		}
+		if got := DefaultLatencyClass(id); got != aether.ClassBULK {
+			t.Errorf("DefaultLatencyClass(%d) = %v, want ClassBULK", id, got)
+		}
+	}
+}
+
+// Swarm gossip and Raft heartbeats must not queue behind bulk transfers.
+func TestDefaultLatencyClassKeepsPeerStreamsInteractive(t *testing.T) {
+	for name, id := range map[string]uint64{"StreamSwarm": StreamSwarm, "StreamMeshDB": StreamMeshDB} {
+		if got := DefaultLatencyClass(id); got != aether.ClassINTERACTIVE {
+			t.Errorf("DefaultLatencyClass(%s) = %v, want ClassINTERACTIVE", name, got)
+		}
+	}
+}
+
+// The version travels with the assignments: a peer reading one version and a
+// peer reading another do not agree on what arrives on an ID.
+func TestRegistryVersionIsDeclared(t *testing.T) {
+	if RegistryVersion < 1 {
+		t.Errorf("RegistryVersion = %d, want at least 1", RegistryVersion)
 	}
 }
 
@@ -49,14 +230,5 @@ func TestApplicationStreamsAreDistinctAndInTheApplicationBand(t *testing.T) {
 			t.Errorf("%s and %s share stream ID %d", name, other, id)
 		}
 		seen[id] = name
-	}
-}
-
-// Swarm gossip and Raft heartbeats must not queue behind bulk transfers.
-func TestDefaultLatencyClassKeepsPeerStreamsInteractive(t *testing.T) {
-	for name, id := range map[string]uint64{"StreamSwarm": StreamSwarm, "StreamMeshDB": StreamMeshDB} {
-		if got := DefaultLatencyClass(id); got != aether.ClassINTERACTIVE {
-			t.Errorf("DefaultLatencyClass(%s) = %v, want ClassINTERACTIVE", name, got)
-		}
 	}
 }

@@ -14,15 +14,18 @@ import (
 )
 
 // Dynamic stream IDs are drawn from [dynamicStreamIDFloor,
-// dynamicStreamIDCeiling). IDs 0-9 are the well-known streams (gossip, RPC,
-// keepalive, control, reconcile, BidiRPC). IDs from 100 up are aether's
-// application band, where core/streams binds one stream per peer pair
-// (StreamSwarm, StreamMeshDB) and the peer claims it by ID: an RPC opened on
-// one of those IDs lands on that consumer's stream, because aether's
-// createStream hands a duplicate OPEN the stream already open under that ID.
+// dynamicStreamIDCeiling). Both bounds come from core/streams, the one table
+// of stream assignments, so this allocator carries no stream number of its
+// own and cannot drift from it. Below the floor are the setup streams
+// (gossip, RPC, keepalive, control, reconcile) and BidiRPC; at the ceiling
+// and above is aether's application band, where core/streams binds one
+// stream per peer pair (StreamSwarm, StreamMeshDB) and the peer claims it by
+// ID: an RPC opened on one of those IDs lands on that consumer's stream,
+// because aether's createStream hands a duplicate OPEN the stream already
+// open under that ID.
 const (
-	dynamicStreamIDFloor   uint64 = 10
-	dynamicStreamIDCeiling        = streams.ApplicationBand
+	dynamicStreamIDFloor   = streams.DynamicRPCBase
+	dynamicStreamIDCeiling = streams.ApplicationBand
 )
 
 // errDynamicStreamIDsExhausted is returned when every ID in the dynamic range
