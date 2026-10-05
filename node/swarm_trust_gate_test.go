@@ -10,6 +10,8 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/bbmumford/swarm"
+
+	"github.com/bbmumford/loom/directory"
 )
 
 // TestSwarmTrustGate covers the three inbound-trust modes wired from
@@ -39,13 +41,13 @@ func TestSwarmTrustGate(t *testing.T) {
 
 	// off: no gate wired.
 	for _, m := range []string{"", "off", "bogus"} {
-		if check, gate := newSwarmTrustGate(m); check != nil || gate != nil {
+		if check, gate := newSwarmTrustGate(m, directory.BaselinePolicyConfig()); check != nil || gate != nil {
 			t.Fatalf("mode %q must yield no gate", m)
 		}
 	}
 
 	// observe: accepts all three, counts the key mismatch AND the unruled topic.
-	obs, og := newSwarmTrustGate("observe")
+	obs, og := newSwarmTrustGate("observe", directory.BaselinePolicyConfig())
 	if obs == nil || og == nil {
 		t.Fatal("observe must yield a gate")
 	}
@@ -64,7 +66,7 @@ func TestSwarmTrustGate(t *testing.T) {
 
 	// enforce: accepts the seeded self-owned publish, rejects both the key
 	// mismatch and the unruled topic.
-	enf, eg := newSwarmTrustGate("enforce")
+	enf, eg := newSwarmTrustGate("enforce", directory.BaselinePolicyConfig())
 	if err := enf(good); err != nil {
 		t.Fatalf("enforce rejected a well-formed self-owned publish: %v", err)
 	}
