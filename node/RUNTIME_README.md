@@ -1,9 +1,9 @@
 # Mesh Runtime Layer
 
 **Status**: ✅ Active / Production-Ready
-**Package**: `library/mesh/runtime`
+**Package**: `github.com/bbmumford/loom/node`
 
-The **Runtime Layer** is the heart of a HSTLES mesh node. It orchestrates the lifecycle of the node, manages identity, handles bootstrapping, and executes RPC/Task workloads.
+The **Runtime Layer** is the heart of a loom mesh node. It orchestrates the lifecycle of the node, manages identity, handles bootstrapping, and executes RPC/Task workloads.
 
 ---
 
@@ -92,4 +92,4 @@ The runtime automatically handles the connection to the mesh:
 2.  **Tunnel (Slow Path)**: If snapshot fails, opens a secure HTTPS tunnel (`POST /mesh/vl1`) to gossip and discover peers.
 3.  **P2P (Steady State)**: Once peers are known, switches to direct UDP communication.
 
-See `library/mesh/docs/README.md` for the full architecture.
+See `core/docs/README.md` for the full architecture.

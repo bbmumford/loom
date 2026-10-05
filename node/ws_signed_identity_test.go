@@ -11,29 +11,24 @@ import (
 	"testing"
 )
 
-// TestWebSocketHandlerEmitsSignedIdentity is a REGRESSION LOCK for the
-// AE-P-26 signed-identity invariant on the WS upgrade path. This exact
-// defect has now regressed TWICE — first in the library's /mesh/ws handler
-// (fixed by aether v0.0.110 AcceptHeaders + library v0.0.440), then
-// re-shipped in loom v0.0.1 because mesh/node was extracted BEFORE that fix
-// (forward-ported by @P in loom v0.0.2, a5c4966). The failure mode is "the
-// fix does not travel with the code" across a migration/re-extraction, so a
-// prose warning is not enough — this test is the version of the warning
-// that survives a rotation, a re-extraction, and an agent handover
-// (#R-480: the rule goes in the code, at the site; #S-18).
+// TestWebSocketHandlerEmitsSignedIdentity guards the signed-identity
+// invariant on the WS upgrade path. Swapping the upgrader at the call site
+// for the bare one compiles and leaves the handler's other tests passing,
+// and a copy of this handler into another module carries whichever call it
+// was copied with, so the rule is held as an assertion over runtime.go's
+// source rather than only as a comment at the site.
 //
 // The invariant: WebSocketHandler MUST emit the aether transport's signed
 // identity triple (NodeID/PubKey/Signature) in the 101 response via
 // wsTr.AcceptHeaders through ws.HTTPUpgrader. A bare ws.UpgradeHTTP omits
 // them, the aether WS dialer then closes the accepted socket ("server did
 // not present a signed identity"), gossip starves, no 6PN UDP addresses
-// propagate, and the ws->noise-UDP upgrade never fires — the noise-UDP
-// regression.
+// propagate, and the ws->noise-UDP upgrade never fires.
 //
 // This is a source guard rather than a live upgrade because the emit is a
 // build-time property of the handler: the wire-level assertion belongs to
-// aether's own AcceptHeaders tests, while what regressed here is the call
-// site being reverted to the bare upgrader across an extraction.
+// aether's own AcceptHeaders tests, while what this guards is the call
+// site, which an edit can turn back into the bare upgrader.
 func TestWebSocketHandlerEmitsSignedIdentity(t *testing.T) {
 	src, err := os.ReadFile("runtime.go")
 	if err != nil {
@@ -41,12 +36,12 @@ func TestWebSocketHandlerEmitsSignedIdentity(t *testing.T) {
 	}
 	code := string(src)
 
-	// (1) The bare upgrader is BANNED anywhere in this file — that is the
-	// exact pattern that has regressed twice. If a future edit or
-	// re-extraction reintroduces `ws.UpgradeHTTP(`, this fails loudly.
+	// (1) The bare upgrader is BANNED anywhere in this file: it omits the
+	// signed identity headers. An edit that introduces `ws.UpgradeHTTP(`
+	// fails here.
 	if n := strings.Count(code, "ws.UpgradeHTTP("); n != 0 {
 		t.Fatalf("bare ws.UpgradeHTTP( found %d time(s) in runtime.go — it omits the "+
-			"AE-P-26 signed identity headers and re-breaks noise-UDP (regressed twice). "+
+			"signed identity headers, so the aether WS dialer closes the socket and noise-UDP never engages. "+
 			"Use ws.HTTPUpgrader{Header: rt.connMgr.wsTr.AcceptHeaders(r)}.Upgrade instead.", n)
 	}
 
@@ -58,7 +53,7 @@ func TestWebSocketHandlerEmitsSignedIdentity(t *testing.T) {
 	if !strings.Contains(body, "AcceptHeaders") {
 		t.Fatal("WebSocketHandler does not call AcceptHeaders — the signed identity triple " +
 			"(NodeID/PubKey/Signature) is not emitted in the 101 response; the aether WS dialer " +
-			"will reject the peer and noise-UDP will regress")
+			"will reject the peer and the ws->noise-UDP upgrade never fires")
 	}
 	if !strings.Contains(body, "ws.HTTPUpgrader") {
 		t.Fatal("WebSocketHandler does not use ws.HTTPUpgrader — AcceptHeaders must be passed as " +

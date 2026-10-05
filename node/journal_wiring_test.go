@@ -130,16 +130,20 @@ func TestJournalOpenFailsSoftlyOnAnUnusableDir(t *testing.T) {
 	}
 }
 
-// 🔴 Shutdown must release both port seams: the journal and the
-// LiveDirectory.
+// Shutdown releases both port seams, the journal and the LiveDirectory,
+// through closePortSeams. This test checks the journal seam: after the
+// release an append fails, and a second release is harmless.
 //
 // Close must be both CALLED and idempotent, and idempotence alone is what a
 // suite proves by accident: with nothing constructing a Runtime and shutting it
-// down, deleting the journal Close from Shutdown leaves everything green, and
-// the LiveDirectory close beside it goes unverified for the same reason.
+// down, deleting the journal Close from closePortSeams leaves everything green.
+// closePortSeams is a method of its own so the release is testable without
+// standing up a full node.
 //
-// closePortSeams exists so both are testable without standing up a full
-// node, and this asserts what shutdown must actually do.
+// TODO: assert the LiveDirectory release as well. LADDirectory.Close marks
+// the directory closed and stops its liveness-override timers, and neither
+// is observable from package node: the ledger cache exposes no reader for a
+// liveness override.
 func TestShutdownClosesTheJournalSeamAndIsIdempotent(t *testing.T) {
 	fj, err := journal.Open(filepath.Join(t.TempDir(), "journal"))
 	if err != nil {

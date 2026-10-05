@@ -39,7 +39,7 @@ type ShadowReport struct {
 // InParity reports whether the comparison found zero mismatches AND performed
 // every axis it set out to perform.
 //
-// A degraded axis fails the gate deliberately. The shadow phase compares the
+// A degraded axis fails the gate deliberately. The shadow directory compares the
 // Swarm directory against a DIFFERENT implementation, so "the other side
 // could not answer" is the expected shape of an unperformed check, not a rare
 // edge — and an unperformed check reporting parity would be a silent pass,
@@ -333,7 +333,7 @@ func reachSetEqual(a, b []ports.ReachAddress) bool {
 	// candidates while every other field matches.
 	//
 	// A set comparison cannot see order, so ranking is only observable if the
-	// rank itself is compared. Leaving it out let two directories that would
+	// rank itself is compared. Leaving it out lets two directories that would
 	// dial a peer over DIFFERENT transports report full parity.
 	key := func(r ports.ReachAddress) string {
 		return r.Protocol + "|" + r.Address + "|" + r.Scope + "|" +
