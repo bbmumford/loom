@@ -143,8 +143,8 @@ func TestSelfHealthUnrecognisedStatusFailsTowardAlerting(t *testing.T) {
 // because the guard has no expiry: it cannot distinguish "has not run YET"
 // from "never ran", and the monitor records no start time to bound the grace
 // window with. An evaluator that fails to start is reported healthy forever.
-// Reported to @R as a finding; if the guard gains a bound, this test is the
-// one that must change, and deliberately.
+// TODO: bound the guard; when it gains a bound, this test is the one that
+// must change, and deliberately.
 func TestSelfHealthReportsHealthyForAnEvaluatorThatHasNeverRun(t *testing.T) {
 	// last stays the zero time: LastEvaluation() has never been set.
 	monitor := NewSelfHealthMonitor(&lagEvaluator{}, NilConnectionReporter{}, time.Second,

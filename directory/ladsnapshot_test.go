@@ -17,7 +17,7 @@ import (
 	"github.com/bbmumford/loom/ports"
 )
 
-// 🛑 THE PHASE-0.5 GATE RUNS THESE, AND THEY WERE AT 0.0% (#M-554 ⑤).
+// 🛑 THE SHADOW DIRECTORY'S PARITY GATE RUNS THESE.
 //
 // Snapshot/Fingerprint are the deterministic-snapshot primitives
 // CompareFingerprints uses to decide whether the shadow directory may take
@@ -25,9 +25,8 @@ import (
 // which is the direction that matters: two directories holding different
 // content can hash identically and be certified in parity.
 //
-// ⚠ SCOPE, CORRECTED AFTER MEASURING RATHER THAN LEFT AS WRITTEN. I claimed
-// at #M-554 ⑤ that this would pin the #M-483 property (fingerprintRecords
-// being blind to Record.Key). It does not, for two measured reasons:
+// ⚠ SCOPE. These do not pin fingerprintRecords being blind to Record.Key,
+// for two reasons:
 //
 //  1. lad.Record has NO Key field — on this side the key is DERIVED in r2p
 //     from the LAD topic, so "two records differing only in Key" is not a
@@ -35,7 +34,7 @@ import (
 //  2. that property is ALREADY pinned, on the Swarm side, by
 //     TestFingerprintDistinguishesDirectoriesDifferingOnlyByKey.
 //
-// What is genuinely untested here is the LAD-side DERIVATION, covered below.
+// What they pin is the LAD-side DERIVATION, covered below.
 
 func ladSnapshotCache(t *testing.T) (*ladcache.DirectoryCache, *LADDirectory) {
 	t.Helper()

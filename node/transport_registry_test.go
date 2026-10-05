@@ -39,7 +39,7 @@ func tregPeer() *peerConn {
 	return &peerConn{nodeID: tregNodeID, reconnectDelay: baseCooldown}
 }
 
-// THE PROPERTY THE DELETED DOC LINE DENIED.
+// THE FRESHEST TRANSPORT WINS ITS SLOT.
 //
 // addTransport's body is an unconditional map assignment with no grade
 // comparison and no early return, so the freshest transport always wins its
@@ -55,8 +55,8 @@ func TestAddTransportInstallsTheFreshestTransportRegardlessOfGrade(t *testing.T)
 		t.Fatal("premise wrong: the first transport was not installed at all")
 	}
 
-	// A STRICTLY LOWER grade, same protocol key. Under the deleted doc's
-	// claim this must be refused; under v0.0.218 it must win.
+	// A STRICTLY LOWER grade, same protocol key. A grade guard would refuse
+	// it; addTransport's unconditional assignment installs it.
 	worse := tregTransport(ProtoWebSocket, GradeC, false)
 	if !best.grade.BetterThan(worse.grade) {
 		t.Fatal("premise wrong: the two fixtures do not straddle a grade boundary")
@@ -70,7 +70,7 @@ func TestAddTransportInstallsTheFreshestTransportRegardlessOfGrade(t *testing.T)
 	}
 	if len(p.transports) != 1 {
 		t.Fatalf("replacement grew the map to %d entries — the protocol key is "+
-			"no longer single-slot, which is the drift v0.0.218 set out to fix",
+			"not single-slot, so one protocol holds two transports",
 			len(p.transports))
 	}
 }

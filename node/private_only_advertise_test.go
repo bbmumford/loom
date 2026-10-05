@@ -13,28 +13,25 @@ import (
 
 // A private-only node must still advertise.
 //
-// advertiseSwarmListeners used to early-return whenever publicHost was empty,
-// and EVERY address advertisement in the package sits downstream of that point
-// — the public noise-UDP entry, the PRIVATE 6PN entry, the interface-derived
-// NIC candidates, and both 443 entries. So a node with no PublicDomain and no
-// STUN-discovered publicIP published an EMPTY address set and same-fabric peers
-// had no candidate at all.
+// advertiseSwarmListeners skips only the entries that need a public name when
+// publicHost is empty; the PRIVATE 6PN entry and the interface-derived NIC
+// candidates do not. A node with no PublicDomain and no STUN-discovered
+// publicIP that published an EMPTY address set would leave same-fabric peers
+// with no candidate at all.
 //
-// The governing requirement, rather than a preference:
+// The requirements this holds to:
 //
-//	DM-P09  transport is GRADED — "an ordered preference from a fast datagram
-//	        protocol down to a universally-reachable one" — which has nothing to
-//	        order if the node publishes zero candidates.
-//	DM-P07  SOVEREIGNTY: a standalone partition mesh runs "without the central
-//	        service", i.e. precisely the class of node with no public hostname.
-//	DM-P03  the design's actual vocabulary for "advertise nothing" is to forbid a
-//	        node an OVERLAY ADDRESS, and it applies that to exactly one class
-//	        (the control plane). A publicHost check is not that vocabulary.
-//	        MEASURED: the word "public" appears 0 times in design docs 14 and 18.
+//   - transport is GRADED, "an ordered preference from a fast datagram
+//     protocol down to a universally-reachable one", which has nothing to
+//     order if the node publishes zero candidates;
+//   - a standalone partition mesh runs "without the central service", which
+//     is precisely the class of node with no public hostname;
+//   - the one node class the mesh denies an OVERLAY ADDRESS is the control
+//     plane, and a publicHost check does not express that.
 func TestAPrivateOnlyNodeStillAdvertisesItsPrivateCandidates(t *testing.T) {
 	rt := &Runtime{}
 	rt.cfg.VL1.UDPPort = 4242
-	// No PublicDomain, no publicIP — the private-only node of DM-P07.
+	// No PublicDomain, no publicIP: a standalone partition mesh's node.
 	rt.cfg.PublicDomain = ""
 	rt.publicIP = ""
 
@@ -44,9 +41,9 @@ func TestAPrivateOnlyNodeStillAdvertisesItsPrivateCandidates(t *testing.T) {
 	got := si.Publisher.Addresses()
 	if len(got) == 0 {
 		t.Fatal("a node with no public hostname advertised NOTHING — every " +
-			"advertisement is still gated behind publicHost, so a standalone " +
-			"tenant mesh (DM-P07) publishes an empty address set and DM-P09's " +
-			"graded transport has nothing to order")
+			"advertisement is gated behind publicHost, so a standalone " +
+			"partition mesh publishes an empty address set and the graded " +
+			"transport has nothing to order")
 	}
 
 	// Everything advertised must be a genuine, dialable candidate — and none of

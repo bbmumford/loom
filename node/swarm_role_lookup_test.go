@@ -78,9 +78,9 @@ func TestLookupRoleViaSwarmReturnsNilWhenItCannotAnswer(t *testing.T) {
 // strength of having no information at all.
 //
 // This asserts CURRENT behaviour, so it will fail if someone changes the
-// coupling. That is deliberate: the change is a design decision (route to
-// @R/DESIGN), not something a test lane should quietly make, and a red test is
-// how the decision surfaces rather than being lost.
+// coupling. That is deliberate: the change is a design decision, not
+// something a test should quietly absorb, and a red test is how the decision
+// surfaces rather than being lost.
 func TestAMissingRoleTableIsReadAsZeroCoverageNotAsUnknown(t *testing.T) {
 	rt := &Runtime{
 		identity:       &NodeIdentity{NodeID: "self"},
@@ -102,8 +102,8 @@ func TestAMissingRoleTableIsReadAsZeroCoverageNotAsUnknown(t *testing.T) {
 		t.Error("a node with NO role table did not arm the corroboration window. If you " +
 			"are reading this failure after changing the coupling, the change is almost " +
 			"certainly an IMPROVEMENT — distinguishing \"unknown\" from \"zero holders\" " +
-			"is the safer reading. Update this test, and tell @R/DESIGN, because which " +
-			"of the two a node should assume is a design decision and not a test-lane one.")
+			"is the safer reading. Update this test, and record the decision in the design, " +
+			"because which of the two a node should assume is a design decision.")
 	}
 }
 

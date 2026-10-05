@@ -124,7 +124,7 @@ func TestGenerateIdentity_PerMachine_EmptyMachineIDFallback(t *testing.T) {
 // correct length, determinism, distinctness per machine, and — the security
 // property — that the machine ID is only a salt: the same machine ID under two
 // DIFFERENT root seeds yields two different derived seeds, so the derived key
-// still depends on the secret (this is NOT the rev-073 public-only derivation).
+// still depends on the secret (this is NOT a derivation from public inputs alone).
 func TestDerivePerMachineSeed_Properties(t *testing.T) {
 	rootA := randSeed(t)
 	rootB := randSeed(t)

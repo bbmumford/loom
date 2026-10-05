@@ -69,8 +69,8 @@ func TestARejectOnOneProtocolDoesNotSuppressAnother(t *testing.T) {
 // instances of one cause is a pattern, and it is the pattern that justifies
 // fixing mapProtocol's use as a key rather than patching either table.
 //
-// Routed as a question, not a change: the fix is a key-space decision spanning
-// both tables, which is @R/DESIGN's call, not this lane's.
+// TODO: the fix is a key-space decision spanning both tables, for the
+// design to make; this test pins the current merge until then.
 func TestTheDedupTableInheritsTheSameTLSWebSocketMergeAsTheCooldownLadder(t *testing.T) {
 	tlsTag := mapProtocol(ProtoTLS).String()
 	wsTag := mapProtocol(ProtoWebSocket).String()

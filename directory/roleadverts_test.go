@@ -15,8 +15,8 @@ import (
 	ladcache "github.com/bbmumford/ledger/cache"
 )
 
-// ports.RoleEnumerator (#M-626, directed by #R-1616) closes the all-roles
-// capability gap recorded at #M-619 ⑤.
+// ports.RoleEnumerator lists every role advert in a partition, including
+// those from nodes with no member record, which Members() cannot reach.
 //
 // 🔑 THE FIRST TEST IS THE JUSTIFICATION FOR THE CAPABILITY EXISTING AT ALL.
 // The tempting substitution is "Members() + filter on len(Roles)>0" — which
@@ -84,8 +84,8 @@ func TestRoleAdvertsSeesARoleOnlyNodeThatMembersDoesNot(t *testing.T) {
 }
 
 // Both implementations must agree on shape and order, or a consumer's count
-// changes with whichever directory is bound — the class #M-620 ④ found in
-// Member.Roles.
+// changes with whichever directory is bound, as it would for Member.Roles
+// (roleorder_test.go).
 func TestRoleAdvertsAgreesAcrossBothImplementations(t *testing.T) {
 	ctx := context.Background()
 	id, pub, _ := testIdentity(t)
@@ -137,13 +137,13 @@ func wantThreeSorted() []string { return []string{"anchor", "auth", "identity"} 
 // Results are NodeID-ordered so two directories are comparable and a caller
 // can diff them.
 //
-// 🛑 THIS IS TESTED ON THE SWARM SIDE ON PURPOSE, AND THE FIRST VERSION WAS
-// VACUOUS FOR TESTING IT ON THE LAD SIDE (#M-626 ⑤).
+// 🛑 THIS IS TESTED ON THE SWARM SIDE ON PURPOSE: ON THE LAD SIDE IT WOULD
+// BE VACUOUS.
 //
 // LADDirectory's ordering is INHERITED: ladcache.Roles already sorts by
-// NodeID (cache/directory.go:1625), so removing LADDirectory's own sort.Slice
-// changes nothing observable and a mutant SURVIVED the LAD version of this
-// test. SwarmDirectory builds its result by ranging a map, where iteration
+// NodeID, so removing LADDirectory's own sort.Slice changes nothing
+// observable and a mutant survives a LAD version of this test.
+// SwarmDirectory builds its result by ranging a map, where iteration
 // order is randomised per run — so the sort is load-bearing there and only
 // there.
 //

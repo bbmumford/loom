@@ -520,7 +520,7 @@ func TestLADReadPathCarriesNoAuthorSignature(t *testing.T) {
 }
 
 // The raw tier exists so consumers matching the PRODUCER's vocabulary do not
-// have to bypass the port (#R-1464 ④). Its whole value is that RawProtocol can
+// have to bypass the port. Its whole value is that RawProtocol can
 // DIFFER from Protocol — if they were always equal the tier would be dead
 // weight, and this asserts the difference on the case that motivated it.
 func TestRawReachTierPreservesTheProducersVocabulary(t *testing.T) {

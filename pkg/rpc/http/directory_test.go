@@ -22,8 +22,8 @@ import (
 	"github.com/bbmumford/loom/pkg/rpc"
 )
 
-// Finding rev-080 tests — directoryAuth must be per-Bridge (per-Registry),
-// not a package-global. These tests pin:
+// directoryAuth is per-Bridge (per-Registry), not a package-global. These
+// tests pin:
 //
 //  1. HandleDirectory(reg, nil) returns SUMMARY (fail-closed default).
 //  2. HandleDirectory(reg, allowFn) returns VERBOSE only when allowFn is true.
@@ -137,11 +137,9 @@ func TestHandleDirectory_AuthAllows_ReturnsVerbose(t *testing.T) {
 }
 
 // TestBridge_HandleDirectory_NilAuth_FailsClosed — a fresh Bridge with
-// no SetDirectoryAuth call MUST default to summary. This is the exact
-// fail-closed regression rev-080 protects against — the previous
-// package-global default was "nil → summary" too, but a sibling
-// registry's SetDirectoryAuthCheck(func { return true }) would flip
-// EVERY bridge in the process. The per-Bridge state prevents that.
+// no SetDirectoryAuth call MUST default to summary. Per-Bridge state is what
+// keeps that default: with one process-wide predicate, a sibling registry's
+// allow-all predicate would flip EVERY bridge in the process.
 func TestBridge_HandleDirectory_NilAuth_FailsClosed(t *testing.T) {
 	reg := mustRegisterDirTestHandler(t)
 	bridge := NewBridge(reg)
@@ -187,11 +185,10 @@ func TestBridge_SetDirectoryAuth_Nil_RevertsToSummary(t *testing.T) {
 	}
 }
 
-// TestBridge_DirectoryAuth_PerRegistryIsolation — THE core rev-080
-// regression test. Two Bridges around two Registries: setting an
-// allow-all predicate on Bridge A MUST NOT open Bridge B's directory.
-// The old package-global directoryAuth caused exactly that cross-
-// registry leak.
+// TestBridge_DirectoryAuth_PerRegistryIsolation — THE core isolation test.
+// Two Bridges around two Registries: setting an allow-all predicate on
+// Bridge A MUST NOT open Bridge B's directory. A process-wide directoryAuth
+// would leak exactly that way across registries.
 func TestBridge_DirectoryAuth_PerRegistryIsolation(t *testing.T) {
 	regA := mustRegisterDirTestHandler(t)
 	regB := mustRegisterDirTestHandler(t)
@@ -212,15 +209,14 @@ func TestBridge_DirectoryAuth_PerRegistryIsolation(t *testing.T) {
 	recB := httptest.NewRecorder()
 	bridgeB.HandleDirectory().ServeHTTP(recB, httptest.NewRequest("GET", "/rpc/_directory", nil))
 	if !isSummary(recB.Body.String()) {
-		t.Fatalf("bridge B MUST remain summary-only — cross-registry leak (rev-080), got: %s", recB.Body.String())
+		t.Fatalf("bridge B MUST remain summary-only — cross-registry leak, got: %s", recB.Body.String())
 	}
 }
 
 // TestBridge_HandleRPC_DirectoryWildcard_UsesBridgeAuth — the wildcard
 // route (POST /rpc/{handler}) special-cases "_directory" and MUST route
-// through the bridge's own predicate. Prior to rev-080 it routed
-// through HandleDirectory(reg), which read the package-global. Now it
-// consults b.HandleDirectory() → b.loadDirectoryAuth().
+// through the bridge's own predicate: it consults b.HandleDirectory() →
+// b.loadDirectoryAuth(), not a reader of any process-wide predicate.
 func TestBridge_HandleRPC_DirectoryWildcard_UsesBridgeAuth(t *testing.T) {
 	reg := mustRegisterDirTestHandler(t)
 	bridge := NewBridge(reg)

@@ -15,14 +15,14 @@ import (
 	"github.com/bbmumford/loom/ports"
 )
 
-// COVERAGE of rollbackLocked — measured at 0.0% and reached from FOUR call
-// sites (Append ×2, BatchAppend ×2), all of them error paths.
+// COVERAGE of rollbackLocked, reached from FOUR call sites (Append ×2,
+// BatchAppend ×2), all of them error paths.
 //
-// 🛑 WHY IT MATTERS NOW: this journal was wired into every node's startup at
-// #M-557. rollbackLocked is the mechanism behind the port's stated guarantee —
+// 🛑 WHY IT MATTERS: every node opens this journal at startup.
+// rollbackLocked is the mechanism behind the port's stated guarantee —
 // "BatchAppend appends all records atomically (all-or-nothing)" and
-// "watermarks are strictly monotonic". Until this test, that guarantee had
-// never been executed once.
+// "watermarks are strictly monotonic" — and only a failed write reaches it,
+// so no ordinary test executes the guarantee.
 //
 // 🔑 REACHING IT NEEDS A WRITE THAT FAILS WHILE Seek STILL WORKS. Closing the
 // file does not do it: Append's first act is j.f.Seek, which then fails and
@@ -343,8 +343,8 @@ func TestRollbackUndoesPartiallyStagedWork(t *testing.T) {
 // entry is indistinguishable, on disk, from an acknowledged one.***
 //
 // That is precisely why rollbackLocked's Truncate is load-bearing rather than
-// tidy-up, and why the "no truncate" mutant had to be killed with a SIZE
-// assertion (#M-561 ④).
+// tidy-up, and why the "no truncate" mutant is caught only by a SIZE
+// assertion.
 func TestUnfsyncedStagedBytesAreResurrectedOnReopenWithoutRollback(t *testing.T) {
 	ctx := context.Background()
 	dir := t.TempDir()

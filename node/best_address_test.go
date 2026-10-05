@@ -328,9 +328,9 @@ func TestTier3HostnameFallbackIsCrossOriginOnly(t *testing.T) {
 		peer := &peerConn{nodeID: testNodeIDA, crossOrigin: false}
 		if got := m.bestAddress(peer, ProtoNoiseUDP); got != "" {
 			t.Fatalf("same-org bestAddress = %q — the anycast hostname fallback "+
-				"fired for a SAME-ORG peer. That reintroduces the v0.0.388 "+
-				"symptom: handshake succeeds, later datagrams hash to a machine "+
-				"with no session state, session dies inside a ping window", got)
+				"fired for a SAME-ORG peer: the handshake succeeds, later datagrams "+
+				"hash to a machine with no session state, and the session dies "+
+				"inside a ping window", got)
 		}
 	})
 }

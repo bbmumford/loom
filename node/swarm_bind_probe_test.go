@@ -16,8 +16,8 @@ import (
 	"github.com/bbmumford/swarm"
 )
 
-// Characterisation probe for the swarm stream-100 bind, written while @P's
-// production capture is still outstanding.
+// Characterisation probe for the swarm stream-100 bind. No production
+// capture of the bind is in hand, so this pins the code's behaviour instead.
 //
 // It asserts what RegisterPeer DOES today and approves neither outcome:
 //

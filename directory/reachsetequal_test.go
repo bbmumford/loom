@@ -11,18 +11,13 @@ import (
 	"github.com/bbmumford/loom/ports"
 )
 
-// 🛑 THIS TEST EXISTS BECAUSE THE OBVIOUS WAY TO VERIFY THE COMPARATOR
-// PROVED NOTHING, AND THAT IS WORTH RECORDING AT THE SITE.
+// 🛑 THE COMPARATOR'S DISCRIMINATION IS ASSERTED HERE, DIRECTLY.
 //
-// I strengthened reachSetEqual's key to include Priority (#M-547), then
-// mutated LADDirectory's reachPriority and expected TestShadowParity to
-// go red. It stayed GREEN — because TestShadowParity builds BOTH sides
-// with newTestDirectory, so it compares a SwarmDirectory against another
-// SwarmDirectory and the LAD side is not in the comparison at all.
-//
-// That is the same single-implementation-oracle problem the second
-// implementation was built to remove, still present in that test. So the
-// comparator's own discrimination is asserted HERE, directly, where no
+// reachSetEqual's key includes Priority. TestShadowParity cannot show that:
+// it builds BOTH sides with newTestDirectory, so it compares a
+// SwarmDirectory against another SwarmDirectory, the LAD side is not in the
+// comparison, and a mutant of LADDirectory's reachPriority leaves it green.
+// Asserting the comparator on hand-built address sets means no
 // fixture-construction choice can quietly remove the axis.
 
 func reachAddr(proto, addr, scope string, prio int) ports.ReachAddress {
@@ -36,10 +31,10 @@ func TestReachSetEqualDiscriminatesOnPriority(t *testing.T) {
 		reachAddr("noise-udp", "[fdaa:0:1234:a7b::2]:41641", "private", 0),
 		reachAddr("ws", "203.0.113.7:443", "public", 1),
 	}
-	// Identical in every field the key USED to cover; only the rank of the
-	// ws entry differs. Before #M-547 this compared EQUAL, so two
+	// Identical in protocol, address and scope; only the rank of the ws
+	// entry differs. A key without Priority compares these EQUAL, so two
 	// directories that would dial the peer over different transports
-	// reported full parity.
+	// would report full parity.
 	ranked := []ports.ReachAddress{
 		reachAddr("noise-udp", "[fdaa:0:1234:a7b::2]:41641", "private", 0),
 		reachAddr("ws", "203.0.113.7:443", "public", 7),

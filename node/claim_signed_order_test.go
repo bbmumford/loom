@@ -22,17 +22,17 @@ import (
 //
 // the design: "equal-version tie-breaks use SIGNED BYTES."
 //
-// 🔴 THE DEFECT THESE TESTS PIN. Before this change rankClaims tie-broke on the
-// claimant's NODE ID after rung and HLC. A node chooses its own ID, so it could
-// bias which claim won a contested takeover by picking a low-sorting one. The
-// signature is verified by swarm before delivery (swarm@v0.0.8 sig.go:95,
-// ed25519.Verify over signableBytes) and cannot be steered without the key.
+// 🔴 WHAT THESE TESTS PIN. After rung and HLC, rankClaims breaks a tie on the
+// record's signature before the claimant's NODE ID. A node chooses its own ID,
+// so a node-ID tie-break would let it bias which claim wins a contested
+// takeover by picking a low-sorting one. The signature is verified by swarm
+// before delivery (swarm's sig.go, ed25519.Verify over signableBytes) and
+// cannot be steered without the key.
 //
-// ⚠ THESE TESTS EXIST BECAUSE THE EXISTING SUITE COULD NOT SEE THE CHANGE.
-// Every pre-existing rank test builds roleClaim values in-process, where sig is
-// empty; both sides are then unsigned and fall through to the node-ID branch,
-// so the whole suite stayed green whether or not the signed branch worked. A
-// green suite proved nothing about this path until these fixtures existed.
+// ⚠ THESE FIXTURES CARRY SIGNATURES BECAUSE IN-PROCESS CLAIMS DO NOT. A rank
+// test that builds roleClaim values in-process leaves sig empty; both sides
+// are then unsigned and fall through to the node-ID branch, so such a test
+// passes whether or not the signed branch works.
 
 // signedClaim builds an ingested-shaped claim: a rung/HLC plus a signature,
 // with the node ID deliberately free to be set ANTI-CORRELATED to the sig.
