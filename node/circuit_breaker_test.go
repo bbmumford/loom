@@ -150,10 +150,9 @@ func TestAFailedTrialCallReopensTheBreaker(t *testing.T) {
 // BETWEEN the failures. A test that ran the failures consecutively would pass
 // identically under both semantics and could not tell them apart.
 //
-// Routed as a question, not a change: whether this should count consecutive
-// failures, decay over a window, or stay cumulative is a design decision for
-// @R/DESIGN. This test pins today's answer so any change is deliberate — the
-// same treatment gave the mapProtocol key collapse.
+// Whether this should count consecutive failures, decay over a window, or
+// stay cumulative is a design decision, not this test's. It pins the current
+// answer so any change to it is deliberate.
 func TestFailuresAreCumulativeForAllTimeAndSuccessesDoNotDecayThem(t *testing.T) {
 	cb := breakerFixture(3, time.Minute)
 

@@ -19,10 +19,9 @@ import (
 	"github.com/bbmumford/loom/ports"
 )
 
-// ports.Member.Roles is contractually LEXICOGRAPHIC (#R-1607 ④). Before that
-// ruling the port promised nothing and the two implementations disagreed:
-// LADDirectory sorted at read, SwarmDirectory returned producer order
-// (#M-620 ④, verified at the writer in #M-621 ①).
+// ports.Member.Roles is contractually LEXICOGRAPHIC. The two implementations
+// reach it differently: LADDirectory sorts at read, and SwarmDirectory sorts
+// the producer's list at projection, so each must be held to the same order.
 //
 // 🔑 THIS IS THE INSTRUMENT A TWO-IMPLEMENTATION PORT EXISTS TO HAVE: feed
 // BOTH the same roles in a deliberately unsorted order and require the same
@@ -33,7 +32,7 @@ import (
 // unsortedRoles is deliberately NOT in lexicographic order, and "anchor" is
 // deliberately not first: a fixture already sorted, or one whose first
 // element is the interesting one, cannot distinguish "sorted" from "returned
-// as given" (#M-620 ③ — that exact fixture bug survived a mutant).
+// as given", and a mutant that drops the sort survives it.
 var unsortedRoles = []string{"identity", "auth", "anchor", "billing"}
 
 // fixturePartition is the partition peerRecord tags each record with. The port

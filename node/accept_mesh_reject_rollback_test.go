@@ -145,8 +145,8 @@ func TestRejectedAcceptRestoresAnExistingPeersProtocolAndCounters(t *testing.T) 
 	}
 	if peer.connCount != priorConnCount {
 		t.Fatalf("connCount = %d, want %d. Each rejection leaks one unit; under "+
-			"the v0.0.228-era WS flap this reached 40+ for stable peers and the "+
-			"scaler then chased phantom connections it could never drain",
+			"a WS flap that reaches 40+ for stable peers and the scaler then "+
+			"chases phantom connections it can never drain",
 			peer.connCount, priorConnCount)
 	}
 	if _, leaked := peer.transports[ProtoWebSocket]; leaked {

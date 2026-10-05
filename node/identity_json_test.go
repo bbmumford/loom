@@ -80,19 +80,19 @@ func TestNodeIdentityFieldAccessUnaffected(t *testing.T) {
 
 	// Round-trip sign/verify proves the keypair is still functional via
 	// direct field access, independent of any JSON layer.
-	msg := []byte("rev-073 regression: keypair still functional")
+	msg := []byte("keypair functional after field access")
 	sig := ed25519.Sign(id.PrivateKey, msg)
 	if !ed25519.Verify(id.PublicKey, msg, sig) {
 		t.Fatalf("ed25519 sign/verify round-trip failed via direct field access")
 	}
 }
 
-// TestNodeIdentityFailsClosedWithoutDataDir is the fail-closed gate for
-// rev-073 fix #2: GenerateIdentity must refuse to boot when DataDir is
-// empty. The previous hostname-derived scheme silently ran without any
-// persistence, which is exactly what allowed the deterministic-derivation
-// vulnerability to ship — random-and-lost-on-restart would rotate the
-// NodeID under the mesh, so the boot must fail loudly instead.
+// TestNodeIdentityFailsClosedWithoutDataDir: with no seed in the environment,
+// GenerateIdentity must refuse to boot when DataDir is empty. That identity is
+// random and persisted under DataDir; with nowhere to persist it, a random
+// identity lost on restart would rotate the NodeID under the mesh, and
+// deriving one from public host facts would make the private key
+// reconstructable, so the boot fails loudly instead.
 func TestNodeIdentityFailsClosedWithoutDataDir(t *testing.T) {
 	_, err := GenerateIdentity(context.Background(), "")
 	if err == nil {
@@ -104,12 +104,11 @@ func TestNodeIdentityFailsClosedWithoutDataDir(t *testing.T) {
 	}
 }
 
-// TestNodeIdentityRandomNotHostnameDerived is the direct kill-shot for the
-// rev-073 root cause: two identities generated from independent DataDirs
-// (i.e. independent first-runs on the same host) MUST produce different
-// keypairs. Under the removed sha256("mesh-node-identity:"+hostname)
-// scheme they were identical, which is what made the private key
-// reconstructable from public information.
+// TestNodeIdentityRandomNotHostnameDerived: two identities generated from
+// independent DataDirs (i.e. independent first-runs on the same host) MUST
+// produce different keypairs. A key derived from the hostname, such as
+// sha256("mesh-node-identity:"+hostname), would make them identical and the
+// private key reconstructable from public information.
 func TestNodeIdentityRandomNotHostnameDerived(t *testing.T) {
 	ctx := context.Background()
 	id1, err := GenerateIdentity(ctx, t.TempDir())

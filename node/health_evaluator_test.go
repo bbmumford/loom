@@ -250,8 +250,9 @@ func TestBothMeshAndHTTPDownIsUnreachable(t *testing.T) {
 // "operational" three statements earlier.
 //
 // PINNED AS CURRENT BEHAVIOUR, not endorsed — changing it moves an alert
-// value on a live surface, so it is reported to @R/@P rather than altered
-// here. If the fold is removed, this test must change deliberately.
+// value on a live surface, so this test does not alter it.
+// TODO: decide whether absent HTTP data should report as responsive; if the
+// fold is removed, this test must change deliberately.
 func TestAbsentHTTPDataIsReportedAsResponsive(t *testing.T) {
 	// Discovered via Layer 1 only, with no HTTP entry at all.
 	snap := snapWith(t)

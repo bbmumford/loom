@@ -258,14 +258,13 @@ func TestTrustPolicyChecks(t *testing.T) {
 //
 // ⚠ IT IS NOT EVIDENCE THAT TWO INDEPENDENT IMPLEMENTATIONS AGREE. A defect
 // shared by both sides is invisible when both sides are the same code, and a
-// mutation applied to LADDirectory cannot move this test at all — measured at
-// #M-547 ⑤, where I mutated the LAD ranking, saw this stay green, and wrongly
-// concluded the second implementation was compared nowhere.
+// mutation applied to LADDirectory cannot move this test at all: a mutant of
+// the LAD ranking leaves it green.
 //
 // ▶️ The genuine cross-implementation oracle is
 // TestLADAndSwarmAgreeOnTheTypedProjectionsOfTheSameNode in ladlive_test.go.
 // That is the one that catches a real divergence between the two; run the
-// WHOLE PACKAGE when mutating, never -run this test alone (#M-548 ④).
+// WHOLE PACKAGE when mutating, never -run this test alone.
 func TestShadowParity(t *testing.T) {
 	ctx := context.Background()
 	idA, pubA, _ := testIdentity(t)

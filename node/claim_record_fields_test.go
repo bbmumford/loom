@@ -195,7 +195,7 @@ func TestPublishClaimPutsBothQualifiersOnTheActualWireBytes(t *testing.T) {
 	}
 	if body.Rung != 2 {
 		t.Errorf("published Rung = %d, want the configured ChainRung 2 — the class qualifier "+
-			"ME-P16 requires is not reaching the wire", body.Rung)
+			"rankClaims orders on is not reaching the wire", body.Rung)
 	}
 	if body.MinHolders != 3 {
 		t.Errorf("published MinHolders = %d, want the configured MinReplicas 3 — the field "+

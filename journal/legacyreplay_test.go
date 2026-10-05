@@ -14,14 +14,14 @@ import (
 	"testing"
 )
 
-// A journal written by the PREVIOUS loom must replay correctly under this one.
+// A journal whose entries carry no Record.Key member must replay correctly.
 //
-// This is the gate-1 risk and it is not hypothetical: the seven-gate unfreeze
-// order (#R-1396 ③) publishes loom FIRST, so the very first thing the new
-// binary does in production is open a journal the OLD binary wrote. Adding
-// Record.Key changed the on-disk JSON shape; if a pre-Key entry failed to
-// decode, Open() would treat it as a torn payload and TRUNCATE the journal at
-// that offset — silently discarding durable history at the moment of upgrade.
+// A node's journal outlives its binary, so the first thing a binary that
+// writes Record.Key does in production is open entries written without it.
+// Record.Key is part of the on-disk JSON shape; if an entry without it failed
+// to decode, Open() would treat it as a torn payload and TRUNCATE the journal
+// at that offset — silently discarding durable history at the moment of
+// upgrade.
 //
 // The payloads below are written byte-for-byte as the current published loom
 // writes them: length-prefixed, CRC32'd JSON with NO "Key" member at all.

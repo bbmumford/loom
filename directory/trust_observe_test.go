@@ -87,7 +87,7 @@ func trustDir(t *testing.T, policy ports.TrustPolicy, observe bool) *SwarmDirect
 	return d
 }
 
-// TestZeroConfigPolicyRejectsSelfOwnedPublish is the #R-1528 hazard made concrete:
+// TestZeroConfigPolicyRejectsSelfOwnedPublish makes the zero-config hazard concrete:
 // an unseeded Policy denies a node publishing its OWN PeerRecord, so enforcing it
 // across the fleet rejects every node.
 func TestZeroConfigPolicyRejectsSelfOwnedPublish(t *testing.T) {

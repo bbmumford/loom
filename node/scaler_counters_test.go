@@ -10,13 +10,13 @@ import (
 	"time"
 )
 
-// COVERAGE of the scaler's traffic counters and hotspot adjustment,
-// all 0.0%: rpcCounter.record, rpcCounter.rpcsLastMinute, RecordRPC,
+// COVERAGE of the scaler's traffic counters and hotspot adjustment:
+// rpcCounter.record, rpcCounter.rpcsLastMinute, RecordRPC,
 // pruneCountersFor, adjustForGlobalBalance.
 //
-// These are the INPUTS the scaler uses to decide drains — the loop the
-// v0.0.228-era WS flap fed. Every failure here is silent: the
-// scaler simply decides wrongly, and a wrong drain looks like normal churn.
+// These are the INPUTS the scaler uses to decide drains — the loop a WS
+// flap feeds. Every failure here is silent: the scaler simply decides
+// wrongly, and a wrong drain looks like normal churn.
 
 // 🔴 THE LOAD-BEARING PROPERTY, AND IT IS EASY TO GET WRONG BY SIMPLIFYING.
 //

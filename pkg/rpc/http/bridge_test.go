@@ -83,8 +83,8 @@ func idAxes(partition, within, user string) rpc.AuthenticatedScopeIdentity {
 	return id
 }
 
-// Finding rev-081 tests — the HTTP bridge's executeLocal and executeProxy
-// MUST mirror Registry.Dispatch's pre-handler gates:
+// The HTTP bridge's executeLocal and executeProxy MUST mirror
+// Registry.Dispatch's pre-handler gates:
 //   - rpc.EnforceScope on every handler regardless of mount style
 //   - rpc.VerifyWebhookSignature on local execution paths
 //

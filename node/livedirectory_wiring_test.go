@@ -27,8 +27,8 @@ import (
 // ⚠ The delta is zero CONDITIONAL on callers passing the partition the records
 // were stored under. Nine of loom's ten sites pass "" and loom's own appends
 // leave Partition at the zero value, so "" is the right bucket today — but
-// whether any ENDPOINT publishes a non-empty partition is unmeasured and owned by
-// @C/@P. This test pins the equivalence for the partition it is given
+// whether any ENDPOINT publishes a non-empty partition is not measured here.
+// This test pins the equivalence for the partition it is given
 // and deliberately also exercises a non-empty one, so the conditional is
 // visible rather than assumed.
 func TestSeamMatchesDirectCacheReads(t *testing.T) {
