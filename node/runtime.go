@@ -302,6 +302,11 @@ type rateLimitEntry struct {
 type Runtime struct {
 	cfg Config
 
+	// deltaTracker holds this runtime generation's gossip delta watermarks;
+	// startDeltaTracker sets it when the directory cache is built, and the
+	// gossip loops in mesh_connection.go read and advance it.
+	deltaTracker *gossip.DeltaTracker
+
 	// sessionOpts are the Aether SessionOptions applied to every new
 	// adapter session this runtime creates. Defaults to
 	// aether.DefaultSessionOptions() — overridable via SetSessionOptions
@@ -679,6 +684,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 		// records the receiver's signedTopicACL can verify.
 		rt.cache.SetDumpSigningKey(rt.identity.PrivateKey)
 		rt.cache.StartEviction(ladcache.DefaultEvictionInterval)
+		rt.startDeltaTracker()
 
 		// Register the mesh's topic configurations with the Ledger cache.
 		// All of them use OverwriteMerge and NodeIDKey. OverwriteMerge
@@ -2757,9 +2763,7 @@ func (rt *Runtime) bootstrapPeers(ctx context.Context, cfg Config) error {
 		// list there would churn against the container's ephemeral layer and
 		// produce "rename ... no such file or directory" errors without ever
 		// providing the cold-restart benefit the file is meant for.
-		persistentPeerStore := rt.cfg.DataDir != "" &&
-			rt.cfg.LAD.Storage != "" && rt.cfg.LAD.Storage != "memory"
-		if persistentPeerStore {
+		if rt.persistsToDataDir() {
 			peerStore := NewFilePeerStore(string(rt.identity.NodeID), DefaultPeerStoreConfig(rt.cfg.DataDir))
 			rt.peerStore = peerStore
 			rt.connMgr.peerStore = peerStore
