@@ -405,36 +405,50 @@ func (m *ConnectionManager) peerHasBetterGradeAddress(p *peerConn) bool {
 	return false
 }
 
+// saturationBackoffSkew is the clock difference admitted between the peer that
+// stamps backoff_until and this node reading it. A deadline further ahead than
+// the publisher's own TTL (saturationBackoffTTL) plus this skew is not one a
+// live publisher stamps, so backoffHintLive refuses it.
+const saturationBackoffSkew = 30 * time.Second
+
+// backoffHintLive reports whether a peer's advertised backoff deadline is a
+// usable pressure hint at now: positive, not yet elapsed, and no further ahead
+// than saturationBackoffTTL plus saturationBackoffSkew. parseSaturationTags
+// gives a missing or malformed deadline as 0, so neither is a hint, and a
+// saturated tag without a live deadline never delays a dial.
+func backoffHintLive(until int64, now time.Time) bool {
+	if until <= 0 || now.Unix() >= until {
+		return false
+	}
+	return until <= now.Add(saturationBackoffTTL+saturationBackoffSkew).Unix()
+}
+
 // peerWantsBackoff reports whether a peer's advertised saturation should make us
-// stop opening fresh paths to it. It returns false once the backoff TTL has
-// elapsed (treating a lingering tag as cleared), and — the load-bearing guard —
-// false for a same-origin peer with no strictly-better path, so the single viable
-// Tier-0 6PN route is never starved by the bit (bestAddress already withholds
-// the Tier-3 anycast fallback for same-origin peers, so suppressing the 6PN dial
-// would strand them). Caller must hold ConnectionManager.mu.
+// stop opening fresh paths to it: the peer is tagged saturated, its deadline is
+// a live hint (backoffHintLive), and the peer already has a live path. The
+// last condition is the path evidence that keeps the hint advisory: the
+// backoff only ever withholds an additional path (saturationCap's growth
+// limit, the upgrade walker's extra-path probe), so a peer with no live path,
+// for which the dial is the only path, is never backed off. The decision reads
+// no address origin and no grade. Caller must hold ConnectionManager.mu.
 func (m *ConnectionManager) peerWantsBackoff(p *peerConn, now time.Time) bool {
-	if p == nil || !p.peerSaturated {
+	if p == nil || !p.peerSaturated || !backoffHintLive(p.peerBackoffUntil, now) {
 		return false
 	}
-	if p.peerBackoffUntil != 0 && now.Unix() >= p.peerBackoffUntil {
-		return false
-	}
-	if !p.crossOrigin && !m.peerHasBetterGradeAddress(p) && p.bestActiveGrade() < GradeA {
-		return false
-	}
-	return true
+	return p.hasActiveTransport()
 }
 
 // countPeersAdvertisingBackoff returns how many peers are currently asking us to
-// back off (saturated with an unelapsed TTL). Surfaced as the
-// peers_advertising_backoff metric. Takes ConnectionManager.mu itself.
+// back off: saturated with a live deadline (backoffHintLive), the rule
+// peerWantsBackoff reads. Surfaced as the peers_advertising_backoff metric.
+// Takes ConnectionManager.mu itself.
 func (m *ConnectionManager) countPeersAdvertisingBackoff() int {
-	now := time.Now().Unix()
+	now := time.Now()
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	n := 0
 	for _, p := range m.peers {
-		if p != nil && p.peerSaturated && (p.peerBackoffUntil == 0 || now < p.peerBackoffUntil) {
+		if p != nil && p.peerSaturated && backoffHintLive(p.peerBackoffUntil, now) {
 			n++
 		}
 	}

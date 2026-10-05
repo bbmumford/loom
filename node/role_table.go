@@ -44,9 +44,11 @@ type PeerInfo struct {
 	// Saturated reports that the peer advertised connection-budget
 	// pressure (the "saturated=1" tag) and wants peers to stop opening
 	// fresh paths to it. BackoffUntil is the unix deadline carried on the
-	// "backoff_until" tag; consumers treat now >= BackoffUntil as cleared
-	// even if the boolean tag lingers, bounding staleness if the peer dies
-	// while saturated.
+	// "backoff_until" tag, 0 when the tag is missing or malformed.
+	// parseSaturationTags fills both here and on the dial candidates that
+	// peerWantsBackoff reads through backoffHintLive, which takes a zero,
+	// expired or too-far-future deadline as no hint even if the boolean tag
+	// lingers, bounding staleness if the peer dies while saturated.
 	Saturated    bool
 	BackoffUntil int64
 
@@ -424,7 +426,8 @@ func peerRecordToInfo(pr *swarmpb.PeerRecord, nodeIDStr string) PeerInfo {
 // Capabilities.Tags: "saturated=1" sets the bit, "backoff_until=<unix>" carries
 // the flat-TTL deadline. Shared by the role table (typed PeerInfo projection)
 // and the address table (per-DialCandidate stamp) so both read the bit
-// identically. A malformed deadline parses to 0 (no backoff), never a panic.
+// identically. A missing or malformed deadline parses to 0, never a panic,
+// and backoffHintLive treats 0 as no hint.
 func parseSaturationTags(tags []string) (saturated bool, backoffUntil int64) {
 	for _, t := range tags {
 		k, v, ok := splitTag(t)
