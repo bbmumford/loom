@@ -58,29 +58,66 @@ func TestSaturationCap(t *testing.T) {
 	}
 }
 
-// TestPeerWantsBackoff covers the load-bearing safety property: a same-origin peer
-// with no strictly-better path is NEVER backed off, so its only viable Tier-0
-// 6PN route can't be starved by the saturation bit. A bare peerConn has no
-// addresses/transports, so peerHasBetterGradeAddress is false and
-// bestActiveGrade is below A — exactly the "only viable path" shape.
+// livePeer is a connected peer with one active grade C transport and no
+// better-grade address, saturated with the given deadline. crossOrigin varies
+// its address origin so a case can show the backoff decision does not read it.
+func livePeer(crossOrigin bool, until int64) *peerConn {
+	return &peerConn{
+		state:            PeerConnected,
+		crossOrigin:      crossOrigin,
+		peerSaturated:    true,
+		peerBackoffUntil: until,
+		transports:       map[Protocol]*transportConn{ProtoWebSocket: {protocol: ProtoWebSocket, grade: GradeC}},
+	}
+}
+
+// TestPeerWantsBackoff holds the advisory rules: a backoff_until that is
+// missing, zero, malformed (parsed to 0), negative, expired or further ahead
+// than the publisher's TTL plus the admitted skew is no hint; a live hint
+// delays extra paths to a peer that already has a live one, whatever the
+// peer's address origin or grade; and a peer with no live path is never
+// backed off, because the dial is its only path.
 func TestPeerWantsBackoff(t *testing.T) {
 	m := &ConnectionManager{}
-	now := time.Unix(1000, 0)
+	now := time.Unix(1_000_000, 0)
+	fresh := now.Add(saturationBackoffTTL / 2).Unix()
+	beyond := now.Add(saturationBackoffTTL + saturationBackoffSkew + time.Minute).Unix()
 
-	if m.peerWantsBackoff(nil, now) {
-		t.Fatal("nil peer must not want backoff")
+	for _, tc := range []struct {
+		name string
+		p    *peerConn
+		want bool
+	}{
+		{"nil peer", nil, false},
+		{"unsaturated peer", &peerConn{}, false},
+		{"a fresh deadline on a peer with a live path", livePeer(true, fresh), true},
+		{"a same-origin grade C peer is not exempt", livePeer(false, fresh), true},
+		{"a missing or malformed deadline is no hint", livePeer(true, 0), false},
+		{"a negative deadline is no hint", livePeer(true, -5), false},
+		{"an expired deadline is no hint", livePeer(true, now.Unix()-1), false},
+		{"a deadline past the TTL and skew is no hint", livePeer(true, beyond), false},
+		{"a peer with no live path is never backed off",
+			&peerConn{peerSaturated: true, crossOrigin: true, peerBackoffUntil: fresh}, false},
+	} {
+		if got := m.peerWantsBackoff(tc.p, now); got != tc.want {
+			t.Errorf("%s: peerWantsBackoff = %v, want %v", tc.name, got, tc.want)
+		}
 	}
-	if m.peerWantsBackoff(&peerConn{}, now) {
-		t.Fatal("unsaturated peer must not want backoff")
-	}
-	if !m.peerWantsBackoff(&peerConn{peerSaturated: true, crossOrigin: true, peerBackoffUntil: 2000}, now) {
-		t.Fatal("cross-org saturated peer with a fresh TTL should want backoff")
-	}
-	if m.peerWantsBackoff(&peerConn{peerSaturated: true, crossOrigin: true, peerBackoffUntil: 500}, now) {
-		t.Fatal("an elapsed backoff TTL must be treated as cleared")
-	}
-	if m.peerWantsBackoff(&peerConn{peerSaturated: true, crossOrigin: false, peerBackoffUntil: 2000}, now) {
-		t.Fatal("same-org peer with no better path must NOT be backed off (6PN starvation guard)")
+}
+
+// countPeersAdvertisingBackoff counts by the same rule peerWantsBackoff reads
+// the deadline by: a saturated tag with no live deadline is not a peer asking
+// for backoff.
+func TestTheBackoffMetricCountsOnlyLiveHints(t *testing.T) {
+	now := time.Now()
+	m := &ConnectionManager{peers: map[string]*peerConn{
+		"live":    livePeer(true, now.Add(saturationBackoffTTL/2).Unix()),
+		"zero":    livePeer(true, 0),
+		"expired": livePeer(true, now.Add(-time.Minute).Unix()),
+		"future":  livePeer(true, now.Add(time.Hour).Unix()),
+	}}
+	if got := m.countPeersAdvertisingBackoff(); got != 1 {
+		t.Fatalf("countPeersAdvertisingBackoff = %d, want 1 (only the live deadline)", got)
 	}
 }
 

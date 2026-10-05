@@ -301,9 +301,10 @@ func (m *ConnectionManager) snapshotUpgradeCandidates(now time.Time) []upgradeCa
 				continue
 			}
 			// Honour a peer's saturation back-off: stop opening fresh upgrade
-			// paths to it. peerWantsBackoff's same-origin guard means same-origin
-			// probes (the noise-UDP 6PN path the walker exists to find) are
-			// never suppressed — only cross-origin extra-path probes back off.
+			// paths to it while its deadline is live. An upgrade probe is an
+			// extra path to a peer that already has one, which is the only
+			// dial peerWantsBackoff withholds; the probe resumes when the
+			// deadline elapses.
 			if wantsBackoff {
 				continue
 			}
