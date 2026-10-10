@@ -40,13 +40,13 @@ type Policy struct {
 	// (death tombstones, liveness).
 	observers map[ports.NodeID]bool
 
-	// publishPrefixes[prefix] = set of NodeIDs allowed to publish topics
-	// with that prefix; the empty-string prefix is the default rule.
-	// A topic matches its LONGEST configured prefix.
+	// publishPrefixes[rule] = set of NodeIDs allowed to publish the topics
+	// that restricted rule covers (ruleCovers); the empty rule is the
+	// default. The LONGEST restricted rule covering a topic decides it.
 	publishPrefixes map[string]map[ports.NodeID]bool
 
-	// openPublish marks prefixes any bound identity may publish
-	// (e.g. "fleet.peer" — every node publishes its own PeerRecord).
+	// openPublish marks the rules whose topics any bound identity may
+	// publish (e.g. "fleet.peer" — every node publishes its own PeerRecord).
 	openPublish map[string]bool
 
 	// revoked keys, by canonical aether NodeID.
@@ -60,10 +60,15 @@ type PolicyConfig struct {
 	Partitions       []string
 	Observers        []ports.NodeID
 	RoleEntitlements map[string][]ports.NodeID
-	// OpenPublishPrefixes lists topic prefixes ANY key-bound node may
-	// publish (self-owned records like fleet.peer).
+	// OpenPublishPrefixes lists the rules whose topics ANY key-bound node
+	// may publish (self-owned records like fleet.peer). A rule covers topics
+	// as PublishPrefixes describes.
 	OpenPublishPrefixes []string
-	// PublishPrefixes lists restricted prefixes and their allowed writers.
+	// PublishPrefixes lists restricted rules and their allowed writers. A
+	// rule ending in "." covers every topic beneath that namespace, the
+	// empty rule covers every topic, and any other rule covers only the
+	// topic it names: "role.claim.auth" reaches neither "role.claim.authz"
+	// nor "role.claim.auth.admin".
 	PublishPrefixes map[string][]ports.NodeID
 }
 
@@ -154,15 +159,15 @@ func (p *Policy) AuthorizePublish(_ context.Context, pr ports.Principal, topic p
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
-	prefix, restricted := p.longestPrefixLocked(string(topic))
+	rule, restricted := p.longestPrefixLocked(string(topic))
 	if restricted {
-		if !p.publishPrefixes[prefix][pr.NodeID] {
+		if !p.publishPrefixes[rule][pr.NodeID] {
 			return fmt.Errorf("trust: node %s not authorized to publish %s", short(pr.NodeID), topic)
 		}
 		return nil
 	}
 	for open := range p.openPublish {
-		if strings.HasPrefix(string(topic), open) {
+		if ruleCovers(open, string(topic)) {
 			return nil
 		}
 	}
@@ -258,15 +263,32 @@ func (p *Policy) checkPartition(pr ports.Principal) error {
 	return nil
 }
 
-// longestPrefixLocked returns the longest restricted prefix matching topic.
+// longestPrefixLocked returns the longest restricted rule covering topic. A
+// rule naming the topic is as long as the topic, so it wins over every
+// namespace rule above it.
 func (p *Policy) longestPrefixLocked(topic string) (string, bool) {
 	best, found := "", false
-	for prefix := range p.publishPrefixes {
-		if strings.HasPrefix(topic, prefix) && len(prefix) >= len(best) {
-			best, found = prefix, true
+	for rule := range p.publishPrefixes {
+		if ruleCovers(rule, topic) && len(rule) >= len(best) {
+			best, found = rule, true
 		}
 	}
 	return best, found
+}
+
+// ruleCovers reports whether a publish rule covers topic, for AuthorizePublish
+// and longestPrefixLocked. A rule ending in "." covers every topic beneath
+// that namespace (LatencyTopicPrefix, which LatencyTopic extends with a node
+// id), the empty rule covers every topic, and any other rule covers the one
+// topic it names. A named rule is exact because WithRoleEntitlements registers
+// secrets.ClaimTopic(role) and secrets.Topic(role) for each role, and role
+// names share leading text ("auth", "authz", "auth.admin"): a rule matched by
+// leading text gives one role's writers the topics of every such role.
+func ruleCovers(rule, topic string) bool {
+	if rule == "" || strings.HasSuffix(rule, ".") {
+		return strings.HasPrefix(topic, rule)
+	}
+	return topic == rule
 }
 
 func short(id ports.NodeID) string {

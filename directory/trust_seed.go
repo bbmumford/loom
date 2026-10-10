@@ -6,6 +6,8 @@
 package directory
 
 import (
+	"strings"
+
 	"github.com/bbmumford/loom/ports"
 	"github.com/bbmumford/loom/secrets"
 )
@@ -14,13 +16,16 @@ import (
 // withdrawals, which node/route_integration.go publishes and subscribes to.
 const FleetRouteTopic = ports.Topic("fleet.route")
 
-// SelfOwnedPublishPrefixes are the topic prefixes every key-bound node writes
-// about ITSELF: its PeerRecord (FleetPeerTopic — membership, role, reach, RPC
-// handler adverts), its own latency samples (LatencyTopicPrefix), its mesh
+// SelfOwnedPublishPrefixes are the publish rules for what every key-bound node
+// writes about ITSELF: its PeerRecord (FleetPeerTopic — membership, role, reach,
+// RPC handler adverts), its own latency samples (LatencyTopicPrefix), its mesh
 // database cluster metadata (MeshDBMemberTopic) and its route advertisements
-// (FleetRouteTopic). A Policy must allow these openly, because AuthorizePublish
-// fails closed on any topic matching no rule — so a Policy that omits them
-// rejects a node's own heartbeat, and every node heartbeats. The role topics
+// (FleetRouteTopic). LatencyTopicPrefix ends in "." and covers the per-node
+// topics LatencyTopic builds; each of the other three names one topic and
+// covers no topic that only starts with it (Policy.AuthorizePublish). A Policy
+// must allow these openly, because AuthorizePublish fails closed on any topic
+// matching no rule — so a Policy that omits them rejects a node's own
+// heartbeat, and every node heartbeats. The role topics
 // (secrets.ClaimTopicPrefix and secrets.TopicPrefix, "role.claim.<role>" and
 // "role.secrets.<role>") are deliberately absent: only a role's entitled nodes
 // may write them, so WithRoleEntitlements puts them in
@@ -56,9 +61,11 @@ func BaselinePolicyConfig() PolicyConfig {
 // holder republishes. A role topic of a role absent from entitlements matches
 // no rule, so the fail-closed AuthorizePublish refuses it. cfg is not changed.
 //
-// Rules match by prefix (Policy.AuthorizePublish), so the rule for role R
-// also covers a topic for a role whose name starts with R, unless that role
-// has a rule of its own, which then wins as the longer prefix.
+// Each rule is the role topic's full name, which Policy.AuthorizePublish
+// matches as that one topic, so the rule for role R covers no topic of a role
+// whose name starts with R. A role whose name is empty or ends in "." gets no
+// entitlement and no rule: its topic names end in ".", which AuthorizePublish
+// reads as a namespace rule covering the topics of every role named beneath it.
 func WithRoleEntitlements(cfg PolicyConfig, entitlements map[string][]ports.NodeID) PolicyConfig {
 	out := cfg.Clone()
 	if len(entitlements) == 0 {
@@ -71,7 +78,7 @@ func WithRoleEntitlements(cfg PolicyConfig, entitlements map[string][]ports.Node
 		out.PublishPrefixes = map[string][]ports.NodeID{}
 	}
 	for role, nodes := range entitlements {
-		if role == "" {
+		if role == "" || strings.HasSuffix(role, ".") {
 			continue
 		}
 		out.RoleEntitlements[role] = append(out.RoleEntitlements[role], nodes...)

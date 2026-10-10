@@ -100,6 +100,72 @@ func TestEnforceAdmitsEntitledRoleTopicsAndRefusesTheRest(t *testing.T) {
 	}
 }
 
+// A role's entitlement covers that role's two topics and no other role's. The
+// holder of one role is refused the claim and the sealed bundle of every role
+// whose name only starts with its own, and of two roles named that way each
+// admits its own entitled node alone.
+func TestARoleEntitlementCoversOnlyItsOwnRoleTopics(t *testing.T) {
+	holder := newTrustNode(t)
+	admin := newTrustNode(t)
+	const role, longer = "orbtr.auth", "orbtr.auth.admin"
+	policy := directory.WithRoleEntitlements(directory.BaselinePolicyConfig(),
+		map[string][]ports.NodeID{role: {holder.id}, longer: {admin.id}})
+	check := enforcingGate(t, &policy)
+
+	for _, tc := range []struct {
+		name   string
+		node   trustNode
+		role   string
+		accept bool
+	}{
+		{"the holder, on its role", holder, role, true},
+		{"the longer role's node, on the longer role", admin, longer, true},
+		{"the holder, on a role one letter longer", holder, "orbtr.authz", false},
+		{"the holder, on a role several letters longer", holder, "orbtr.authority", false},
+		{"the holder, on an unheld role beneath its own", holder, "orbtr.auth.other", false},
+		{"the holder, on the longer role", holder, longer, false},
+		{"the longer role's node, on the shorter role", admin, role, false},
+		{"the longer role's node, on a role beneath its own", admin, "orbtr.auth.admin.x", false},
+	} {
+		for _, topic := range []ports.Topic{secrets.ClaimTopic(tc.role), secrets.Topic(tc.role)} {
+			err := check(tc.node.record(string(topic)))
+			if tc.accept && err != nil {
+				t.Errorf("%s (%s) was refused: %v", tc.name, topic, err)
+			}
+			if !tc.accept && err == nil {
+				t.Errorf("%s (%s) was admitted", tc.name, topic)
+			}
+		}
+	}
+}
+
+// The baseline admits the topics a node writes about itself and no topic whose
+// name only starts with one of them: fleet.route, fleet.peer and meshdb.member
+// are one topic each, and fleet.latency.<node> is the one family.
+func TestEnforceRefusesATopicThatOnlyStartsWithASelfOwnedOne(t *testing.T) {
+	n := newTrustNode(t)
+	check := enforcingGate(t, nil)
+	for _, topic := range []string{
+		string(directory.FleetRouteTopic),
+		string(directory.FleetPeerTopic),
+		string(directory.MeshDBMemberTopic),
+		string(directory.LatencyTopic(n.id)),
+	} {
+		if err := check(n.record(topic)); err != nil {
+			t.Errorf("the baseline refused a node's own %q record: %v", topic, err)
+		}
+	}
+	for _, topic := range []string{
+		"fleet.routeadmin.x", "fleet.routes", "fleet.route.x",
+		"fleet.peerage", "fleet.peer.x",
+		"meshdb.memberx", "meshdb.member.x",
+	} {
+		if err := check(n.record(topic)); err == nil {
+			t.Errorf("the baseline admitted %q, which no rule names", topic)
+		}
+	}
+}
+
 // A supplied policy that omits the self-owned prefixes still admits a node's
 // own heartbeat: without them every node's PeerRecord is refused fleet-wide.
 func TestASuppliedPolicyKeepsTheSelfOwnedPrefixes(t *testing.T) {
