@@ -2,29 +2,33 @@ package rpc
 
 import (
 	"context"
-	"errors"
 	"net/http"
 	"reflect"
 
 	"google.golang.org/protobuf/proto"
 
+	sharedDispatch "github.com/bbmumford/loom/pkg/dispatch"
 	"github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // ErrGradeTooLow is returned when the best available connection grade is below
 // the minimum required for the operation class, and when the request names an
 // operation class the grade gate does not know. Callers can use errors.Is to
-// distinguish grade failures from transport failures; node's forwarder
-// returns it wrapped in a *node.GradeTooLowError carrying the current and
-// required grade.
-var ErrGradeTooLow = errors.New("connection grade too low for operation")
+// distinguish grade failures from transport failures. The dispatcher behind
+// Call, CallRaw and CallNode (dispatch.HWPCaller) returns it for the first
+// hop, and node's forwarder for every later one, each wrapped in a
+// *dispatch.GradeTooLowError (node.GradeTooLowError is the same type) carrying
+// the current and required grade. It is dispatch's sentinel under this
+// package's name, because pkg/dispatch cannot import pkg/rpc.
+var ErrGradeTooLow = sharedDispatch.ErrGradeTooLow
 
 // ErrRouteDeadline is returned when the caller's remaining deadline cannot
 // cover the next hop, before anything is sent. node's forwarder returns it
-// wrapped in a *node.RouteDeadlineError carrying the remaining budget and the
-// hop's need, because a forwarded call keeps the caller's deadline and never
-// gains time.
-var ErrRouteDeadline = errors.New("remaining deadline does not cover the next hop")
+// wrapped in a *dispatch.RouteDeadlineError (node.RouteDeadlineError is the
+// same type) carrying the remaining budget and the hop's need, because a
+// forwarded call keeps the caller's deadline and never gains time. Like
+// ErrGradeTooLow it is dispatch's sentinel under this package's name.
+var ErrRouteDeadline = sharedDispatch.ErrRouteDeadline
 
 // OperationClass is the class a Handler declares for its transport
 // requirements. node's grade gate uses grade.OperationClass

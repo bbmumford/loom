@@ -640,6 +640,21 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 		}
 	}
 
+	// 0c. Operation class — a request naming a class the grade gate does not
+	// declare is refused before it is executed or forwarded. The forwarder
+	// refuses such a request too, but only on the forward path: without this
+	// check the local path below would run it under no class at all, and the
+	// load-based forward would turn the forwarder's refusal into a local run.
+	if _, known := ParseOperationClass(req.Context["opClass"]); !known {
+		refusal := &GradeTooLowError{Handler: req.Handler, Class: req.Context["opClass"], UnknownClass: true}
+		return &pb.RPCResponse{
+			Id:        req.Id,
+			Success:   false,
+			Error:     refusal.Error(),
+			LatencyNs: int64(time.Since(startTime)),
+		}
+	}
+
 	// 1. Timeout enforcement — use propagated deadline from caller.
 	// req.TimeoutNs is nanoseconds (int64), set by AetherCaller's
 	// buildRPCRequest from the caller's context deadline.
@@ -719,7 +734,12 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 			s.metrics.RecordForward(req.Handler, time.Since(startTime))
 			return resp
 		}
-		// Forwarding failed — fall back to local execution
+		// Forwarding failed — fall back to local execution. This forward is
+		// load relief for a handler this node serves, so a forward that
+		// fails, or that the forwarder refuses because no path meets the
+		// class floor or the remaining budget, leaves the request to run
+		// here: a local run leaves on no route, so no route floor applies to
+		// it. The request's class is a declared one by step 0c.
 		req.Hops-- // restore for local execution
 	}
 
