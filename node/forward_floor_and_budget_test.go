@@ -156,34 +156,44 @@ func forwardRequest(target, opClass string) *pb.RPCRequest {
 // forwarder, typed, before anything is sent: adaptiveRPCTimeout gives a
 // session with no RTT estimate its 5 s floor, and the caller here has 1 s.
 // Sending anyway is what a budget extension did; sending inside the 1 s
-// would hand the next hop a call it cannot finish.
+// would hand the next hop a call it cannot finish. Both legs of Forward are
+// checked: the re-route probe, and the RouteList fast path, whose own budget
+// check is the only thing between a hop the origin chose and a send to it.
 func TestAForwardWithLessTimeThanTheHopNeedsFailsTypedBeforeSending(t *testing.T) {
-	hop := &hopSession{remote: "target", proto: aether.ProtoNoise}
-	f := forwarderWith(hop)
+	for _, leg := range []string{"re-route", "route list"} {
+		t.Run(leg, func(t *testing.T) {
+			hop := &hopSession{remote: "target", proto: aether.ProtoNoise}
+			f := forwarderWith(hop)
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-	if need := adaptiveRPCTimeout(hop); need <= time.Second {
-		t.Fatalf("fixture wrong: the hop needs %v, which a 1 s caller budget covers", need)
-	}
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if need := adaptiveRPCTimeout(hop); need <= time.Second {
+				t.Fatalf("fixture wrong: the hop needs %v, which a 1 s caller budget covers", need)
+			}
 
-	_, err := f.Forward(ctx, forwardRequest("target", ""))
-	if !errors.Is(err, rpc.ErrRouteDeadline) {
-		t.Fatalf("Forward returned %v; a caller budget below the hop's need must fail "+
-			"with rpc.ErrRouteDeadline at the forwarder", err)
-	}
-	var rde *RouteDeadlineError
-	if !errors.As(err, &rde) {
-		t.Fatalf("Forward returned %T; the refusal must be a *RouteDeadlineError that "+
-			"names the remaining budget and the hop's need", err)
-	}
-	if rde.Remaining >= rde.Need {
-		t.Errorf("RouteDeadlineError reports remaining %v and need %v; a refusal is "+
-			"only right when remaining is below need", rde.Remaining, rde.Need)
-	}
-	if n := hop.sends(); n != 0 {
-		t.Errorf("the next hop received %d request(s); the refusal must come before "+
-			"the send", n)
+			req := forwardRequest("target", "")
+			if leg == "route list" {
+				req.RouteList = []string{"target"}
+			}
+			_, err := f.Forward(ctx, req)
+			if !errors.Is(err, rpc.ErrRouteDeadline) {
+				t.Fatalf("Forward returned %v; a caller budget below the hop's need must fail "+
+					"with rpc.ErrRouteDeadline at the forwarder", err)
+			}
+			var rde *RouteDeadlineError
+			if !errors.As(err, &rde) {
+				t.Fatalf("Forward returned %T; the refusal must be a *RouteDeadlineError that "+
+					"names the remaining budget and the hop's need", err)
+			}
+			if rde.Remaining >= rde.Need {
+				t.Errorf("RouteDeadlineError reports remaining %v and need %v; a refusal is "+
+					"only right when remaining is below need", rde.Remaining, rde.Need)
+			}
+			if n := hop.sends(); n != 0 {
+				t.Errorf("the next hop received %d request(s); the refusal must come before "+
+					"the send", n)
+			}
+		})
 	}
 }
 
