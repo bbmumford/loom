@@ -232,9 +232,18 @@ const (
 var requestIDCounter uint64
 
 // newRequestID mints a logical request id: 128 random bits in hex, then this
-// process's counter in base 36 as a trace suffix. The receiving RPCServer
-// keys its dedup cache on the id, and the parallel probes of one call share
-// it, so it must not collide with an id another process minted.
+// process's counter in base 36 as a trace suffix. One call keeps one id across
+// its attempts: Call's parallel probes clone one request, and callOnce's
+// dynamic-stream attempt reuses the id of its bidi attempt. The receiving
+// RPCServer keys its dedup cache on the id a request arrives with, so it must
+// not collide with an id another process minted.
+//
+// A request sent over a bidi channel does not arrive with this id: node's
+// BidiRPC.Call puts the channel's own wire id in its place, and restores this
+// one only on the caller's copy.
+// TODO: carry the logical id beside the bidi channel's wire id, so the
+// receiver can join a bidi attempt with the dynamic-stream attempt that
+// follows it.
 func newRequestID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:]) // crypto/rand.Read does not fail on the platforms Go supports
@@ -830,6 +839,9 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 	// handler context from r.Context() has no deadline by default, so
 	// without this cap a gateway hangs every cached-session RPC until an
 	// edge proxy's request timeout.
+	// logicalID is the request id of this call, minted by the bidi attempt and
+	// reused by the dynamic-stream attempt that follows a bidi time-out.
+	var logicalID string
 	if c.finder != nil {
 		// Always cap bidi at defaultProbeTimeout. WithTimeout returns
 		// MIN(parent_deadline, now + timeout) — a stricter caller deadline
@@ -844,6 +856,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 		}
 		gradeTimeout := rpcTimeoutForProtocol(session.Protocol())
 		bidiReq := buildRPCRequestCtx(bidiCtx, role, method, payload, remaining, gradeTimeout)
+		logicalID = bidiReq.Id
 		if resp, ok, err := c.finder.CallViaBidi(bidiCtx, nodeID, bidiReq); ok {
 			if errors.Is(err, ErrGradeTooLow) {
 				// The finder refused the session it would have sent on: a
@@ -913,6 +926,9 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 	}
 	rpcTimeout := rpcTimeoutForProtocol(session.Protocol())
 	req := buildRPCRequestCtx(ctx, role, method, payload, remaining, rpcTimeout)
+	if logicalID != "" {
+		req.Id = logicalID
+	}
 	reqData, err := pb.MarshalRequest(req)
 	if err != nil {
 		// Nothing reached the path, so the attempt says nothing about it.
