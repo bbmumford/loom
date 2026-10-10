@@ -8,11 +8,14 @@ package node
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/ORBTR/aether"
+	lad "github.com/bbmumford/ledger"
 	"github.com/bbmumford/whisper"
 )
 
@@ -225,8 +228,7 @@ func waitForPersistedPeer(t *testing.T, dir, peer string) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	t.Fatalf("the runtime's watermarks never reached %s with peer %q — the tracker the "+
-		"gossip loops advance is not the one persisted", path, peer)
+	t.Fatalf("%s never listed a watermark for peer %q", path, peer)
 }
 
 // A runtime generation that stops saves its watermarks, and the next
@@ -311,5 +313,147 @@ func TestARuntimeWithoutDurableStorageWritesNoWatermarks(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	if _, err := os.Stat(filepath.Join(dir, ".mesh", "watermarks.json")); err == nil {
 		t.Fatal("a runtime on memory storage wrote a watermark file")
+	}
+}
+
+// deltaMeshRuntime starts a whole runtime with durable storage under dir and a
+// noise-UDP listener on loopback, and returns it with the listener's port. Its
+// bootstrap host answers nothing, so it holds no session until a test dials
+// one with dialDeltaPeer.
+func deltaMeshRuntime(t *testing.T, dir string) (*Runtime, int) {
+	t.Helper()
+	port := freeUDPPort(t)
+	rt, err := Initialize(Config{
+		ServiceName: "delta-exchange-test",
+		DataDir:     dir,
+		NetworkKeys: []string{"delta-exchange-test-network-key"},
+		VL1:         VL1TransportConfig{Enabled: true, UDPPort: port},
+		LAD:         LADDirectoryConfig{Storage: "local", LocalDir: filepath.Join(dir, "lad"), BootstrapHosts: "127.0.0.1:9"},
+	})
+	if err != nil {
+		t.Fatalf("Initialize over %s: %v", dir, err)
+	}
+	t.Cleanup(func() { _ = rt.Shutdown() })
+	return rt, port
+}
+
+// dialDeltaPeer opens a noise-UDP session from one runtime to another's
+// listener and runs the mesh session lifecycle on it, as the connection
+// manager does after a dial. AcceptMeshConnection then starts the gossip
+// initiator loop on the dialling runtime and the responder loop on the other.
+func dialDeltaPeer(t *testing.T, from, to *Runtime, toPort int) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	conn, err := from.dialNoiseUDP(ctx, aether.Target{NodeID: to.identity.NodeID, Address: fmt.Sprintf("127.0.0.1:%d", toPort)})
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	bs, ok := installableMeshConn(conn)
+	if !ok {
+		t.Fatalf("dial returned %T", conn)
+	}
+	go from.DialAndAcceptMesh(from.ctx, bs.Conn, string(to.identity.NodeID), "", ProtoNoiseUDP, "", "", "", dialBorrowsConnectingState)
+}
+
+// holdMember puts a member record created at the given instant into rt's
+// directory cache, signed with rt's key so the cache's signed-topic check
+// admits it. The gossip exchange reads the cache through Dump and DumpSince:
+// a full snapshot carries every member, and a delta carries only the members
+// created after the watermark it is cut from.
+func holdMember(t *testing.T, rt *Runtime, nodeID string, created time.Time) {
+	t.Helper()
+	body, err := json.Marshal(lad.MemberRecord{NodeID: nodeID, CreatedAt: created})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rec := lad.Record{Topic: lad.TopicMember, NodeID: nodeID, Body: body, Timestamp: created}
+	lad.SignRecord(&rec, rt.identity.PrivateKey)
+	if err := rt.cache.Apply(rec); err != nil {
+		t.Fatalf("apply member %s: %v", nodeID, err)
+	}
+}
+
+func holdsMember(rt *Runtime, nodeID string) bool {
+	return rt.cache.HasRecord(lad.TopicMember, ":"+nodeID)
+}
+
+// dropMeshSession closes the session rt holds for a peer, which is what rt's
+// keepalive does once that peer has been silent for its retry budget. A
+// noise-UDP peer that stops sends no close, and registerMeshSession keeps an
+// open session and refuses a second one of the same grade from the same
+// dialler, so without this the peer would refuse a restarted runtime's
+// session until the keepalive gave the first one up.
+func dropMeshSession(t *testing.T, rt *Runtime, peerID string) {
+	t.Helper()
+	rt.connMgr.dispatchMu.RLock()
+	session := rt.connMgr.meshSessions[peerID]
+	rt.connMgr.dispatchMu.RUnlock()
+	if session == nil {
+		t.Fatalf("the runtime holds no session for %s", truncID(peerID))
+	}
+	_ = session.Close()
+}
+
+// The gossip loops AcceptMeshConnection starts read and advance the runtime's
+// own tracker: the initiator loop on the dialling runtime and the responder
+// loop on the accepting one each leave a watermark for the other in
+// Runtime.deltaTracker. A generation restarted over the same data directory
+// then opens its first exchange with the unchanged peer as a delta cut from
+// the persisted watermark: a member it holds from before that watermark stays
+// behind, and one created after it travels. With no watermark the exchange is
+// a full snapshot, which carries a member however old it is.
+func TestTheGossipLoopsUseTheRuntimesTrackerAcrossARestart(t *testing.T) {
+	t.Setenv(EnvNodeIdentitySeed, "")
+	t.Setenv(EnvFlyMachineID, "")
+	dir := deltaDataDir(t)
+	peer, peerPort := deltaMeshRuntime(t, deltaDataDir(t))
+	first, _ := deltaMeshRuntime(t, dir)
+	self, peerID := string(first.identity.NodeID), string(peer.identity.NodeID)
+	old := time.Now().Add(-5 * time.Minute)
+
+	holdMember(t, first, "vl1_before_the_first_exchange", old)
+	dialDeltaPeer(t, first, peer, peerPort)
+	waitMeshDB(t, 10*time.Second, "the initiator loop to leave a watermark for the peer in the dialling runtime's tracker", func() bool {
+		return !first.deltaTracker.RecordWatermark(peerID).IsZero()
+	})
+	waitMeshDB(t, 10*time.Second, "the responder loop to leave a watermark for the dialler in the accepting runtime's tracker", func() bool {
+		return !peer.deltaTracker.RecordWatermark(self).IsZero()
+	})
+	if !holdsMember(peer, "vl1_before_the_first_exchange") {
+		t.Fatal("premise wrong: an exchange with no watermark did not carry an old member, " +
+			"so an old member missing after the restart would prove nothing")
+	}
+
+	if err := first.Shutdown(); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+	waitForPersistedPeer(t, dir, peerID)
+	dropMeshSession(t, peer, self)
+
+	second, _ := deltaMeshRuntime(t, dir)
+	if got := string(second.identity.NodeID); got != self {
+		t.Fatalf("premise wrong: the restarted runtime is %s, not %s, so the peer does not know it", truncID(got), truncID(self))
+	}
+	if second.deltaTracker.ShouldFullSync(peerID) {
+		t.Fatal("the restarted generation's tracker holds no watermark for the peer to cut a delta from")
+	}
+	holdMember(t, second, "vl1_before_the_watermark", old)
+	holdMember(t, second, "vl1_after_the_watermark", time.Now())
+	served := peer.deltaTracker.RecordWatermark(self)
+	dialDeltaPeer(t, second, peer, peerPort)
+	waitMeshDB(t, 10*time.Second, "the peer to serve the restarted generation's first exchange", func() bool {
+		return peer.deltaTracker.RecordWatermark(self).After(served)
+	})
+
+	if !holdsMember(peer, "vl1_after_the_watermark") {
+		t.Fatal("the first exchange after the restart did not carry a member created after the watermark")
+	}
+	if !holdsMember(second, "vl1_before_the_watermark") {
+		t.Fatal("premise wrong: the restarted runtime no longer holds the old member, so its absence on the peer proves nothing")
+	}
+	if holdsMember(peer, "vl1_before_the_watermark") {
+		t.Fatal("after a restart the first exchange with an unchanged peer was a full snapshot: " +
+			"it carried a member created before the persisted watermark")
 	}
 }
