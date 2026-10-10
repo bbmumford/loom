@@ -66,13 +66,13 @@ const (
 // is named beside it, so a consumer adding a stream inside a band takes the
 // next free ID in that band and never reaches into the next one.
 const (
-	// StreamTunnelBase is the first tunnel stream; a tunnel owner numbers
+	// StreamTunnelBase is the first tunnel stream; the side that opens a tunnel numbers
 	// each further tunnel upward from it, up to StreamTunnelLast.
 	StreamTunnelBase uint64 = 200
 	StreamTunnelLast uint64 = 299
 
-	// StreamFileTransferBase is the first file-transfer stream; a transfer
-	// owner numbers each further transfer upward from it.
+	// StreamFileTransferBase is the first file-transfer stream; the side that opens a
+	// transfer numbers each further transfer upward from it.
 	StreamFileTransferBase uint64 = 300
 	StreamFileTransferLast uint64 = 399
 
@@ -145,10 +145,10 @@ func Registry() []Entry {
 		{Name: "dynamic rpc", First: DynamicRPCBase, Last: ApplicationBand - 1, Latency: aether.ClassINTERACTIVE, OpenedBy: "the caller, one per call"},
 		{Name: "swarm", First: StreamSwarm, Last: StreamSwarm, Latency: aether.ClassINTERACTIVE, OpenedBy: "the lower NodeID"},
 		{Name: "mesh database", First: StreamMeshDB, Last: StreamMeshDB, Latency: aether.ClassINTERACTIVE, OpenedBy: "the lower NodeID"},
-		{Name: "tunnel", First: StreamTunnelBase, Last: StreamTunnelLast, Latency: aether.ClassINTERACTIVE, OpenedBy: "the tunnel owner"},
-		{Name: "file transfer", First: StreamFileTransferBase, Last: StreamFileTransferLast, Latency: aether.ClassBULK, OpenedBy: "the transfer owner"},
+		{Name: "tunnel", First: StreamTunnelBase, Last: StreamTunnelLast, Latency: aether.ClassINTERACTIVE, OpenedBy: "the side that opens the tunnel"},
+		{Name: "file transfer", First: StreamFileTransferBase, Last: StreamFileTransferLast, Latency: aether.ClassBULK, OpenedBy: "the side that opens the transfer"},
 		{Name: "telemetry", First: StreamTelemetry, Last: StreamTelemetry, Latency: aether.ClassBULK, OpenedBy: "the device"},
-		{Name: "policy push", First: StreamPolicyPush, Last: StreamPolicyPush, Latency: aether.ClassINTERACTIVE, OpenedBy: "the policy owner"},
+		{Name: "policy push", First: StreamPolicyPush, Last: StreamPolicyPush, Latency: aether.ClassINTERACTIVE, OpenedBy: "the side that pushes policy"},
 		{Name: "policy ack", First: StreamPolicyAck, Last: StreamPolicyAck, Latency: aether.ClassINTERACTIVE, OpenedBy: "the device"},
 		{Name: "dynamic peer", First: StreamDynamicBase, Last: StreamDynamicLast, Latency: aether.ClassBULK, OpenedBy: "the dialler"},
 		{Name: "platform conversation", First: StreamPlatformConversation, Last: StreamPlatformConversation, Latency: aether.ClassINTERACTIVE, OpenedBy: "the worker"},
