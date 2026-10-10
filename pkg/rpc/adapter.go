@@ -89,15 +89,23 @@ var _ handlers.RequirementDeclarer = (*registryShim)(nil)
 //
 // A handler with no Func is refused with ErrProxyDispatchLocal, the refusal
 // Registry.Dispatch gives, before the payload is read. ExportToHandlerRegistry
-// exports no such handler, so the check guards the window the shared pointer
+// exports no such handler, so the refusal covers the window the shared pointer
 // opens: the shim holds the registry's stored *Handler, which Get, All and
-// ByRole hand out, so a caller can clear Func on it after the export.
+// ByRole hand out, so a holder can clear Func on it after the export.
+//
+// Func and WebhookSignature are read once, before the payload, and the call
+// below uses those two values. Both run caller code in between — the request
+// type's own ProtoReflect under unmarshalPayload, and the handler's
+// SecretProvider under verifyWebhookSignature — so re-reading either field
+// would let a Func cleared on the stored handler reach the call as nil, and a
+// WebhookSignature cleared there drop the check between the test and its use.
 //
 // A handler that declares WebhookSignature is refused after decoding and
 // before Func, through verifyWebhookSignature as in Registry.Dispatch, on a
 // missing secret or a signature that does not verify.
 func (s *registryShim) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
-	if s.handler.Func == nil {
+	fn, sig := s.handler.Func, s.handler.WebhookSignature
+	if fn == nil {
 		return nil, fmt.Errorf("%w: %s", ErrProxyDispatchLocal, s.handler.FQN())
 	}
 	start := time.Now()
@@ -117,13 +125,13 @@ func (s *registryShim) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest)
 	// fields, which a proxying gateway forwards inside the marshalled request,
 	// so the check Registry.Dispatch runs applies here unchanged and refuses
 	// before Func on a missing secret or a bad signature.
-	if s.handler.WebhookSignature != nil {
-		if err := verifyWebhookSignature(s.handler.WebhookSignature, protoReq); err != nil {
+	if sig != nil {
+		if err := verifyWebhookSignature(sig, protoReq); err != nil {
 			return nil, fmt.Errorf("%s: %w", s.handler.FQN(), err)
 		}
 	}
 
-	protoResp, err := s.handler.Func(ctx, protoReq)
+	protoResp, err := fn(ctx, protoReq)
 	if err != nil {
 		return &handlers.RPCResponse{
 			Success: false,

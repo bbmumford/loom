@@ -215,6 +215,101 @@ func TestExportedWebhookHandlerAdmitsAValidSignature(t *testing.T) {
 	}
 }
 
+// clearFuncWhenAsked registers one webhook-class handler whose SecretProvider
+// clears Func on the registry's stored handler and then returns the signing
+// secret. SecretProvider is the caller code verifyWebhookSignature runs after
+// the Func refusal and before the Func call, and Get hands back the pointer the
+// shim and Dispatch both hold, so it reaches that window without a second
+// goroutine. Returns the registry, the stored handler, the FQN, a signed
+// request and a count of Func invocations.
+func clearFuncWhenAsked(t *testing.T) (*Registry, *Handler, string, *webhookEvent, *int) {
+	t.Helper()
+	calls := new(int)
+	reg := NewRegistry()
+	h := Handler{
+		Namespace: "test",
+		Domain:    "window",
+		Operation: "Receive",
+		Func: func(ctx context.Context, req proto.Message) (proto.Message, error) {
+			*calls++
+			return req, nil
+		},
+		Request:  (*webhookEvent)(nil),
+		Response: (*webhookEvent)(nil),
+		Scope:    ScopeNone,
+	}
+	if err := reg.Register(h); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	stored, ok := reg.Get(h.FQN())
+	if !ok {
+		t.Fatalf("Get %q after Register: not found", h.FQN())
+	}
+	stored.WebhookSignature = stripeConfig(func() string {
+		stored.Func = nil
+		return webhookTestSecret
+	})
+	ev := newWebhookEvent(webhookTestPayload, stripeSign(webhookTestPayload, webhookTestSecret, time.Now().Unix()))
+	return reg, stored, h.FQN(), ev, calls
+}
+
+// TestShimCallsTheFuncItAdmitted: registryShim.ExecuteRPC admits the request on
+// the Func it read before the payload and calls that Func, so clearing Func on
+// the stored handler while the call is inside verifyWebhookSignature neither
+// dereferences nil nor turns the admitted call into a refusal.
+func TestShimCallsTheFuncItAdmitted(t *testing.T) {
+	_, stored, _, ev, calls := clearFuncWhenAsked(t)
+	payload, err := proto.Marshal(ev)
+	if err != nil {
+		t.Fatalf("proto.Marshal: %v", err)
+	}
+	shim := newRegistryShim(stored)
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("the shim called a Func cleared after it admitted the request: %v", r)
+		}
+	}()
+	resp, err := shim.ExecuteRPC(context.Background(), &handlers.RPCRequest{ID: "req-1", Payload: payload})
+	if err != nil {
+		t.Fatalf("ExecuteRPC: %v", err)
+	}
+	if resp == nil || !resp.Success {
+		t.Fatalf("ExecuteRPC = %+v, want success", resp)
+	}
+	if *calls != 1 {
+		t.Fatalf("admitted handler Func ran %d times, want 1", *calls)
+	}
+}
+
+// TestDispatchCallsTheFuncItAdmitted: Registry.Dispatch admits the request on
+// the Func it read before the scope check and calls that Func, so clearing Func
+// on the stored handler while the call is inside verifyWebhookSignature neither
+// dereferences nil nor turns the admitted call into a refusal.
+func TestDispatchCallsTheFuncItAdmitted(t *testing.T) {
+	reg, _, fqn, ev, calls := clearFuncWhenAsked(t)
+	payload, err := proto.Marshal(ev)
+	if err != nil {
+		t.Fatalf("proto.Marshal: %v", err)
+	}
+
+	defer func() {
+		if r := recover(); r != nil {
+			t.Fatalf("Dispatch called a Func cleared after it admitted the request: %v", r)
+		}
+	}()
+	out, err := reg.Dispatch(context.Background(), fqn, payload)
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("Dispatch returned an empty response for an admitted call")
+	}
+	if *calls != 1 {
+		t.Fatalf("admitted handler Func ran %d times, want 1", *calls)
+	}
+}
+
 // TestExportedHandlerWithoutWebhookSignatureIsUnchecked: a handler that
 // declares no WebhookSignature runs on a request carrying no signature, so
 // the check applies only to handlers that declare it.
