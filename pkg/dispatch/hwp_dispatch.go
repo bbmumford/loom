@@ -557,12 +557,10 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 	// window of the underlying directory snapshot.
 	routes := c.findRoutesCached(ctx, role, method)
 	if len(routes) == 0 {
-		// Fallback: sequential callOnce (no routes means LAD has no data)
-		resp, cb, err := c.callOnce(ctx, role, method, payload)
+		// Fallback: sequential callOnce (no routes means LAD has no data).
+		// callOnce settles the circuit of its own attempt.
+		resp, err := c.callOnce(ctx, role, method, payload)
 		if err == nil {
-			if cb != nil {
-				cb.RecordSuccess()
-			}
 			c.metrics.RecordCall(role, time.Since(start), true)
 			if ttl > 0 {
 				c.StoreCachedResult(fqn, payload, resp, ttl)
@@ -597,11 +595,9 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 
 	// Launch parallel probes — one per route
 	type probeResult struct {
-		payload        []byte
-		nodeID         string
-		err            error
-		cb             *CircuitBreaker
-		breakerHandled bool // true if the probe already settled its circuit, or the circuit refused it
+		payload []byte
+		nodeID  string
+		err     error
 	}
 	resultCh := make(chan probeResult, len(routes))
 
@@ -627,12 +623,20 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 	for i, route := range routes {
 		go func(idx int, r aether.ProbeRoute) {
 			// The circuit for this capability over this first hop. Its own
-			// refusal is not an availability failure, so it is reported as
-			// already handled and never recorded against the circuit.
+			// refusal is not an availability failure and is never recorded
+			// against it.
 			cb := c.getBreaker(method, r.NodeID, r.Session)
 			if !cb.Allow() {
-				resultCh <- probeResult{nodeID: r.NodeID, err: ErrCircuitOpen, cb: cb, breakerHandled: true}
+				resultCh <- probeResult{nodeID: r.NodeID, err: ErrCircuitOpen}
 				return
+			}
+			// The probe settles its own circuit before it reports, on every
+			// exit below. The loop that reads resultCh returns as soon as one
+			// probe answers or the caller's context ends, so a circuit it
+			// settled would stay leased by every probe it never read.
+			unanswered := func(err error) {
+				settleUnanswered(ctx, probeCtx, cb)
+				resultCh <- probeResult{nodeID: r.NodeID, err: err}
 			}
 
 			// Clone request with route-specific fields
@@ -658,7 +662,7 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 					// is not tried for a route the gate just refused.
 					if errors.Is(err, ErrGradeTooLow) {
 						cb.Release()
-						resultCh <- probeResult{nodeID: r.NodeID, err: err, cb: cb, breakerHandled: true}
+						resultCh <- probeResult{nodeID: r.NodeID, err: err}
 						return
 					}
 					// Inner-deadline-only fallthrough: only the bidi cap
@@ -667,17 +671,17 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 					// caller's ctx is still healthy AND probeCtx has time
 					// left, try the dynamic-stream fallback.
 					if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
-						resultCh <- probeResult{nodeID: r.NodeID, err: err, cb: cb}
+						unanswered(err)
 						return
 					}
 					// fall through to dynamic stream below using probeCtx
 				} else {
 					cb.RecordSuccess() // transport worked regardless of app result
 					if !resp.Success {
-						resultCh <- probeResult{nodeID: r.NodeID, err: responseError(method, resp), cb: cb, breakerHandled: true}
+						resultCh <- probeResult{nodeID: r.NodeID, err: responseError(method, resp)}
 						return
 					}
-					resultCh <- probeResult{payload: resp.Payload, nodeID: r.NodeID, cb: cb, breakerHandled: true}
+					resultCh <- probeResult{payload: resp.Payload, nodeID: r.NodeID}
 					return
 				}
 			}
@@ -686,36 +690,36 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 			// bounded by defaultProbeTimeout) so any time left after the
 			// bidi attempt is available here.
 			if r.Session == nil || r.Session.IsClosed() {
-				resultCh <- probeResult{nodeID: r.NodeID, err: fmt.Errorf("session closed"), cb: cb}
+				unanswered(fmt.Errorf("session closed"))
 				return
 			}
 			reqData, _ := pb.MarshalRequest(req)
 			stream, err := c.openDynamicStream(probeCtx, r.Session, priorityForOpClass(req.Context["opClass"]))
 			if err != nil {
-				resultCh <- probeResult{nodeID: r.NodeID, err: err, cb: cb}
+				unanswered(err)
 				return
 			}
 			defer releaseDynamicStream(r.Session, stream)
 			if err := stream.Send(probeCtx, reqData); err != nil {
-				resultCh <- probeResult{nodeID: r.NodeID, err: err, cb: cb}
+				unanswered(err)
 				return
 			}
 			respData, err := stream.Receive(probeCtx)
 			if err != nil {
-				resultCh <- probeResult{nodeID: r.NodeID, err: err, cb: cb}
+				unanswered(err)
 				return
 			}
 			dynResp, err := pb.UnmarshalResponse(respData)
 			if err != nil {
-				resultCh <- probeResult{nodeID: r.NodeID, err: err, cb: cb}
+				unanswered(err)
 				return
 			}
 			cb.RecordSuccess() // transport worked regardless of app result
 			if !dynResp.Success {
-				resultCh <- probeResult{nodeID: r.NodeID, err: responseError(method, dynResp), cb: cb, breakerHandled: true}
+				resultCh <- probeResult{nodeID: r.NodeID, err: responseError(method, dynResp)}
 				return
 			}
-			resultCh <- probeResult{payload: dynResp.Payload, nodeID: r.NodeID, cb: cb, breakerHandled: true}
+			resultCh <- probeResult{payload: dynResp.Payload, nodeID: r.NodeID}
 		}(i, route)
 	}
 
@@ -735,16 +739,6 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 				return result.payload, nil
 			}
 			lastErr = result.err
-			if !result.breakerHandled && result.cb != nil {
-				// An error after the caller's context ended is the
-				// caller's cancellation, not the path's availability:
-				// it releases a half-open lease instead of counting.
-				if ctx.Err() != nil {
-					result.cb.Release()
-				} else {
-					result.cb.RecordFailure()
-				}
-			}
 		case <-ctx.Done():
 			c.metrics.RecordCall(role, time.Since(start), false)
 			return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, ctx.Err())
@@ -792,20 +786,22 @@ func (c *HWPCaller) CallCacheable(ctx context.Context, role, method string, payl
 }
 
 // callOnce performs a single RPC attempt: find session → get stream → send → receive.
-// Returns the response payload, the circuit that governed the attempt (nil
-// when no session was found or the grade gate refused the one found), and any
-// error. The circuit is the one for (method, the session's node, the
-// session's generation).
-func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload []byte) ([]byte, *CircuitBreaker, error) {
+// The attempt is governed by the circuit for (method, the session's node, the
+// session's generation), and callOnce settles that circuit on every return
+// after the circuit admitted it: a response of any kind closes it, an attempt
+// the path failed counts against it, and one that ended with no verdict
+// releases its half-open lease. Call's no-route branch is the only caller and
+// settles nothing itself.
+func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload []byte) ([]byte, error) {
 	session, cs, err := c.getOrFindSession(ctx, role, method)
 	if err != nil {
-		return nil, nil, fmt.Errorf("find session: %w", err)
+		return nil, fmt.Errorf("find session: %w", err)
 	}
 
 	// The grade gate on the one session this attempt would send on, before the
 	// circuit is asked, so a refusal never takes a half-open lease.
 	if err := CheckRouteGrade(method, opClassFromContext(ctx), session); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 
 	nodeID := string(session.RemoteNodeID())
@@ -813,13 +809,13 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 	cb := c.getBreaker(method, nodeID, session)
 	if !cb.Allow() {
 		c.metrics.RecordCircuitTrip(role)
-		return nil, nil, fmt.Errorf("dispatch %s/%s: %w (node %s)", role, method, ErrCircuitOpen, shortNodeID(nodeID))
+		return nil, fmt.Errorf("dispatch %s/%s: %w (node %s)", role, method, ErrCircuitOpen, shortNodeID(nodeID))
 	}
 
 	// Pre-flight: skip obviously dead sessions
 	if session.IsClosed() {
 		cb.Release()
-		return nil, cb, fmt.Errorf("session closed before send")
+		return nil, fmt.Errorf("session closed before send")
 	}
 
 	// Try BidiRPC first (Stream 1) — avoids dynamic stream overhead.
@@ -853,7 +849,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 				// The finder refused the session it would have sent on: a
 				// refusal, not the path's availability.
 				cb.Release()
-				return nil, cb, err
+				return nil, err
 			}
 			if err != nil {
 				// Inner-deadline-only: the 10s defaultProbeTimeout cap
@@ -869,13 +865,13 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 					// The caller's context ended: its cancellation is
 					// not the path's availability.
 					cb.Release()
-					return nil, cb, fmt.Errorf("bidi: %w", err)
+					return nil, fmt.Errorf("bidi: %w", err)
 				} else {
 					if cs != nil {
 						cs.recordTimeout()
 					}
 					cb.RecordFailure()
-					return nil, cb, fmt.Errorf("bidi: %w", err)
+					return nil, fmt.Errorf("bidi: %w", err)
 				}
 			} else {
 				if cs != nil {
@@ -883,9 +879,9 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 				}
 				cb.RecordSuccess()
 				if !resp.Success {
-					return nil, cb, responseError(method, resp)
+					return nil, responseError(method, resp)
 				}
-				return resp.Payload, cb, nil
+				return resp.Payload, nil
 			}
 		}
 	}
@@ -905,7 +901,8 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 		if cs != nil {
 			cs.recordTimeout()
 		}
-		return nil, cb, fmt.Errorf("open stream: %w", err)
+		settleUnanswered(ctx, ctx, cb)
+		return nil, fmt.Errorf("open stream: %w", err)
 	}
 	defer releaseDynamicStream(session, stream)
 
@@ -918,7 +915,9 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 	req := buildRPCRequestCtx(ctx, role, method, payload, remaining, rpcTimeout)
 	reqData, err := pb.MarshalRequest(req)
 	if err != nil {
-		return nil, cb, fmt.Errorf("marshal: %w", err)
+		// Nothing reached the path, so the attempt says nothing about it.
+		cb.Release()
+		return nil, fmt.Errorf("marshal: %w", err)
 	}
 	rpcCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
@@ -929,7 +928,8 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 			cs.recordTimeout()
 		}
 		c.metrics.RecordTimeout(role)
-		return nil, cb, fmt.Errorf("send: %w", err)
+		settleUnanswered(ctx, ctx, cb)
+		return nil, fmt.Errorf("send: %w", err)
 	}
 
 	// Receive response
@@ -939,27 +939,47 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 			cs.recordTimeout()
 		}
 		c.metrics.RecordTimeout(role)
-		return nil, cb, fmt.Errorf("receive: %w", err)
+		settleUnanswered(ctx, ctx, cb)
+		return nil, fmt.Errorf("receive: %w", err)
 	}
 
 	// Decode response
 	resp, err := pb.UnmarshalResponse(respData)
 	if err != nil {
-		return nil, cb, fmt.Errorf("unmarshal: %w", err)
+		settleUnanswered(ctx, ctx, cb)
+		return nil, fmt.Errorf("unmarshal: %w", err)
 	}
+	// The path answered: whatever the answer, the circuit closes.
+	cb.RecordSuccess()
 	if !resp.Success {
 		// Application-level error — session is healthy, request was processed
 		if cs != nil {
 			cs.recordSuccess()
 		}
-		return nil, cb, responseError(method, resp)
+		return nil, responseError(method, resp)
 	}
 
 	// Success
 	if cs != nil {
 		cs.recordSuccess()
 	}
-	return resp.Payload, cb, nil
+	return resp.Payload, nil
+}
+
+// settleUnanswered settles the circuit of an attempt that ended without a
+// response. callerCtx is the context the caller of Call passed and attemptCtx
+// the one the attempt ran under. The caller's context ending is the caller's
+// cancellation, and attemptCtx being cancelled while the caller's is live is
+// Call ending a probe a sibling beat; neither says anything about the path, so
+// the attempt only releases a half-open lease. Everything else, the attempt's
+// own time cap included, is an availability failure. callOnce has no sibling
+// attempts and passes the caller's context as both.
+func settleUnanswered(callerCtx, attemptCtx context.Context, cb *CircuitBreaker) {
+	if callerCtx.Err() != nil || errors.Is(attemptCtx.Err(), context.Canceled) {
+		cb.Release()
+		return
+	}
+	cb.RecordFailure()
 }
 
 // buildRPCRequest creates an RPCRequest with deadline propagation and unique ID.
