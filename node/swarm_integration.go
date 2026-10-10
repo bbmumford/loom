@@ -87,8 +87,11 @@ func (si *SwarmIntegration) ShadowParity(ctx context.Context, authoritative port
 // swarmTrustPolicy returns the PolicyConfig the trust gate and the trust
 // shadow build their Policy from: the supplied one, or
 // directory.BaselinePolicyConfig when it is nil, with every self-owned prefix
-// present. The result shares nothing with the supplied config, so the
-// shadow's partitions never reach the composition root's value.
+// present as an open rule. directory.Policy admits a self-owned rule it opens
+// before any restricted rule, so no rule in the supplied config refuses a
+// node's own PeerRecord, latency, mesh database member or route record. The
+// result shares nothing with the supplied config, so the shadow's partitions
+// never reach the composition root's value.
 func swarmTrustPolicy(supplied *directory.PolicyConfig) directory.PolicyConfig {
 	if supplied == nil {
 		return directory.BaselinePolicyConfig()

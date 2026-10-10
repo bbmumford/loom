@@ -353,3 +353,71 @@ func TestWithRoleEntitlementsCoversOnlyTheNamedRole(t *testing.T) {
 		}
 	}
 }
+
+// A restricted rule does not close a self-owned topic the policy opens: above
+// it, on it or beneath it, the rule leaves every bound node its own records,
+// and still decides the topics beside them. That standing belongs to the
+// SelfOwnedPublishPrefixes rules a policy opens and to nothing else: a policy
+// that does not open them, and an open rule that is not one of them, are
+// decided by the restricted rule.
+func TestARestrictedRuleDoesNotCloseASelfOwnedTopicThePolicyOpens(t *testing.T) {
+	ctx := context.Background()
+	node, _ := trustPrincipal(t, "")
+	admin, _ := trustPrincipal(t, "")
+	writers := []ports.NodeID{admin.NodeID}
+	selfOwned := []ports.Topic{FleetPeerTopic, FleetRouteTopic, MeshDBMemberTopic, LatencyTopic(node.NodeID)}
+
+	for name, restricted := range map[string]map[string][]ports.NodeID{
+		"the empty rule":     {"": writers},
+		"a namespace above":  {"fleet.": writers, "meshdb.": writers},
+		"rules naming them":  {string(FleetPeerTopic): writers, string(FleetRouteTopic): writers, string(MeshDBMemberTopic): writers, LatencyTopicPrefix: writers},
+		"a rule beneath one": {string(LatencyTopic(node.NodeID)): writers},
+	} {
+		cfg := BaselinePolicyConfig()
+		cfg.PublishPrefixes = restricted
+		p := NewPolicy(cfg)
+		for _, topic := range selfOwned {
+			if err := p.AuthorizePublish(ctx, node, topic); err != nil {
+				t.Errorf("%s: a bound node was refused its own %q record: %v", name, topic, err)
+			}
+		}
+	}
+
+	cfg := BaselinePolicyConfig()
+	cfg.OpenPublishPrefixes = append(cfg.OpenPublishPrefixes, "pub.")
+	cfg.PublishPrefixes = map[string][]ports.NodeID{"fleet.": writers, "pub.admin.": writers}
+	p := NewPolicy(cfg)
+	for _, tc := range []struct {
+		pr     ports.Principal
+		topic  string
+		accept bool
+	}{
+		{node, "fleet.admin", false},
+		{admin, "fleet.admin", true},
+		{node, "pub.notes", true},
+		{node, "pub.admin.notes", false},
+		{admin, "pub.admin.notes", true},
+	} {
+		err := p.AuthorizePublish(ctx, tc.pr, ports.Topic(tc.topic))
+		if tc.accept && err != nil {
+			t.Errorf("beside the self-owned topics, %q was refused: %v", tc.topic, err)
+		}
+		if !tc.accept && err == nil {
+			t.Errorf("beside the self-owned topics, a node outside the restricted rule was admitted on %q", tc.topic)
+		}
+	}
+
+	closed := NewPolicy(PolicyConfig{PublishPrefixes: map[string][]ports.NodeID{"fleet.": writers}})
+	if err := closed.AuthorizePublish(ctx, node, FleetPeerTopic); err == nil {
+		t.Error("a policy that opens no self-owned rule admitted a node outside its restricted rule on fleet.peer")
+	}
+	if err := closed.AuthorizePublish(ctx, admin, FleetPeerTopic); err != nil {
+		t.Errorf("a policy that opens no self-owned rule refused its restricted rule's writer on fleet.peer: %v", err)
+	}
+
+	unbound := node
+	unbound.NodeID = admin.NodeID
+	if err := NewPolicy(BaselinePolicyConfig()).AuthorizePublish(ctx, unbound, FleetPeerTopic); err == nil {
+		t.Error("a node id that does not bind to the presented key was admitted on a self-owned topic")
+	}
+}

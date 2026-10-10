@@ -84,7 +84,8 @@ type Config struct {
 	// it entitles, so "enforce" admits the role takeover topics from entitled
 	// nodes. The self-owned prefixes (directory.SelfOwnedPublishPrefixes) are
 	// added to whatever is supplied, because a Policy without them refuses
-	// every node's own PeerRecord.
+	// every node's own PeerRecord; a restricted rule supplied here that
+	// covers one of them does not close it.
 	SwarmTrustPolicy *directory.PolicyConfig
 
 	// ShadowParityInterval, when > 0, paces a periodic comparison of the live

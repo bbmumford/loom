@@ -166,15 +166,57 @@ func TestEnforceRefusesATopicThatOnlyStartsWithASelfOwnedOne(t *testing.T) {
 	}
 }
 
-// A supplied policy that omits the self-owned prefixes still admits a node's
-// own heartbeat: without them every node's PeerRecord is refused fleet-wide.
+// Whatever policy is supplied, the gate admits a node's own records on every
+// self-owned topic: a policy that omits the self-owned prefixes, and one whose
+// restricted rules cover or name them. Without that every node's PeerRecord is
+// refused fleet-wide. A supplied restricted rule still decides the topics
+// beside the self-owned ones.
 func TestASuppliedPolicyKeepsTheSelfOwnedPrefixes(t *testing.T) {
 	n := newTrustNode(t)
+	admin := newTrustNode(t)
 	check := enforcingGate(t, &directory.PolicyConfig{})
 	for _, topic := range directory.SelfOwnedPublishPrefixes {
 		if err := check(n.record(topic)); err != nil {
 			t.Errorf("a supplied policy without self-owned prefixes refused %q: %v", topic, err)
 		}
+	}
+
+	ownLatency := string(directory.LatencyTopic(n.id))
+	selfOwned := []string{
+		string(directory.FleetPeerTopic),
+		string(directory.FleetRouteTopic),
+		string(directory.MeshDBMemberTopic),
+		ownLatency,
+	}
+	writers := []ports.NodeID{admin.id}
+	for _, tc := range []struct {
+		name       string
+		restricted map[string][]ports.NodeID
+	}{
+		{"a restricted namespace above them", map[string][]ports.NodeID{"fleet.": writers, "meshdb.": writers}},
+		{"a restricted default rule", map[string][]ports.NodeID{"": writers}},
+		{"restricted rules naming them", map[string][]ports.NodeID{
+			string(directory.FleetPeerTopic):    writers,
+			string(directory.FleetRouteTopic):   writers,
+			string(directory.MeshDBMemberTopic): writers,
+			directory.LatencyTopicPrefix:        writers,
+			ownLatency:                          writers,
+		}},
+	} {
+		check := enforcingGate(t, &directory.PolicyConfig{PublishPrefixes: tc.restricted})
+		for _, topic := range selfOwned {
+			if err := check(n.record(topic)); err != nil {
+				t.Errorf("a supplied policy with %s refused a node's own %q record: %v", tc.name, topic, err)
+			}
+		}
+	}
+
+	check = enforcingGate(t, &directory.PolicyConfig{PublishPrefixes: map[string][]ports.NodeID{"fleet.": writers}})
+	if err := check(n.record("fleet.admin")); err == nil {
+		t.Error("a node outside the supplied fleet. rule was admitted on fleet.admin")
+	}
+	if err := check(admin.record("fleet.admin")); err != nil {
+		t.Errorf("the supplied fleet. rule's writer was refused on fleet.admin: %v", err)
 	}
 }
 

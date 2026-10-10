@@ -49,6 +49,12 @@ type Policy struct {
 	// publish (e.g. "fleet.peer" — every node publishes its own PeerRecord).
 	openPublish map[string]bool
 
+	// selfOwnedOpen holds the SelfOwnedPublishPrefixes rules this policy
+	// opens. AuthorizePublish admits a topic one of them covers before it
+	// reads publishPrefixes, so no restricted rule closes a topic every
+	// node publishes about itself.
+	selfOwnedOpen []string
+
 	// revoked keys, by canonical aether NodeID.
 	revoked map[string]bool
 }
@@ -68,7 +74,9 @@ type PolicyConfig struct {
 	// rule ending in "." covers every topic beneath that namespace, the
 	// empty rule covers every topic, and any other rule covers only the
 	// topic it names: "role.claim.auth" reaches neither "role.claim.authz"
-	// nor "role.claim.auth.admin".
+	// nor "role.claim.auth.admin". A restricted rule decides before every
+	// open rule except a SelfOwnedPublishPrefixes rule that
+	// OpenPublishPrefixes lists, whose topics stay open under it.
 	PublishPrefixes map[string][]ports.NodeID
 }
 
@@ -97,6 +105,11 @@ func NewPolicy(cfg PolicyConfig) *Policy {
 	}
 	for _, prefix := range cfg.OpenPublishPrefixes {
 		p.openPublish[prefix] = true
+	}
+	for _, rule := range SelfOwnedPublishPrefixes {
+		if p.openPublish[rule] {
+			p.selfOwnedOpen = append(p.selfOwnedOpen, rule)
+		}
 	}
 	for prefix, nodes := range cfg.PublishPrefixes {
 		set := map[ports.NodeID]bool{}
@@ -149,7 +162,16 @@ func (p *Policy) VerifyNodeKey(id ports.NodeID, pub ed25519.PublicKey) error {
 	return nil
 }
 
-// AuthorizePublish implements ports.TrustPolicy.
+// AuthorizePublish implements ports.TrustPolicy. After the key and partition
+// checks it reads the publish rules in one order: a self-owned rule this
+// policy opens admits; else the longest restricted rule covering the topic
+// decides for its writers alone; else any open rule admits; else the topic
+// matches no rule and is refused.
+//
+// The self-owned rules are read first because every node republishes its
+// PeerRecord on FleetPeerTopic and node's enforcing swarm trust gate calls
+// this on each one: a supplied restricted rule above or on such a topic (the
+// empty rule, "fleet.") would otherwise refuse every node's record.
 func (p *Policy) AuthorizePublish(_ context.Context, pr ports.Principal, topic ports.Topic) error {
 	if err := p.VerifyNodeKey(pr.NodeID, pr.PubKey); err != nil {
 		return err
@@ -159,6 +181,11 @@ func (p *Policy) AuthorizePublish(_ context.Context, pr ports.Principal, topic p
 	}
 	p.mu.RLock()
 	defer p.mu.RUnlock()
+	for _, own := range p.selfOwnedOpen {
+		if ruleCovers(own, string(topic)) {
+			return nil
+		}
+	}
 	rule, restricted := p.longestPrefixLocked(string(topic))
 	if restricted {
 		if !p.publishPrefixes[rule][pr.NodeID] {
