@@ -9,6 +9,9 @@ import (
 	"context"
 	"testing"
 
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+
 	"github.com/bbmumford/loom/node/handlers"
 	"github.com/bbmumford/loom/pkg/rpc"
 )
@@ -113,6 +116,58 @@ func TestHasHandlerAcceptsARealRPCHandler(t *testing.T) {
 		t.Fatal("HasHandler returned FALSE for a registered RPC handler — the local " +
 			"short circuit never fires, so every call this process could serve " +
 			"itself goes out over the mesh instead")
+	}
+}
+
+// The registry this adapter reads is filled by rpc.Registry.ExportToHandlerRegistry
+// (pkg/rpc/adapter.go), which carries only a handler holding a Func. This pins
+// what that leaves HasHandler answering: false for an operation whose Func lives
+// on another node, so Call and CallRaw (pkg/rpc/call.go) pass tryLocalDispatch
+// and reach the mesh caller, and true for the operation this node executes, or
+// the short circuit never fires for the surface it serves. Both legs run off one
+// export, because an export that dropped everything would satisfy the false leg
+// alone.
+func TestAnExportedProxyIsNotClaimedLocallyAndTheExecutingOneIs(t *testing.T) {
+	echo := func(ctx context.Context, req proto.Message) (proto.Message, error) { return req, nil }
+	executing := rpc.Handler{
+		Namespace: "test", Domain: "localdispatch", Operation: "Runs",
+		Func:     echo,
+		Request:  (*wrapperspb.StringValue)(nil),
+		Response: (*wrapperspb.StringValue)(nil),
+		Scope:    rpc.ScopeNone,
+	}
+	// RegisterProxy strips Func, so a gateway's advertisement reaches the
+	// registry with none even where its Types() supplied one.
+	proxied := rpc.Handler{
+		Namespace: "test", Domain: "elsewhere", Operation: "Runs",
+		Func:     echo,
+		Request:  (*wrapperspb.StringValue)(nil),
+		Response: (*wrapperspb.StringValue)(nil),
+		Scope:    rpc.ScopeNone,
+	}
+
+	source := rpc.NewRegistry()
+	if err := source.Register(executing); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if err := source.RegisterProxy([]rpc.Handler{proxied}); err != nil {
+		t.Fatalf("RegisterProxy: %v", err)
+	}
+	reg := handlers.NewHandlerRegistry()
+	if err := source.ExportToHandlerRegistry(reg); err != nil {
+		t.Fatalf("ExportToHandlerRegistry: %v", err)
+	}
+	a := &localDispatcherAdapter{registry: reg}
+
+	if !a.HasHandler(executing.FQN()) {
+		t.Errorf("HasHandler returned FALSE for %s, which this node holds the Func for — "+
+			"the short circuit never fires and a call this process could answer itself "+
+			"goes out over the mesh", executing.FQN())
+	}
+	if a.HasHandler(proxied.FQN()) {
+		t.Errorf("HasHandler returned TRUE for %s, which no Func here executes — "+
+			"TryLocalDispatch claims the call and hands back the registry's refusal "+
+			"instead of letting Call and CallRaw reach the node that runs it", proxied.FQN())
 	}
 }
 

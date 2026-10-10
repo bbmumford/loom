@@ -26,12 +26,21 @@ var ErrProxyDispatchLocal = errors.New("rpc: proxy handler cannot dispatch local
 // it: it reaches handlers exported by ExportToHandlerRegistry through
 // registryShim.ExecuteRPC. HTTP/CLI callers that need per-handler Middleware
 // should go through the HTTP bridge instead.
+//
+// Get hands back the registry's stored *Handler, so Func and WebhookSignature
+// are read once here and the call below uses those two values. Caller code runs
+// in between — the PresencePolicy and AuthzPolicy under EnforceScope, the
+// request type's own ProtoReflect under proto.Unmarshal, and the handler's
+// SecretProvider under verifyWebhookSignature — so re-reading either field
+// would let a Func cleared on the stored handler reach the call as nil, and a
+// WebhookSignature cleared there drop the check between the test and its use.
 func (r *Registry) Dispatch(ctx context.Context, fqn string, payload []byte) ([]byte, error) {
 	h, ok := r.Get(fqn)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s", ErrHandlerNotFound, fqn)
 	}
-	if h.Func == nil {
+	fn, sig := h.Func, h.WebhookSignature
+	if fn == nil {
 		return nil, fmt.Errorf("%w: %s", ErrProxyDispatchLocal, fqn)
 	}
 	if err := EnforceScope(ctx, h, r.PresencePolicy(), r.AuthzPolicy()); err != nil {
@@ -51,14 +60,14 @@ func (r *Registry) Dispatch(ctx context.Context, fqn string, payload []byte) ([]
 	// unauthenticated event. Fails closed on missing secret / bad sig.
 	// Only runs for handlers that declared WebhookSignature on
 	// registration; zero overhead for all other handlers.
-	if h.WebhookSignature != nil {
-		if err := verifyWebhookSignature(h.WebhookSignature, req); err != nil {
+	if sig != nil {
+		if err := verifyWebhookSignature(sig, req); err != nil {
 			return nil, fmt.Errorf("%s: %w", fqn, err)
 		}
 	}
 
 	// Execute handler
-	resp, err := h.Func(ctx, req)
+	resp, err := fn(ctx, req)
 	if err != nil {
 		return nil, err
 	}
