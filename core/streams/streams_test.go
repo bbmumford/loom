@@ -57,7 +57,7 @@ func TestStreamIDsAreFixedWireValues(t *testing.T) {
 // ID would let two consumers open the same number, and aether hands the second
 // OPEN the stream the first already holds.
 func TestRegistryAssignsEveryIDOnce(t *testing.T) {
-	owner := map[uint64]string{}
+	assignedTo := map[uint64]string{}
 	names := map[string]bool{}
 	for _, e := range Registry() {
 		if e.Name == "" {
@@ -77,13 +77,13 @@ func TestRegistryAssignsEveryIDOnce(t *testing.T) {
 			t.Errorf("%s names no opener", e.Name)
 		}
 		for id := e.First; id <= e.Last; id++ {
-			if other, dup := owner[id]; dup {
+			if other, dup := assignedTo[id]; dup {
 				t.Errorf("stream ID %d is assigned to both %s and %s", id, other, e.Name)
 			}
-			owner[id] = e.Name
+			assignedTo[id] = e.Name
 		}
 	}
-	if len(owner) == 0 {
+	if len(assignedTo) == 0 {
 		t.Fatal("the registry is empty")
 	}
 }
