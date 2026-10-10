@@ -22,6 +22,7 @@ import (
 	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/bbmumford/loom/internal/securityctx"
 	"github.com/bbmumford/loom/node/handlers"
+	"github.com/bbmumford/loom/pkg/dispatch"
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/pkg/trace"
 	"github.com/bbmumford/loom/ports"
@@ -647,12 +648,14 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 	// load-based forward would turn the forwarder's refusal into a local run.
 	if _, known := ParseOperationClass(req.Context["opClass"]); !known {
 		refusal := &GradeTooLowError{Handler: req.Handler, Class: req.Context["opClass"], UnknownClass: true}
-		return &pb.RPCResponse{
+		resp := &pb.RPCResponse{
 			Id:        req.Id,
 			Success:   false,
 			Error:     refusal.Error(),
 			LatencyNs: int64(time.Since(startTime)),
 		}
+		dispatch.StampRefusal(resp, refusal)
+		return resp
 	}
 
 	// 1. Timeout enforcement — use propagated deadline from caller.
@@ -776,12 +779,17 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 		resp, err := s.forwarder.Forward(ctx, req)
 		if err != nil {
 			s.metrics.RecordForwardFail(req.Handler, time.Since(startTime))
-			return &pb.RPCResponse{
+			failed := &pb.RPCResponse{
 				Id:        req.Id,
 				Success:   false,
 				Error:     fmt.Sprintf("forward %s failed (hop %d): %v", req.Handler, req.Hops, err),
 				LatencyNs: int64(time.Since(startTime)),
 			}
+			// The Error text alone reaches the origin as a handler rejection.
+			// A grade or deadline refusal is stamped on the response as well,
+			// so dispatch.HWPCaller there returns it to its caller typed.
+			dispatch.StampRefusal(failed, err)
+			return failed
 		}
 		s.metrics.RecordForward(req.Handler, time.Since(startTime))
 		return resp

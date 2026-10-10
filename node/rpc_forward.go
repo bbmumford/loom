@@ -67,9 +67,11 @@ type GradeTooLowError = dispatch.GradeTooLowError
 
 // RouteDeadlineError is Forward's refusal when the caller's remaining deadline
 // is shorter than every graded candidate's need, adaptiveRPCTimeout of its
-// session. It unwraps to rpc.ErrRouteDeadline. Need is the smallest need among
-// the candidates, so Remaining < Need always holds. Like GradeTooLowError it is
-// dispatch's type under node's name.
+// session, or when the request's absolute deadline has already passed. It
+// unwraps to rpc.ErrRouteDeadline. Need is the smallest need among the
+// candidates, so Remaining < Need always holds; an expired request has no
+// candidates yet, so Need is zero and Remaining negative. Like
+// GradeTooLowError it is dispatch's type under node's name.
 type RouteDeadlineError = dispatch.RouteDeadlineError
 
 // hopFits reports whether ctx's remaining deadline covers a forward over
@@ -187,9 +189,12 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 	// RE-ROUTE: Use own LAD knowledge to find a path.
 	// This runs when: (a) no RouteList provided, (b) RouteList hop was broken.
 
-	// Early deadline check — don't waste time re-routing if deadline already passed
-	if req.Deadline > 0 && time.Now().UnixNano() > req.Deadline {
-		return nil, fmt.Errorf("forward %s: deadline exceeded before re-route", req.Handler)
+	// Early deadline check — don't waste time re-routing if deadline already
+	// passed. It is the same typed refusal as the budget check below, which
+	// RPCServer stamps on its response; a plain error here would reach the
+	// origin as a handler rejection.
+	if now := time.Now().UnixNano(); req.Deadline > 0 && now > req.Deadline {
+		return nil, &RouteDeadlineError{Handler: req.Handler, Remaining: time.Duration(req.Deadline - now)}
 	}
 
 	targetNodeID := req.TargetNodeId

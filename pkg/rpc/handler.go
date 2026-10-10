@@ -18,16 +18,20 @@ import (
 // Call, CallRaw and CallNode (dispatch.HWPCaller) returns it for the first
 // hop, and node's forwarder for every later one, each wrapped in a
 // *dispatch.GradeTooLowError (node.GradeTooLowError is the same type) carrying
-// the current and required grade. It is dispatch's sentinel under this
+// the current and required grade. A refusal made on a later hop keeps its
+// type on the way back: the refusing node stamps it on its response
+// (dispatch.StampRefusal) and HWPCaller rebuilds it, so Call returns it
+// rather than a handler error. It is dispatch's sentinel under this
 // package's name, because pkg/dispatch cannot import pkg/rpc.
 var ErrGradeTooLow = sharedDispatch.ErrGradeTooLow
 
 // ErrRouteDeadline is returned when the caller's remaining deadline cannot
-// cover the next hop, before anything is sent. node's forwarder returns it
-// wrapped in a *dispatch.RouteDeadlineError (node.RouteDeadlineError is the
-// same type) carrying the remaining budget and the hop's need, because a
-// forwarded call keeps the caller's deadline and never gains time. Like
-// ErrGradeTooLow it is dispatch's sentinel under this package's name.
+// cover the next hop, or has already passed, before anything is sent. node's
+// forwarder returns it wrapped in a *dispatch.RouteDeadlineError
+// (node.RouteDeadlineError is the same type) carrying the remaining budget
+// and the hop's need, because a forwarded call keeps the caller's deadline
+// and never gains time. Like ErrGradeTooLow it is dispatch's sentinel under
+// this package's name, and it keeps its type across hops the same way.
 var ErrRouteDeadline = sharedDispatch.ErrRouteDeadline
 
 // OperationClass is the class a Handler declares for its transport
