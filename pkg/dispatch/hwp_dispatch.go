@@ -674,7 +674,7 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 				} else {
 					cb.RecordSuccess() // transport worked regardless of app result
 					if !resp.Success {
-						resultCh <- probeResult{nodeID: r.NodeID, err: NewHandlerError(resp.Error), cb: cb, breakerHandled: true}
+						resultCh <- probeResult{nodeID: r.NodeID, err: responseError(method, resp), cb: cb, breakerHandled: true}
 						return
 					}
 					resultCh <- probeResult{payload: resp.Payload, nodeID: r.NodeID, cb: cb, breakerHandled: true}
@@ -712,7 +712,7 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 			}
 			cb.RecordSuccess() // transport worked regardless of app result
 			if !dynResp.Success {
-				resultCh <- probeResult{nodeID: r.NodeID, err: NewHandlerError(dynResp.Error), cb: cb, breakerHandled: true}
+				resultCh <- probeResult{nodeID: r.NodeID, err: responseError(method, dynResp), cb: cb, breakerHandled: true}
 				return
 			}
 			resultCh <- probeResult{payload: dynResp.Payload, nodeID: r.NodeID, cb: cb, breakerHandled: true}
@@ -883,7 +883,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 				}
 				cb.RecordSuccess()
 				if !resp.Success {
-					return nil, cb, NewHandlerError(resp.Error)
+					return nil, cb, responseError(method, resp)
 				}
 				return resp.Payload, cb, nil
 			}
@@ -952,7 +952,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 		if cs != nil {
 			cs.recordSuccess()
 		}
-		return nil, cb, NewHandlerError(resp.Error)
+		return nil, cb, responseError(method, resp)
 	}
 
 	// Success
@@ -1027,7 +1027,7 @@ func (c *HWPCaller) CallNode(ctx context.Context, nodeID, role, method string, p
 		return nil, fmt.Errorf("dispatch %s/%s to node %s: nil response: %w", role, method, nodeID, ErrNoRouteToNode)
 	}
 	if !resp.Success {
-		return nil, NewHandlerError(resp.Error)
+		return nil, responseError(method, resp)
 	}
 	return resp.Payload, nil
 }

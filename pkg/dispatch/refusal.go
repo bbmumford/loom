@@ -7,9 +7,11 @@ package dispatch
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/ORBTR/aether"
+	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/bbmumford/loom/grade"
 )
 
@@ -55,7 +57,9 @@ func (e *GradeTooLowError) Error() string {
 func (e *GradeTooLowError) Unwrap() error { return ErrGradeTooLow }
 
 // RouteDeadlineError is the typed deadline refusal. Need is the smallest need
-// among the candidate hops, so Remaining < Need always holds.
+// among the candidate hops, so Remaining < Need always holds. Need is zero
+// when the request's absolute deadline had passed before a hop was chosen;
+// Remaining is then negative, by how long.
 type RouteDeadlineError struct {
 	Handler   string
 	Remaining time.Duration
@@ -63,6 +67,10 @@ type RouteDeadlineError struct {
 }
 
 func (e *RouteDeadlineError) Error() string {
+	if e.Need <= 0 {
+		return fmt.Sprintf("%s: the deadline passed %v before a hop was chosen: %v",
+			e.Handler, -e.Remaining, ErrRouteDeadline)
+	}
 	return fmt.Sprintf("%s: %v left, the next hop needs %v: %v",
 		e.Handler, e.Remaining, e.Need, ErrRouteDeadline)
 }
@@ -145,4 +153,100 @@ func routeGrade(r aether.ProbeRoute) grade.Grade {
 // Call returns wrapped so the caller can still test them with errors.Is.
 func isRouteRefusal(err error) bool {
 	return errors.Is(err, ErrGradeTooLow) || errors.Is(err, ErrRouteDeadline)
+}
+
+// A refusal made by a later hop reaches the origin as a failed RPCResponse.
+// Its Error text alone would arrive as a handler rejection, so the refusing
+// node also writes the refusal's kind and fields into the response's Metadata
+// (StampRefusal) and HWPCaller rebuilds the typed error from them
+// (responseError). RPCServer.executeLocal builds its response without
+// Metadata, so no handler can set these keys.
+const (
+	refusalKindKey      = "refusal"
+	refusalKindGrade    = "grade"
+	refusalKindDeadline = "deadline"
+
+	refusalClassKey     = "refusal.class"
+	refusalUnknownKey   = "refusal.unknown-class"
+	refusalCurrentKey   = "refusal.current-grade"
+	refusalRequiredKey  = "refusal.required-grade"
+	refusalRemainingKey = "refusal.remaining-ns"
+	refusalNeedKey      = "refusal.need-ns"
+)
+
+// StampRefusal records err on resp when err is a typed route refusal, so the
+// node that receives resp can return the same typed error to its caller. Any
+// other error leaves resp as it is. node's RPCServer calls it on the failed
+// response it builds for a refused forward and for a request naming an
+// undeclared class.
+func StampRefusal(resp *pb.RPCResponse, err error) {
+	if resp == nil {
+		return
+	}
+	var gte *GradeTooLowError
+	var rde *RouteDeadlineError
+	switch {
+	case errors.As(err, &gte):
+		resp.Metadata = map[string]string{
+			refusalKindKey:     refusalKindGrade,
+			refusalClassKey:    gte.Class,
+			refusalUnknownKey:  strconv.FormatBool(gte.UnknownClass),
+			refusalCurrentKey:  strconv.Itoa(int(gte.Current)),
+			refusalRequiredKey: strconv.Itoa(int(gte.Required)),
+		}
+	case errors.As(err, &rde):
+		resp.Metadata = map[string]string{
+			refusalKindKey:      refusalKindDeadline,
+			refusalRemainingKey: strconv.FormatInt(int64(rde.Remaining), 10),
+			refusalNeedKey:      strconv.FormatInt(int64(rde.Need), 10),
+		}
+	}
+}
+
+// hopRefusal is a route refusal another node made. Its text is that node's
+// own, which names the hop, and it unwraps to the typed refusal rebuilt from
+// the response, so errors.Is and errors.As see what the refusing node saw.
+type hopRefusal struct {
+	text    string
+	refusal error
+}
+
+func (e *hopRefusal) Error() string { return e.text }
+func (e *hopRefusal) Unwrap() error { return e.refusal }
+
+// responseError is the error for a response whose Success is false: the typed
+// refusal StampRefusal recorded on it, or else a handler rejection. Every
+// place HWPCaller reads a failed response goes through it, so a refusal is
+// never reported as ErrHandlerError, which the HTTP bridge answers as a
+// caller's mistake. A field that does not parse reads as zero; the kind alone
+// decides the type.
+func responseError(handler string, resp *pb.RPCResponse) error {
+	var refusal error
+	switch resp.Metadata[refusalKindKey] {
+	case refusalKindGrade:
+		current, _ := strconv.Atoi(resp.Metadata[refusalCurrentKey])
+		required, _ := strconv.Atoi(resp.Metadata[refusalRequiredKey])
+		unknown, _ := strconv.ParseBool(resp.Metadata[refusalUnknownKey])
+		refusal = &GradeTooLowError{
+			Handler:      handler,
+			Class:        resp.Metadata[refusalClassKey],
+			Current:      grade.Grade(current),
+			Required:     grade.Grade(required),
+			UnknownClass: unknown,
+		}
+	case refusalKindDeadline:
+		remaining, _ := strconv.ParseInt(resp.Metadata[refusalRemainingKey], 10, 64)
+		need, _ := strconv.ParseInt(resp.Metadata[refusalNeedKey], 10, 64)
+		refusal = &RouteDeadlineError{
+			Handler:   handler,
+			Remaining: time.Duration(remaining),
+			Need:      time.Duration(need),
+		}
+	default:
+		return NewHandlerError(resp.Error)
+	}
+	if resp.Error == "" {
+		return refusal
+	}
+	return &hopRefusal{text: resp.Error, refusal: refusal}
 }
