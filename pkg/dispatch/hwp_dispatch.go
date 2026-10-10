@@ -199,6 +199,11 @@ type SessionFinder interface {
 	FindAnySession() (aether.Session, bool)
 	// CallViaBidi sends an RPC via BidiRPC (Stream 1) if available for the node.
 	// Returns (nil, false, nil) if no BidiRPC channel exists for this node.
+	//
+	// The finder picks the session the request leaves on, and HWPCaller never
+	// sees it, so the finder runs the grade gate on that session
+	// (CheckRouteGrade with req.Context["opClass"]) and returns the refusal as
+	// (nil, true, err). CallNode has no other gate on its route's grade.
 	CallViaBidi(ctx context.Context, nodeID string, req *pb.RPCRequest) (*pb.RPCResponse, bool, error)
 	// FindRoutes computes up to 3 routes to a handler's role.
 	// Each route has a first-hop session + remaining route list.
@@ -517,8 +522,23 @@ func (c *HWPCaller) refillPools() {
 // first-hop node, first-hop session generation). When the FQN
 // "role/method" appears in the cacheable-handlers config the response
 // is served from / stored in the caller-side cache automatically.
+//
+// The call leaves only on a first hop that grades at or above the floor of
+// its operation class (the WithOpClass hint; none is Standard). With no such
+// hop, or with a class the gate does not declare, it returns a
+// *GradeTooLowError before anything is sent.
 func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byte) ([]byte, error) {
 	start := time.Now()
+
+	// The grade gate, before any path and before the result cache: the class
+	// this call names sets the lowest grade it may leave on, and a class the
+	// gate does not declare is refused whatever is cached or connected.
+	opClass := opClassFromContext(ctx)
+	floor, err := classFloor(method, opClass)
+	if err != nil {
+		c.metrics.RecordCall(role, time.Since(start), false)
+		return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, err)
+	}
 
 	// Caller-side cache check for configured idempotent reads. Hot
 	// callees (declared in dispatch.cacheableHandlers config) bypass
@@ -551,6 +571,16 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 		}
 		c.metrics.RecordCall(role, time.Since(start), false)
 		return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, err)
+	}
+
+	// Only routes whose first hop grades at or above the floor are probed.
+	// With none left the call is refused with the best grade on offer and the
+	// floor it missed, before a circuit is leased or anything is sent.
+	routes, best := routesAtOrAbove(routes, floor)
+	if len(routes) == 0 {
+		c.metrics.RecordCall(role, time.Since(start), false)
+		return nil, fmt.Errorf("dispatch %s/%s: %w", role, method,
+			&GradeTooLowError{Handler: method, Class: opClass, Current: best, Required: floor})
 	}
 
 	// Build base request
@@ -622,6 +652,15 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 			bidiCancel()
 			if ok {
 				if err != nil {
+					// The finder refused the session it would have sent on.
+					// A refusal is not the path's availability, so the
+					// circuit gets no verdict, and the dynamic stream below
+					// is not tried for a route the gate just refused.
+					if errors.Is(err, ErrGradeTooLow) {
+						cb.Release()
+						resultCh <- probeResult{nodeID: r.NodeID, err: err, cb: cb, breakerHandled: true}
+						return
+					}
 					// Inner-deadline-only fallthrough: only the bidi cap
 					// (or the parent probeCtx caused by another probe's
 					// quick success cancelling everyone) fired. If the
@@ -724,6 +763,11 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 	if errors.Is(lastErr, ErrHandlerError) {
 		return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, lastErr)
 	}
+	// A typed route refusal stays typed for the same reason: the caller tests
+	// it with errors.Is, which the flattened text below would defeat.
+	if isRouteRefusal(lastErr) {
+		return nil, fmt.Errorf("dispatch %s/%s: all %d probes failed: %w", role, method, len(routes), lastErr)
+	}
 	return nil, fmt.Errorf("dispatch %s/%s: all %d probes failed: %v", role, method, len(routes), lastErr)
 }
 
@@ -749,12 +793,19 @@ func (c *HWPCaller) CallCacheable(ctx context.Context, role, method string, payl
 
 // callOnce performs a single RPC attempt: find session → get stream → send → receive.
 // Returns the response payload, the circuit that governed the attempt (nil
-// when no session was found), and any error. The circuit is the one for
-// (method, the session's node, the session's generation).
+// when no session was found or the grade gate refused the one found), and any
+// error. The circuit is the one for (method, the session's node, the
+// session's generation).
 func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload []byte) ([]byte, *CircuitBreaker, error) {
 	session, cs, err := c.getOrFindSession(ctx, role, method)
 	if err != nil {
 		return nil, nil, fmt.Errorf("find session: %w", err)
+	}
+
+	// The grade gate on the one session this attempt would send on, before the
+	// circuit is asked, so a refusal never takes a half-open lease.
+	if err := CheckRouteGrade(method, opClassFromContext(ctx), session); err != nil {
+		return nil, nil, err
 	}
 
 	nodeID := string(session.RemoteNodeID())
@@ -798,6 +849,12 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 		gradeTimeout := rpcTimeoutForProtocol(session.Protocol())
 		bidiReq := buildRPCRequestCtx(bidiCtx, role, method, payload, remaining, gradeTimeout)
 		if resp, ok, err := c.finder.CallViaBidi(bidiCtx, nodeID, bidiReq); ok {
+			if errors.Is(err, ErrGradeTooLow) {
+				// The finder refused the session it would have sent on: a
+				// refusal, not the path's availability.
+				cb.Release()
+				return nil, cb, err
+			}
 			if err != nil {
 				// Inner-deadline-only: the 10s defaultProbeTimeout cap
 				// fired but the caller's ctx is still healthy. Fall
@@ -938,6 +995,12 @@ func (c *HWPCaller) CallNode(ctx context.Context, nodeID, role, method string, p
 	}
 	if nodeID == "" {
 		return nil, fmt.Errorf("dispatch %s/%s: empty nodeID: %w", role, method, ErrNoRouteToNode)
+	}
+	// An undeclared class is refused here, before the finder is asked. The
+	// floor itself is the finder's to hold, in CallViaBidi, because only it
+	// knows which session the named node is reached on.
+	if _, err := classFloor(method, opClassFromContext(ctx)); err != nil {
+		return nil, fmt.Errorf("dispatch %s/%s to node %s: %w", role, method, nodeID, err)
 	}
 
 	var remaining time.Duration

@@ -15,7 +15,7 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
-	"github.com/bbmumford/loom/pkg/rpc"
+	"github.com/bbmumford/loom/pkg/dispatch"
 	"github.com/bbmumford/route"
 	"google.golang.org/protobuf/proto"
 )
@@ -60,45 +60,17 @@ type runtimeForwarder struct {
 // does not know. It unwraps to rpc.ErrGradeTooLow, which callers test with
 // errors.Is. Current is the best grade among the candidates and Required the
 // class's floor; for an unknown class both are zero, since it has no floor.
-type GradeTooLowError struct {
-	Handler      string
-	Class        string // the "opClass" hint as the request carried it; "" is Standard
-	Current      Grade
-	Required     Grade
-	UnknownClass bool
-}
-
-func (e *GradeTooLowError) Error() string {
-	if e.UnknownClass {
-		return fmt.Sprintf("forward %s: operation class %q is not declared: %v",
-			e.Handler, e.Class, rpc.ErrGradeTooLow)
-	}
-	class := e.Class
-	if class == "" {
-		class = OpClassStandard.String()
-	}
-	return fmt.Sprintf("forward %s: best path grade %s is below the %s floor of operation class %q: %v",
-		e.Handler, e.Current, e.Required, class, rpc.ErrGradeTooLow)
-}
-
-func (e *GradeTooLowError) Unwrap() error { return rpc.ErrGradeTooLow }
+//
+// It is dispatch's type under node's name: dispatch.HWPCaller returns the same
+// refusal for the first hop, and pkg/dispatch cannot import this package.
+type GradeTooLowError = dispatch.GradeTooLowError
 
 // RouteDeadlineError is Forward's refusal when the caller's remaining deadline
 // is shorter than every graded candidate's need, adaptiveRPCTimeout of its
 // session. It unwraps to rpc.ErrRouteDeadline. Need is the smallest need among
-// the candidates, so Remaining < Need always holds.
-type RouteDeadlineError struct {
-	Handler   string
-	Remaining time.Duration
-	Need      time.Duration
-}
-
-func (e *RouteDeadlineError) Error() string {
-	return fmt.Sprintf("forward %s: %v left, the next hop needs %v: %v",
-		e.Handler, e.Remaining, e.Need, rpc.ErrRouteDeadline)
-}
-
-func (e *RouteDeadlineError) Unwrap() error { return rpc.ErrRouteDeadline }
+// the candidates, so Remaining < Need always holds. Like GradeTooLowError it is
+// dispatch's type under node's name.
+type RouteDeadlineError = dispatch.RouteDeadlineError
 
 // hopFits reports whether ctx's remaining deadline covers a forward over
 // session, whose need is adaptiveRPCTimeout(session). A context without a

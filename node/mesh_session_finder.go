@@ -11,6 +11,7 @@ import (
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
 	lad "github.com/bbmumford/ledger"
+	"github.com/bbmumford/loom/pkg/dispatch"
 )
 
 // FindSession resolves a role + handler to an Aether session.
@@ -108,7 +109,9 @@ func (m *ConnectionManager) CallViaBidi(ctx context.Context, nodeID string, req 
 	if !sessOK || sess == nil {
 		return nil, false, nil
 	}
-	bidi, ok := m.GetBidiRPC(nodeID)
+	// The bidi registered on that same session, not a second lookup by node:
+	// the gate below grades sess, so the request must leave on sess.
+	bidi, ok := m.bidiForSession(sess)
 	if !ok {
 		return nil, false, nil
 	}
@@ -117,6 +120,14 @@ func (m *ConnectionManager) CallViaBidi(ctx context.Context, nodeID string, req 
 		// session's slot so subsequent dispatch rounds bypass it.
 		m.evictDeadBidiForSession(sess, bidi)
 		return nil, false, nil
+	}
+	// The grade gate on the session this request would leave on. HWPCaller
+	// gates the sessions it holds itself; it never holds this one, and for
+	// CallNode this is the only place the route's grade is known. A refusal is
+	// reported as handled (ok=true) so the caller returns it instead of
+	// trying its dynamic-stream arm.
+	if err := dispatch.CheckRouteGrade(req.Handler, req.Context["opClass"], sess); err != nil {
+		return nil, true, err
 	}
 	resp, err := bidi.Call(ctx, req)
 	if err != nil && !bidi.IsAlive() {
@@ -127,6 +138,16 @@ func (m *ConnectionManager) CallViaBidi(ctx context.Context, nodeID string, req 
 		return nil, false, nil
 	}
 	return resp, true, err
+}
+
+// bidiForSession returns the BidiRPC registered on exactly this session.
+// CallViaBidi uses it so the session it grades is the one the call leaves on;
+// GetBidiRPC resolves the node's session again and may pick a sibling.
+func (m *ConnectionManager) bidiForSession(sess aether.Session) (*BidiRPC, bool) {
+	m.dispatchMu.RLock()
+	defer m.dispatchMu.RUnlock()
+	bidi, ok := m.bidisBySession[sess]
+	return bidi, ok
 }
 
 // evictDeadBidiForSession removes the bidi entry for a specific session
