@@ -72,6 +72,12 @@ func newDeltaMeshRuntime(t *testing.T) (*Runtime, string) {
 // AcceptMeshConnection then starts the gossip initiator loop on the dialling
 // runtime and the responder loop on the accepting one. ProtoWebSocket selects
 // the session adapter for a reliable byte stream, which the connection is.
+//
+// Each end runs on a goroutine its runtime enrols with Runtime.Go, so that
+// runtime's Shutdown waits for it. AcceptMeshConnection's cleanup appends a
+// peer-state event to the LAD ledger, and Shutdown closes that ledger after
+// its wait: on a goroutine the wait does not cover, the append can reach a
+// closed ledger, whose broadcast then panics.
 func joinDeltaPeers(t *testing.T, dialler, accepter *Runtime) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -87,8 +93,12 @@ func joinDeltaPeers(t *testing.T, dialler, accepter *Runtime) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	go accepter.AcceptIncomingMeshSession(accepter.ctx, far, string(dialler.identity.NodeID), ProtoWebSocket, "", "", "", "")
-	go dialler.DialAndAcceptMesh(dialler.ctx, near, string(accepter.identity.NodeID), "", ProtoWebSocket, "", "", "", dialBorrowsConnectingState)
+	accepter.Go("test.accept_mesh_session", func() {
+		accepter.AcceptIncomingMeshSession(accepter.ctx, far, string(dialler.identity.NodeID), ProtoWebSocket, "", "", "", "")
+	})
+	dialler.Go("test.dial_mesh_session", func() {
+		dialler.DialAndAcceptMesh(dialler.ctx, near, string(accepter.identity.NodeID), "", ProtoWebSocket, "", "", "", dialBorrowsConnectingState)
+	})
 }
 
 // exchangeOverASession joins two runtimes and returns once the dialling
