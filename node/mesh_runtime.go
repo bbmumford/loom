@@ -191,7 +191,8 @@ func (rt *Runtime) DialAndAcceptMesh(ctx context.Context, conn net.Conn,
 	// before the handoff, so a conn parameter has to be followed back to its
 	// origin to say what its dial did.
 	//
-	// Every mesh dial site reaches the resume-capable dial for noise-UDP:
+	// Every caller of this function reaches the resume-capable dial for
+	// noise-UDP first:
 	//
 	//   ConnectionManager.connectPeer        <- dialWithProtocol
 	//   ConnectionManager.dialAdditionalPath <- dialWithProtocol
@@ -201,10 +202,15 @@ func (rt *Runtime) DialAndAcceptMesh(ctx context.Context, conn net.Conn,
 	//
 	// The hole-punch case hands over a NAT-punched socket, and it still takes
 	// the resume attempt: the punch coordinator is handed a dial closure that
-	// routes through the same transport. Every path converges on dialNoiseUDP ->
-	// tr.Dial -> NoiseTransport.Dial, takes its resume attempt there, and then
-	// hands the unwrapped conn down here to be re-wrapped as the mesh-level
-	// session.
+	// routes through the same transport. Each of these paths converges on
+	// dialNoiseUDP -> tr.Dial -> NoiseTransport.Dial, takes its resume attempt
+	// there, and then hands the unwrapped conn down here to be re-wrapped as
+	// the mesh-level session.
+	//
+	// Two more sites dial noise-UDP through that chain, so they take the resume
+	// attempt as well, but they return the connection to their own caller and
+	// never reach this function: TopologyRouter.dialDirect, through
+	// dialWithProtocol, and Runtime.DialByProtocol, through dialNoiseUDP.
 
 	if rt.connMgr != nil {
 		rt.connMgr.AcceptMeshConnection(ctx, AcceptMeshConnectionOpts{
