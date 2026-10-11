@@ -17,16 +17,15 @@ import (
 
 // — SCOPING THE RESPONSE-DEDUP CACHE KEY (the coding contract).
 //
-// The cache was keyed on the BARE req().Id: a caller-supplied wire string, in one
-// process-global namespace, read at handleRequest step 0a before any principal
-// is bound and written for every successful local execution with a 10s TTL.
-// Anything sharing an id collided regardless of who sent it or what it called.
+// req().Id is a caller-supplied wire string in one process-global namespace,
+// read at handleRequest step 0a before any principal is bound and written for
+// every successful local execution with a 10s TTL. A cache keyed on it alone
+// answers one request with another's response whenever two share an id,
+// regardless of who sent them or what they called.
 //
-// 🔴 THE IDS ARE NOT EVEN ADVERSARIAL IN PRACTICE. pkg/dispatch mints request
-// ids from a process-global base36 counter (hwp_dispatch.go:231), so two nodes
-// that boot together independently produce the same low ids. Cross-node
-// response substitution needed no attacker, only a coincidence that the design
-// made likely.
+// 🔴 THE KEY CANNOT REST ON THE IDS BEING UNIQUE. The ids this module mints
+// carry random bytes (pkg/dispatch newRequestID, BidiRPC.nextWireID), but the
+// server reads whatever id a peer sends, and a peer may send any.
 //
 // The four properties below are the whole contract. The THIRD is the one that
 // makes this a fix rather than a removal: scoping a key is only correct if

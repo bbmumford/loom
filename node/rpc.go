@@ -591,9 +591,10 @@ func callerNodeFromCtx(ctx context.Context) string {
 // alone, any two requests sharing an id collide regardless of who sent them or
 // what they called — peer A's `example.auth.Login` response answers peer B's
 // `example.dhcp.ListLeases`, because the only thing compared is "42" == "42".
-// pkg/dispatch mints these ids from a process-global base36 counter
-// (buildRPCRequestCtx in hwp_dispatch.go), so two nodes booting together
-// emit the same low ids.
+// The ids this module mints carry random bytes (newRequestID in
+// pkg/dispatch/hwp_dispatch.go, and a bidi channel's wire id in
+// BidiRPC.nextWireID) and do not collide by chance, but the server reads
+// whatever id a peer sends, so the key cannot rest on that.
 //
 // 🔑 LENGTH-PREFIXED, NOT DELIMITER-JOINED. requestID is fully caller-
 // controlled, so any fixed separator is forgeable: with "a|b|c" a caller could
