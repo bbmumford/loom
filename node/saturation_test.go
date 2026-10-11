@@ -76,12 +76,15 @@ func livePeer(crossOrigin bool, until int64) *peerConn {
 // than the publisher's TTL plus the admitted skew is no hint; a live hint
 // delays extra paths to a peer that already has a live one, whatever the
 // peer's address origin or grade; and a peer with no live path is never
-// backed off, because the dial is its only path.
+// backed off, because the dial is its only path, and a dormant transport is
+// not a live path.
 func TestPeerWantsBackoff(t *testing.T) {
 	m := &ConnectionManager{}
 	now := time.Unix(1_000_000, 0)
 	fresh := now.Add(saturationBackoffTTL / 2).Unix()
 	beyond := now.Add(saturationBackoffTTL + saturationBackoffSkew + time.Minute).Unix()
+	dormantOnly := livePeer(true, fresh)
+	dormantOnly.transports[ProtoWebSocket].isDormant = true
 
 	for _, tc := range []struct {
 		name string
@@ -98,6 +101,7 @@ func TestPeerWantsBackoff(t *testing.T) {
 		{"a deadline past the TTL and skew is no hint", livePeer(true, beyond), false},
 		{"a peer with no live path is never backed off",
 			&peerConn{peerSaturated: true, crossOrigin: true, peerBackoffUntil: fresh}, false},
+		{"a connected peer whose only transport is dormant is never backed off", dormantOnly, false},
 	} {
 		if got := m.peerWantsBackoff(tc.p, now); got != tc.want {
 			t.Errorf("%s: peerWantsBackoff = %v, want %v", tc.name, got, tc.want)
