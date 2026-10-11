@@ -304,7 +304,8 @@ func (m *ConnectionManager) snapshotUpgradeCandidates(now time.Time) []upgradeCa
 			// paths to it while its deadline is live. An upgrade probe is an
 			// extra path to a peer that already has one, which is the only
 			// dial peerWantsBackoff withholds; the probe resumes when the
-			// deadline elapses.
+			// deadline elapses, or when the peer's run of restamped
+			// deadlines has lasted saturationBackoffMaxEffect.
 			if wantsBackoff {
 				continue
 			}
