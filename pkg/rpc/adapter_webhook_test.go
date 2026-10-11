@@ -138,6 +138,9 @@ func TestExportedWebhookHandlerRefusesABadSignature(t *testing.T) {
 		{"payload altered after signing", newWebhookEvent(`{"id":"evt_forged"}`, stripeSign(webhookTestPayload, webhookTestSecret, now))},
 		{"signature outside the skew window", newWebhookEvent(webhookTestPayload, stripeSign(webhookTestPayload, webhookTestSecret, now-3600))},
 		{"no signature", newWebhookEvent(webhookTestPayload, "")},
+		// An event with neither field set marshals to no bytes, so the shim
+		// has nothing to decode and the check reads an empty request.
+		{"an empty event, which reaches the shim as no payload bytes", newWebhookEvent("", "")},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
