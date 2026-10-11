@@ -34,7 +34,16 @@ func NewLocalCaller(registry *handlers.HandlerRegistry) *LocalCaller {
 // Call dispatches an RPC to a handler registered in the local registry.
 // The role parameter is ignored (all handlers are local), but method must
 // match a registered handler name (e.g., "auth.validate_session").
+//
+// A call naming an operation class the grade gate does not declare is refused
+// before the handler runs, as HWPCaller.Call refuses it. A handler in this
+// process has no route to grade, so no class's floor applies here, but a
+// process serving through a LocalCaller during failover must refuse what the
+// same process refuses across the mesh.
 func (c *LocalCaller) Call(ctx context.Context, role, method string, payload []byte) ([]byte, error) {
+	if _, err := classFloor(method, opClassFromContext(ctx)); err != nil {
+		return nil, fmt.Errorf("local dispatch %s: %w", method, err)
+	}
 	req := &handlers.RPCRequest{
 		Handler: method,
 		Payload: payload,
