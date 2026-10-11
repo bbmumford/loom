@@ -780,7 +780,15 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 // Call and records the response under ttl. Handlers / callers that
 // know a method is non-idempotent must use Call directly so retries
 // don't return stale data.
+//
+// A call naming a class the gate does not declare is refused before the
+// cache is read, as Call refuses it: a hit here returns without reaching
+// Call, so Call's own check would never run for it.
 func (c *HWPCaller) CallCacheable(ctx context.Context, role, method string, payload []byte, ttl time.Duration) ([]byte, error) {
+	if _, err := classFloor(method, opClassFromContext(ctx)); err != nil {
+		c.metrics.RecordCall(role, 0, false)
+		return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, err)
+	}
 	fqn := role + "/" + method
 	if cached := c.LookupCachedResult(fqn, payload); cached != nil {
 		c.metrics.RecordCall(role, 0, true)
