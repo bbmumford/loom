@@ -85,8 +85,10 @@ func stripeSignedHeader(payload, secret string, at time.Time) string {
 // whenever the signature does not verify, on the path a mesh request takes
 // into this node: RPCServer.handleRequest finds the FQN in the registry
 // rpc.ExportToHandlerRegistry filled, and executeLocal dispatches it through
-// the registry shim, which runs the check rpc.Registry.Dispatch runs. The
-// admitted case runs the Func exactly once, so a server that refused every
+// the registry shim, which runs the check rpc.Registry.Dispatch runs. A request
+// with no payload bytes is checked like any other: the shim has nothing to
+// decode, and the check then reads an event with no payload and no signature.
+// The admitted case runs the Func exactly once, so a server that refused every
 // request would fail it.
 func TestAMeshWebhookRequestIsVerifiedBeforeTheHandlerRuns(t *testing.T) {
 	const signingSecret = "whsec_node_local"
@@ -123,19 +125,25 @@ func TestAMeshWebhookRequestIsVerifiedBeforeTheHandlerRuns(t *testing.T) {
 		name      string
 		secret    string
 		signature string
+		noPayload bool
 		refusal   error
 	}{
-		{"an unsigned event", signingSecret, "", rpc.ErrWebhookSignatureInvalid},
-		{"a signature under another secret", signingSecret, stripeSignedHeader(body, "whsec_other", now), rpc.ErrWebhookSignatureInvalid},
-		{"a signature outside the skew", signingSecret, stripeSignedHeader(body, signingSecret, now.Add(-time.Hour)), rpc.ErrWebhookSignatureInvalid},
-		{"no secret configured", "", stripeSignedHeader(body, signingSecret, now), rpc.ErrWebhookSecretUnset},
-		{"a valid signature", signingSecret, stripeSignedHeader(body, signingSecret, now), nil},
+		{"an unsigned event", signingSecret, "", false, rpc.ErrWebhookSignatureInvalid},
+		{"a signature under another secret", signingSecret, stripeSignedHeader(body, "whsec_other", now), false, rpc.ErrWebhookSignatureInvalid},
+		{"a signature outside the skew", signingSecret, stripeSignedHeader(body, signingSecret, now.Add(-time.Hour)), false, rpc.ErrWebhookSignatureInvalid},
+		{"no secret configured", "", stripeSignedHeader(body, signingSecret, now), false, rpc.ErrWebhookSecretUnset},
+		{"a request with no payload bytes", signingSecret, "", true, rpc.ErrWebhookSignatureInvalid},
+		{"a valid signature", signingSecret, stripeSignedHeader(body, signingSecret, now), false, nil},
 	} {
 		secret = tc.secret
 		calls = 0
-		payload, err := proto.Marshal(newLocalWebhookEvent(body, tc.signature))
-		if err != nil {
-			t.Fatalf("%s: proto.Marshal: %v", tc.name, err)
+		var payload []byte
+		if !tc.noPayload {
+			encoded, err := proto.Marshal(newLocalWebhookEvent(body, tc.signature))
+			if err != nil {
+				t.Fatalf("%s: proto.Marshal: %v", tc.name, err)
+			}
+			payload = encoded
 		}
 		resp := server.handleRequest(context.Background(), &pb.RPCRequest{
 			Id:      fmt.Sprintf("webhook-%d", i),
