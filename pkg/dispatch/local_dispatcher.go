@@ -7,6 +7,7 @@ package dispatch
 
 import (
 	"context"
+	"fmt"
 	"sync"
 )
 
@@ -69,6 +70,12 @@ func LocalDispatcherInstance() LocalDispatcher {
 //
 // Exported so dispatch.CallJSON / CallProto and rpc.Call / CallRaw
 // share one implementation.
+//
+// A call naming a class the grade gate does not declare is refused here,
+// as handled, before the local handler runs. A handler in this process has
+// no route to grade, so the class's floor does not apply, but the same
+// call sent across the mesh is refused by HWPCaller.Call, and whether a
+// handler is local must not decide whether an undeclared class runs.
 func TryLocalDispatch(ctx context.Context, name string, payload []byte) (out []byte, handled bool, err error) {
 	d := LocalDispatcherInstance()
 	if d == nil {
@@ -76,6 +83,9 @@ func TryLocalDispatch(ctx context.Context, name string, payload []byte) (out []b
 	}
 	if !d.HasHandler(name) {
 		return nil, false, nil
+	}
+	if _, err := classFloor(name, opClassFromContext(ctx)); err != nil {
+		return nil, true, fmt.Errorf("dispatch %s: %w", name, err)
 	}
 	out, err = d.DispatchBytes(ctx, name, payload)
 	return out, true, err
