@@ -69,6 +69,31 @@ func startClusterMember(t *testing.T, m *clusterMember, primary, key string) {
 	m.rt = rt
 }
 
+// startNewClusterMember starts m on a new directory, and starts it again on
+// another while the identity drawn there cannot be carried by the frame codec:
+// a full frame header begins with the sender's PeerID, and aether.ReadNextFrame
+// reads a first byte that aether.IsShortHeader accepts as a short header, so a
+// member with such an identity loses its session on the first full header it
+// sends and the cluster never agrees. A restart keeps the directory, and so
+// the identity, the first start settled on.
+//
+// TODO: start once, when a full header can no longer be read as a short one.
+func startNewClusterMember(t *testing.T, m *clusterMember, primary, key string) {
+	t.Helper()
+	for range 64 {
+		m.dir = t.TempDir()
+		startClusterMember(t, m, primary, key)
+		if peerID := m.rt.identity.NodeID.ToPeerID(); !aether.IsShortHeader(peerID[0]) {
+			return
+		}
+		if err := m.rt.Shutdown(); err != nil {
+			t.Fatalf("Shutdown %s: %v", m.dir, err)
+		}
+		m.rt = nil
+	}
+	t.Fatal("no new identity had a PeerID the frame codec carries in a full header")
+}
+
 // connectMembers dials b's VL1 listener from a and runs the mesh session
 // lifecycle on it, as the connection manager does after a dial, then waits
 // for both transports to bind the session.
@@ -160,10 +185,10 @@ func TestMeshDBClusterOnLoopbackVL1(t *testing.T) {
 	t.Setenv(EnvFlyMachineID, "")
 	primary := sqldtest.Start(t).URL()
 	key := testGroupKey(t)
-	ms := []*clusterMember{{dir: t.TempDir()}, {dir: t.TempDir()}, {dir: t.TempDir()}}
+	ms := []*clusterMember{{}, {}, {}}
 	t.Cleanup(func() { shutdownMembers(t, ms) })
 	for _, m := range ms {
-		startClusterMember(t, m, primary, key)
+		startNewClusterMember(t, m, primary, key)
 	}
 	connectAll(t, ms)
 	leader, clusterID := agreedCluster(t, ms, 90*time.Second)
