@@ -38,12 +38,13 @@ const meshDBMaxChunk = 32 * 1024
 // It is an io.ReadWriteCloser, not a net.Conn: yamux sets no deadline on the
 // connection it runs over, and the Raft streams tursoraft sees are yamux
 // streams, whose deadlines yamux enforces. What yamux needs from below is that
-// a write cannot block forever, and aether's own net.Conn view
-// (adapter.StreamConn) ignores SetWriteDeadline. So every Send carries its own
-// timer: a Send waiting on flow-control credit from a peer that stopped reading
-// would otherwise hold yamux's send goroutine, and with it every Raft stream
-// on the channel. A Send that times out resets the aether stream, which fails
-// yamux's send loop and closes the channel.
+// a write cannot block forever, and since yamux sets no write deadline, the
+// bound has to come from this wrapper whatever view of the stream it uses; it
+// sends on the aether stream directly, so every Send carries its own timer. A
+// Send waiting on flow-control credit from a peer that stopped reading would
+// otherwise hold yamux's send goroutine, and with it every Raft stream on the
+// channel. A Send that times out resets the aether stream, which fails yamux's
+// send loop and closes the channel.
 //
 // Close resets the stream instead of closing it. A reset removes the stream
 // from both sessions' stream tables at once, so the peer's end fails and the
