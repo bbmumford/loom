@@ -91,8 +91,11 @@ func AuthenticatedScopeIdentityFromContext(ctx context.Context) AuthenticatedSco
 	return rpcscope.AuthenticatedIdentityFromContext(ctx)
 }
 
-// OpClassFromContext extracts opClass (set by the caller via
-// dispatch.WithOpClass). Receivers use this for stream-priority routing.
+// OpClassFromContext extracts the opClass entry of the request's context map:
+// the class the calling process named with dispatch.WithOpClass, which
+// dispatch carries in the request it sends. Receivers use it for
+// stream-priority routing. It reads nothing dispatch.WithOpClass wrote into a
+// context of this process.
 func OpClassFromContext(ctx context.Context) string {
 	return rpcContextMap(ctx)["opClass"]
 }
