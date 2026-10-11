@@ -175,18 +175,26 @@ func TestASuppliedPolicyKeepsTheSelfOwnedPrefixes(t *testing.T) {
 	n := newTrustNode(t)
 	admin := newTrustNode(t)
 	check := enforcingGate(t, &directory.PolicyConfig{})
-	for _, topic := range directory.SelfOwnedPublishPrefixes {
-		if err := check(n.record(topic)); err != nil {
-			t.Errorf("a supplied policy without self-owned prefixes refused %q: %v", topic, err)
-		}
-	}
-
+	// The node's own record on each self-owned rule: the three topics the
+	// rules name, and under the latency namespace the topic its id forms.
 	ownLatency := string(directory.LatencyTopic(n.id))
 	selfOwned := []string{
 		string(directory.FleetPeerTopic),
 		string(directory.FleetRouteTopic),
 		string(directory.MeshDBMemberTopic),
 		ownLatency,
+	}
+	for _, topic := range selfOwned {
+		if err := check(n.record(topic)); err != nil {
+			t.Errorf("a supplied policy without self-owned prefixes refused %q: %v", topic, err)
+		}
+	}
+	// The latency namespace is per node: the gate refuses a node another
+	// node's topic and the bare namespace, whatever policy is supplied.
+	for _, topic := range []string{string(directory.LatencyTopic(admin.id)), directory.LatencyTopicPrefix} {
+		if err := check(n.record(topic)); err == nil {
+			t.Errorf("a supplied policy without self-owned prefixes admitted a node on %q, a latency topic that is not its own", topic)
+		}
 	}
 	writers := []ports.NodeID{admin.id}
 	for _, tc := range []struct {
