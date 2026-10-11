@@ -50,9 +50,10 @@ type Policy struct {
 	openPublish map[string]bool
 
 	// selfOwnedOpen holds the SelfOwnedPublishPrefixes rules this policy
-	// opens. AuthorizePublish admits a topic one of them covers before it
-	// reads publishPrefixes, so no restricted rule closes a topic every
-	// node publishes about itself.
+	// opens. AuthorizePublish decides a topic one of them covers before it
+	// reads publishPrefixes, so no restricted rule closes a topic every node
+	// publishes about itself. A rule naming one topic admits that topic; a
+	// namespace rule admits a node only on the topic its own id forms there.
 	selfOwnedOpen []string
 
 	// revoked keys, by canonical aether NodeID.
@@ -68,7 +69,8 @@ type PolicyConfig struct {
 	RoleEntitlements map[string][]ports.NodeID
 	// OpenPublishPrefixes lists the rules whose topics ANY key-bound node
 	// may publish (self-owned records like fleet.peer). A rule covers topics
-	// as PublishPrefixes describes.
+	// as PublishPrefixes describes, except that a SelfOwnedPublishPrefixes
+	// namespace admits a node only on the topic its own id forms there.
 	OpenPublishPrefixes []string
 	// PublishPrefixes lists restricted rules and their allowed writers. A
 	// rule ending in "." covers every topic beneath that namespace, the
