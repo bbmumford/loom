@@ -631,14 +631,22 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 		}
 	}
 
-	// 0b. Absolute deadline check — reject if already expired
-	if req.Deadline > 0 && time.Now().UnixNano() > req.Deadline {
-		return &pb.RPCResponse{
+	// 0b. Absolute deadline — a request that arrives past its deadline is
+	// refused before it is executed or forwarded, with the typed refusal the
+	// forwarder gives one it meets expired. The refusal is stamped on the
+	// response because the Error text alone reaches the origin as a handler
+	// rejection, which dispatch.HWPCaller cannot tell from the handler having
+	// run and failed.
+	if now := time.Now().UnixNano(); req.Deadline > 0 && now > req.Deadline {
+		refusal := &RouteDeadlineError{Handler: req.Handler, Remaining: time.Duration(req.Deadline - now)}
+		resp := &pb.RPCResponse{
 			Id:        req.Id,
 			Success:   false,
-			Error:     "request deadline exceeded at hop",
+			Error:     refusal.Error(),
 			LatencyNs: int64(time.Since(startTime)),
 		}
+		dispatch.StampRefusal(resp, refusal)
+		return resp
 	}
 
 	// 0c. Operation class — a request naming a class the grade gate does not
