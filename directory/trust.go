@@ -164,9 +164,10 @@ func (p *Policy) VerifyNodeKey(id ports.NodeID, pub ed25519.PublicKey) error {
 
 // AuthorizePublish implements ports.TrustPolicy. After the key and partition
 // checks it reads the publish rules in one order: a self-owned rule this
-// policy opens admits; else the longest restricted rule covering the topic
-// decides for its writers alone; else any open rule admits; else the topic
-// matches no rule and is refused.
+// policy opens decides, admitting a topic it names and, under a namespace,
+// only the publishing node's own topic; else the longest restricted rule
+// covering the topic decides for its writers alone; else any open rule
+// admits; else the topic matches no rule and is refused.
 //
 // The self-owned rules are read first because every node republishes its
 // PeerRecord on FleetPeerTopic and node's enforcing swarm trust gate calls
@@ -182,9 +183,19 @@ func (p *Policy) AuthorizePublish(_ context.Context, pr ports.Principal, topic p
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	for _, own := range p.selfOwnedOpen {
-		if ruleCovers(own, string(topic)) {
-			return nil
+		if !ruleCovers(own, string(topic)) {
+			continue
 		}
+		// A self-owned namespace holds one topic per node, the one that
+		// node's id forms under it (LatencyTopic). SwarmDirectory.project
+		// reads the owning node from the topic and replaces or deletes that
+		// node's samples, so the namespace admits a node on its own topic
+		// and refuses it every other topic beneath it.
+		if strings.HasSuffix(own, ".") && string(topic) != own+string(pr.NodeID) {
+			return fmt.Errorf("trust: node %s may publish under %s only on its own topic, not %s",
+				short(pr.NodeID), own, topic)
+		}
+		return nil
 	}
 	rule, restricted := p.longestPrefixLocked(string(topic))
 	if restricted {
