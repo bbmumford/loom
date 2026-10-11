@@ -55,7 +55,7 @@ func startDeltaMeshRuntime(t *testing.T, dir string) *Runtime {
 func newDeltaMeshRuntime(t *testing.T) (*Runtime, string) {
 	t.Helper()
 	for range 64 {
-		dir := deltaDataDir(t)
+		dir := t.TempDir()
 		rt := startDeltaMeshRuntime(t, dir)
 		if peerID := rt.identity.NodeID.ToPeerID(); !aether.IsShortHeader(peerID[0]) {
 			return rt, dir
@@ -183,7 +183,7 @@ func TestTheGossipLoopsUseTheRuntimesTrackerAcrossARestart(t *testing.T) {
 	if err := first.Shutdown(); err != nil {
 		t.Fatalf("Shutdown: %v", err)
 	}
-	waitForPersistedPeer(t, dir, peerID)
+	requirePersistedPeer(t, dir, peerID)
 	waitMeshDB(t, 10*time.Second, "the peer to see the stopped runtime's session close", func() bool {
 		return !holdsOpenMeshSession(peer, self)
 	})

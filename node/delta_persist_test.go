@@ -170,62 +170,50 @@ func TestACorruptedFileErrorsRatherThanLookingLikeAFirstBoot(t *testing.T) {
 	}
 }
 
-// deltaDataDir is a data directory for a runtime whose tracker persists. The
-// tracker's final save runs on its own goroutine after the runtime's context
-// ends, so removal retries until that write has landed; t.TempDir's single
-// RemoveAll would race it. Call it before deltaRuntime, so this cleanup runs
-// after the runtime's cancel.
-func deltaDataDir(t *testing.T) string {
-	t.Helper()
-	dir, err := os.MkdirTemp("", "loom-delta-")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		deadline := time.Now().Add(3 * time.Second)
-		for {
-			err := os.RemoveAll(dir)
-			if err == nil || time.Now().After(deadline) {
-				return
-			}
-			time.Sleep(10 * time.Millisecond)
-		}
-	})
-	return dir
-}
-
 // deltaRuntime is a runtime generation with durable storage under dir, which
-// is what startDeltaTracker attaches persistence for.
+// is what startDeltaTracker attaches persistence for. Its cleanup stops it the
+// way Shutdown does, cancel then wait for the goroutines Runtime.Go enrolled,
+// so the tracker's last save has landed before the test's directory goes.
 func deltaRuntime(t *testing.T, dir string) *Runtime {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-	return &Runtime{
+	rt := &Runtime{
 		cfg:    Config{DataDir: dir, LAD: LADDirectoryConfig{Storage: "local"}},
 		ctx:    ctx,
 		cancel: cancel,
 	}
+	t.Cleanup(func() { stopDeltaRuntime(rt) })
+	return rt
 }
 
-// waitForPersistedPeer polls the watermarks file until it lists peer.
-func waitForPersistedPeer(t *testing.T, dir, peer string) {
+// stopDeltaRuntime runs the two steps of Shutdown a deltaRuntime has state
+// for: cancel the runtime's context, then wait for the goroutines Runtime.Go
+// enrolled, the tracker's save waiter among them.
+func stopDeltaRuntime(rt *Runtime) {
+	rt.cancel()
+	rt.wg.Wait()
+}
+
+// requirePersistedPeer reads the watermarks file once and fails unless it
+// lists peer. Its callers stop the runtime first, so the read needs no retry:
+// a stopped runtime has written its last save.
+func requirePersistedPeer(t *testing.T, dir, peer string) {
 	t.Helper()
 	path := filepath.Join(dir, ".mesh", "watermarks.json")
-	deadline := time.Now().Add(3 * time.Second)
-	for time.Now().Before(deadline) {
-		if data, err := os.ReadFile(path); err == nil {
-			var states []whisper.PersistedPeerState
-			if json.Unmarshal(data, &states) == nil {
-				for _, s := range states {
-					if s.PeerID == peer {
-						return
-					}
-				}
-			}
-		}
-		time.Sleep(10 * time.Millisecond)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("the runtime stopped before its watermarks were written: %v", err)
 	}
-	t.Fatalf("%s never listed a watermark for peer %q", path, peer)
+	var states []whisper.PersistedPeerState
+	if err := json.Unmarshal(data, &states); err != nil {
+		t.Fatalf("%s does not decode: %v", path, err)
+	}
+	for _, s := range states {
+		if s.PeerID == peer {
+			return
+		}
+	}
+	t.Fatalf("the runtime stopped with no watermark for peer %q in %s", peer, path)
 }
 
 // A runtime generation that stops saves its watermarks, and the next
@@ -233,14 +221,14 @@ func waitForPersistedPeer(t *testing.T, dir, peer string) {
 // whose watermark is fresh: its first exchange is a delta from that watermark,
 // not a full snapshot.
 func TestARestartedRuntimeResumesDeltaExchangeWithAnUnchangedPeer(t *testing.T) {
-	dir := deltaDataDir(t)
+	dir := t.TempDir()
 	first := deltaRuntime(t, dir)
 	first.startDeltaTracker()
 	for i := 0; i < 3; i++ {
 		first.deltaTracker.UpdateWatermark("peer-a", time.Now())
 	}
-	first.cancel()
-	waitForPersistedPeer(t, dir, "peer-a")
+	stopDeltaRuntime(first)
+	requirePersistedPeer(t, dir, "peer-a")
 
 	second := deltaRuntime(t, dir)
 	second.startDeltaTracker()
@@ -261,8 +249,8 @@ func TestARestartedRuntimeResumesDeltaExchangeWithAnUnchangedPeer(t *testing.T) 
 // Two runtimes in one process keep separate watermarks: an exchange one of
 // them records with a peer leaves the other with no watermark for it.
 func TestTwoRuntimesInOneProcessKeepSeparateWatermarks(t *testing.T) {
-	a := deltaRuntime(t, deltaDataDir(t))
-	b := deltaRuntime(t, deltaDataDir(t))
+	a := deltaRuntime(t, t.TempDir())
+	b := deltaRuntime(t, t.TempDir())
 	a.startDeltaTracker()
 	b.startDeltaTracker()
 
@@ -279,7 +267,7 @@ func TestTwoRuntimesInOneProcessKeepSeparateWatermarks(t *testing.T) {
 // so the first exchange with that peer is a full snapshot: the peer has
 // likely evicted the records the old watermark marks.
 func TestAWatermarkPastTheStalenessBoundIsDropped(t *testing.T) {
-	dir := deltaDataDir(t)
+	dir := t.TempDir()
 	stale := time.Now().Add(-(deltaWatermarkMaxAge + 10*time.Minute))
 	if err := NewJSONDeltaPersistence(dir).Save([]whisper.PersistedPeerState{
 		{PeerID: "peer-old", Watermark: stale, ExchangeCount: 3, LastActivity: stale},
