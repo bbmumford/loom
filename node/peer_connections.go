@@ -194,11 +194,16 @@ type peerConn struct {
 	peerRegion  string // peer's region from reach record
 	// peerSaturated / peerBackoffUntil mirror the peer's advertised
 	// connection-budget pressure (the saturated=1 / backoff_until tags),
-	// refreshed from the swarm DialCandidate in scanAndConnect. The scaler and
-	// upgrade walker read them under m.mu via peerWantsBackoff rather than a
-	// cache round-trip.
+	// refreshed from the swarm DialCandidate in scanAndConnect through
+	// readBackoffHint. The scaler and upgrade walker read them under m.mu via
+	// peerWantsBackoff rather than a cache round-trip.
 	peerSaturated    bool
 	peerBackoffUntil int64
+	// peerBackoffSince is the instant, on this node's clock, of the reading
+	// that began the peer's current unbroken run of live hints; readBackoffHint
+	// sets it. It says nothing while peerSaturated and peerBackoffUntil are not
+	// a live hint. peerWantsBackoff bounds the run's effect from it.
+	peerBackoffSince time.Time
 	// discoveredAt is the wall-clock time the entry was first added to the
 	// peers map. Distinct from lastConnected (which only updates on a
 	// successful Accept) so pruneStalePeers can age out PEX/LAD-discovered
@@ -423,16 +428,55 @@ func backoffHintLive(until int64, now time.Time) bool {
 	return until <= now.Add(saturationBackoffTTL+saturationBackoffSkew).Unix()
 }
 
+// saturationBackoffMaxEffect is the longest this node withholds extra paths
+// from a peer on one unbroken run of that peer's backoff hints, measured on
+// this node's clock from the first hint of the run (peerConn.peerBackoffSince).
+// A publisher stamps each deadline saturationBackoffTTL ahead and restamps it
+// on every publish (Runtime.localSaturation, PeerPublisher.publishOnce), so a
+// peer that publishes before its last deadline lapses keeps its hint live for
+// as long as it goes on publishing. Without this bound the upgrade walker's
+// probe and saturationCap's growth limit would wait on that peer's publishing
+// with no end this node controls. One hint asks for saturationBackoffTTL, so a
+// run is given that long.
+const saturationBackoffMaxEffect = saturationBackoffTTL
+
+// readBackoffHint stores a peer's advertised saturation as scanAndConnect
+// reads it from the peer's swarm dial candidates, and keeps the instant the
+// peer's current run of live hints began. A run is unbroken while each
+// reading is a live hint (backoffHintLive) that arrives before the deadline
+// the reading before it stored has lapsed. So when the stored tag and
+// deadline are no live hint at now, because the peer cleared its tag or let
+// its deadline lapse, no run is in progress and this reading starts one.
+// peerWantsBackoff measures saturationBackoffMaxEffect from that instant.
+// Caller must hold ConnectionManager.mu.
+func (p *peerConn) readBackoffHint(saturated bool, until int64, now time.Time) {
+	if !p.peerSaturated || !backoffHintLive(p.peerBackoffUntil, now) {
+		p.peerBackoffSince = now
+	}
+	p.peerSaturated, p.peerBackoffUntil = saturated, until
+}
+
 // peerWantsBackoff reports whether a peer's advertised saturation should make us
 // stop opening fresh paths to it: the peer is tagged saturated, its deadline is
-// a live hint (backoffHintLive), and the peer already has a live path. The
-// last condition is the path evidence that keeps the hint advisory: the
-// backoff only ever withholds an additional path (saturationCap's growth
-// limit, the upgrade walker's extra-path probe), so a peer with no live path,
-// for which the dial is the only path, is never backed off. The decision reads
-// no address origin and no grade. Caller must hold ConnectionManager.mu.
+// a live hint (backoffHintLive), the run of hints it belongs to began less
+// than saturationBackoffMaxEffect ago on this node's clock, and the peer
+// already has a live path.
+//
+// The run's start is the instant readBackoffHint recorded. A deadline that
+// did not come through readBackoffHint has the zero instant, which is further
+// back than the bound, so it is no hint: its effect would have nothing to be
+// bounded from.
+//
+// The live path is the path evidence that keeps the hint advisory: the backoff
+// only ever withholds an additional path (saturationCap's growth limit, the
+// upgrade walker's extra-path probe), so a peer with no live path, for which
+// the dial is the only path, is never backed off. The decision reads no
+// address origin and no grade. Caller must hold ConnectionManager.mu.
 func (m *ConnectionManager) peerWantsBackoff(p *peerConn, now time.Time) bool {
 	if p == nil || !p.peerSaturated || !backoffHintLive(p.peerBackoffUntil, now) {
+		return false
+	}
+	if now.Sub(p.peerBackoffSince) >= saturationBackoffMaxEffect {
 		return false
 	}
 	return p.hasActiveTransport()
@@ -2567,7 +2611,9 @@ func (m *ConnectionManager) scanAndConnect(ctx context.Context) {
 			}
 			// Peer-level saturation bit — identical across all of this peer's
 			// candidates (saturation is a node property), so read it from the
-			// first. cands is non-empty here (guarded above).
+			// first. cands is non-empty here (guarded above). Both branches
+			// below store it through readBackoffHint, which also keeps the
+			// instant peerWantsBackoff bounds the hint's effect from.
 			pSat, pUntil := cands[0].Saturated, cands[0].BackoffUntil
 			if existing, ok := m.peers[nodeID]; ok {
 				seen := make(map[lad.ReachAddress]struct{}, len(existing.addresses))
@@ -2610,21 +2656,20 @@ func (m *ConnectionManager) scanAndConnect(ctx context.Context) {
 					existing.peerRegion = peerRegion
 					existing.crossRegion = m.isCrossRegion(peerRegion)
 				}
-				existing.peerSaturated = pSat
-				existing.peerBackoffUntil = pUntil
+				existing.readBackoffHint(pSat, pUntil, time.Now())
 			} else {
-				m.peers[nodeID] = &peerConn{
-					nodeID:           nodeID,
-					addresses:        addrs,
-					state:            PeerDiscovered,
-					discoveredAt:     time.Now(),
-					crossOrigin:      m.isCrossOrigin(addrs),
-					crossRegion:      m.isCrossRegion(peerRegion),
-					peerRegion:       peerRegion,
-					reconnectDelay:   baseCooldown,
-					peerSaturated:    pSat,
-					peerBackoffUntil: pUntil,
+				added := &peerConn{
+					nodeID:         nodeID,
+					addresses:      addrs,
+					state:          PeerDiscovered,
+					discoveredAt:   time.Now(),
+					crossOrigin:    m.isCrossOrigin(addrs),
+					crossRegion:    m.isCrossRegion(peerRegion),
+					peerRegion:     peerRegion,
+					reconnectDelay: baseCooldown,
 				}
+				added.readBackoffHint(pSat, pUntil, time.Now())
+				m.peers[nodeID] = added
 			}
 		}
 	}
