@@ -34,7 +34,7 @@ func classifyMeshError(err error) (status int, retryAfter string, retryEligible 
 	if err == nil {
 		return 500, "", false
 	}
-	if errors.Is(err, context.DeadlineExceeded) {
+	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, dispatch.ErrRouteDeadline) {
 		return 504, "", false
 	}
 	if errors.Is(err, dispatch.ErrCircuitOpen) {

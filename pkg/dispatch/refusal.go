@@ -27,7 +27,8 @@ var ErrGradeTooLow = errors.New("connection grade too low for operation")
 
 // ErrRouteDeadline is what every deadline refusal unwraps to: the caller's
 // remaining time does not cover the hop the request would have been sent to,
-// so nothing was sent.
+// so it was not sent on, or the request reached a server after its deadline
+// had passed, so it was not run.
 var ErrRouteDeadline = errors.New("remaining deadline does not cover the next hop")
 
 // GradeTooLowError is the typed grade refusal. Current is the best grade among
@@ -177,8 +178,8 @@ const (
 // StampRefusal records err on resp when err is a typed route refusal, so the
 // node that receives resp can return the same typed error to its caller. Any
 // other error leaves resp as it is. node's RPCServer calls it on the failed
-// response it builds for a refused forward and for a request naming an
-// undeclared class.
+// response it builds for a refused forward, for a request naming an
+// undeclared class, and for a request that arrived after its deadline.
 func StampRefusal(resp *pb.RPCResponse, err error) {
 	if resp == nil {
 		return

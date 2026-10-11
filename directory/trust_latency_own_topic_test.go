@@ -7,6 +7,7 @@ package directory
 
 import (
 	"context"
+	"strings"
 	"testing"
 
 	"github.com/bbmumford/loom/ports"
@@ -40,6 +41,9 @@ func TestANodePublishesLatencyOnlyUnderItsOwnID(t *testing.T) {
 			LatencyTopic(node.NodeID) + ".x",
 			ports.Topic(LatencyTopicPrefix),
 			ports.Topic(LatencyTopicPrefix + "unrelated"),
+			ports.Topic(LatencyTopicPrefix + "junk" + string(node.NodeID)),
+			LatencyTopic(other.NodeID) + ports.Topic("."+string(node.NodeID)),
+			ports.Topic(LatencyTopicPrefix + strings.ToUpper(string(node.NodeID))),
 		} {
 			if err := p.AuthorizePublish(ctx, node, topic); err == nil {
 				t.Errorf("%s: a bound node was admitted on %q, a latency topic that is not its own", name, topic)

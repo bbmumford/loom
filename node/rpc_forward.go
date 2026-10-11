@@ -67,7 +67,8 @@ type GradeTooLowError = dispatch.GradeTooLowError
 
 // RouteDeadlineError is Forward's refusal when the caller's remaining deadline
 // is shorter than every graded candidate's need, adaptiveRPCTimeout of its
-// session, or when the request's absolute deadline has already passed. It
+// session, or when the request's absolute deadline has already passed, and
+// RPCServer's refusal of a request that arrives after that deadline. It
 // unwraps to rpc.ErrRouteDeadline. Need is the smallest need among the
 // candidates, so Remaining < Need always holds; an expired request has no
 // candidates yet, so Need is zero and Remaining negative. Like

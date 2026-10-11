@@ -25,9 +25,10 @@ const FleetRouteTopic = ports.Topic("fleet.route")
 // covers no topic that only starts with it (Policy.AuthorizePublish). A Policy
 // must allow these openly, because AuthorizePublish fails closed on any topic
 // matching no rule — so a Policy that omits them rejects a node's own
-// heartbeat, and every node heartbeats. A Policy that opens one admits its
+// heartbeat, and every node heartbeats. A Policy that opens one decides its
 // topics before it reads any restricted rule, so a PolicyConfig.PublishPrefixes
-// rule above or on a self-owned topic does not close it. The role topics
+// rule above or on a self-owned topic does not close it; under the latency
+// namespace it admits a node only on the topic the node's own id forms. The role topics
 // (secrets.ClaimTopicPrefix and secrets.TopicPrefix, "role.claim.<role>" and
 // "role.secrets.<role>") are deliberately absent: only a role's entitled nodes
 // may write them, so WithRoleEntitlements puts them in
