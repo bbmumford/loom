@@ -69,29 +69,12 @@ func startClusterMember(t *testing.T, m *clusterMember, primary, key string) {
 	m.rt = rt
 }
 
-// startNewClusterMember starts m on a new directory, and starts it again on
-// another while the identity drawn there cannot be carried by the frame codec:
-// a full frame header begins with the sender's PeerID, and aether.ReadNextFrame
-// reads a first byte that aether.IsShortHeader accepts as a short header, so a
-// member with such an identity loses its session on the first full header it
-// sends and the cluster never agrees. A restart keeps the directory, and so
-// the identity, the first start settled on.
-//
-// TODO: start once, when a full header can no longer be read as a short one.
+// startNewClusterMember starts m on a new directory, which gives it a new
+// identity; a restart keeps the directory, and so the identity.
 func startNewClusterMember(t *testing.T, m *clusterMember, primary, key string) {
 	t.Helper()
-	for range 64 {
-		m.dir = t.TempDir()
-		startClusterMember(t, m, primary, key)
-		if peerID := m.rt.identity.NodeID.ToPeerID(); !aether.IsShortHeader(peerID[0]) {
-			return
-		}
-		if err := m.rt.Shutdown(); err != nil {
-			t.Fatalf("Shutdown %s: %v", m.dir, err)
-		}
-		m.rt = nil
-	}
-	t.Fatal("no new identity had a PeerID the frame codec carries in a full header")
+	m.dir = t.TempDir()
+	startClusterMember(t, m, primary, key)
 }
 
 // connectMembers dials b's VL1 listener from a and runs the mesh session

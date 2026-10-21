@@ -5,6 +5,7 @@
 package streams
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/ORBTR/aether"
@@ -211,6 +212,30 @@ func TestDefaultLatencyClassKeepsPeerStreamsInteractive(t *testing.T) {
 func TestRegistryVersionIsDeclared(t *testing.T) {
 	if RegistryVersion < 1 {
 		t.Errorf("RegistryVersion = %d, want at least 1", RegistryVersion)
+	}
+}
+
+// The registry's version is an entry of every mesh session's wire version
+// offer, required, so two peers reading different tables are refused before
+// either opens a stream, and the refusal names the entry.
+func TestRegistryVersionIsARequiredWireVersion(t *testing.T) {
+	w := WireVersions()
+	if len(w) != 1 || w[0].Name != WireVersionRegistry || !w[0].Required ||
+		len(w[0].Versions) != 1 || w[0].Versions[0] != RegistryVersion {
+		t.Fatalf("WireVersions() = %+v, want streams.registry at %d, required", w, RegistryVersion)
+	}
+	if err := w.Validate(); err != nil {
+		t.Fatalf("entry is not canonical: %v", err)
+	}
+	if _, err := aether.ChooseWireVersions(w, WireVersions()); err != nil {
+		t.Fatalf("two peers reading this table refuse each other: %v", err)
+	}
+	other := WireVersions()
+	other[0].Versions = []uint16{RegistryVersion + 1}
+	_, err := aether.ChooseWireVersions(w, other)
+	var me *aether.WireVersionMismatchError
+	if !errors.As(err, &me) || me.Name != WireVersionRegistry {
+		t.Fatalf("a peer reading table %d: err = %v, want a mismatch naming %s", RegistryVersion+1, err, WireVersionRegistry)
 	}
 }
 

@@ -26,10 +26,18 @@ const (
 // does not know or care about record structure. Each consumer defines its
 // own record proto; LADRecord below is the directory's, and the envelope
 // does not depend on it.
+//
+// codec_version and schema_version name the encoding of the envelope and of
+// its records. The sender writes the pair its session's negotiated
+// gossip.codec version maps to, and the receiver reads the two fields before it
+// decodes meta or any record, refusing a pair that version does not write
+// (loom core/directory/gossip checkEnvelopeVersions).
 type GossipEnvelope struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Meta          *ExchangeMeta          `protobuf:"bytes,1,opt,name=meta,proto3" json:"meta,omitempty"`
 	Records       [][]byte               `protobuf:"bytes,2,rep,name=records,proto3" json:"records,omitempty"` // opaque serialised records
+	CodecVersion  uint32                 `protobuf:"varint,3,opt,name=codec_version,json=codecVersion,proto3" json:"codec_version,omitempty"`
+	SchemaVersion uint32                 `protobuf:"varint,4,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -76,6 +84,20 @@ func (x *GossipEnvelope) GetRecords() [][]byte {
 		return x.Records
 	}
 	return nil
+}
+
+func (x *GossipEnvelope) GetCodecVersion() uint32 {
+	if x != nil {
+		return x.CodecVersion
+	}
+	return 0
+}
+
+func (x *GossipEnvelope) GetSchemaVersion() uint32 {
+	if x != nil {
+		return x.SchemaVersion
+	}
+	return 0
 }
 
 // ExchangeMeta carries per-exchange metadata piggybacked on gossip frames.
@@ -512,10 +534,12 @@ var File_gossip_proto protoreflect.FileDescriptor
 
 const file_gossip_proto_rawDesc = "" +
 	"\n" +
-	"\fgossip.proto\x12\x13loom.mesh.gossip.v1\"a\n" +
+	"\fgossip.proto\x12\x13loom.mesh.gossip.v1\"\xad\x01\n" +
 	"\x0eGossipEnvelope\x125\n" +
 	"\x04meta\x18\x01 \x01(\v2!.loom.mesh.gossip.v1.ExchangeMetaR\x04meta\x12\x18\n" +
-	"\arecords\x18\x02 \x03(\fR\arecords\"\xab\x03\n" +
+	"\arecords\x18\x02 \x03(\fR\arecords\x12#\n" +
+	"\rcodec_version\x18\x03 \x01(\rR\fcodecVersion\x12%\n" +
+	"\x0eschema_version\x18\x04 \x01(\rR\rschemaVersion\"\xab\x03\n" +
 	"\fExchangeMeta\x12+\n" +
 	"\x11cache_fingerprint\x18\x01 \x01(\x04R\x10cacheFingerprint\x12\x16\n" +
 	"\x06region\x18\x02 \x01(\tR\x06region\x12/\n" +

@@ -6,6 +6,7 @@ package gossip
 
 import (
 	"errors"
+	"fmt"
 	"log"
 	"strings"
 	"sync/atomic"
@@ -13,7 +14,9 @@ import (
 
 	lad "github.com/bbmumford/ledger"
 	gossippb "github.com/bbmumford/loom/core/directory/gossip/pb"
+	"google.golang.org/protobuf/encoding/protowire"
 	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/reflect/protoreflect"
 )
 
 // ErrAllRecordsCorrupt is returned by unmarshalEnvelope when the
@@ -40,9 +43,87 @@ const corruptRecordLogThrottleNs int64 = int64(5 * time.Second)
 // unmarshal calls without a dedicated mutex.
 var lastCorruptLogUnixNano atomic.Int64
 
-// marshalEnvelope serialises a gossip envelope to protobuf.
-func marshalEnvelope(meta *ExchangeMeta, records []lad.Record) ([]byte, error) {
+// ErrEnvelopeVersion is the refusal of an envelope whose codec_version and
+// schema_version are not the pair the session's negotiated gossip.codec writes.
+// errors.Is matches it on an *EnvelopeVersionError.
+var ErrEnvelopeVersion = errors.New("gossip: envelope version not supported")
+
+// EnvelopeVersionError names the pair an envelope carried and the pair the
+// negotiated codec writes.
+type EnvelopeVersionError struct {
+	Codec, Schema         uint32
+	WantCodec, WantSchema uint32
+}
+
+func (e *EnvelopeVersionError) Error() string {
+	return fmt.Sprintf("%v: codec %d schema %d, want codec %d schema %d",
+		ErrEnvelopeVersion, e.Codec, e.Schema, e.WantCodec, e.WantSchema)
+}
+
+// Is lets errors.Is(err, ErrEnvelopeVersion) match.
+func (e *EnvelopeVersionError) Is(target error) bool { return target == ErrEnvelopeVersion }
+
+// envelopeCodecField and envelopeSchemaField are the field numbers of
+// GossipEnvelope's codec_version and schema_version, read from the generated
+// descriptor so checkEnvelopeVersions and the .proto cannot disagree.
+var (
+	envelopeCodecField  = envelopeField("codec_version")
+	envelopeSchemaField = envelopeField("schema_version")
+)
+
+func envelopeField(name string) protowire.Number {
+	f := (&gossippb.GossipEnvelope{}).ProtoReflect().Descriptor().Fields().ByName(protoreflect.Name(name))
+	if f == nil {
+		panic("gossip: GossipEnvelope has no field " + name)
+	}
+	return f.Number()
+}
+
+// checkEnvelopeVersions reads the codec_version and schema_version of an
+// encoded GossipEnvelope by scanning its top-level fields, without decoding
+// meta or any record, and refuses with an *EnvelopeVersionError a pair p does
+// not write. A later occurrence of a field wins, as it does for
+// proto.Unmarshal. unmarshalEnvelope and ladG1Codec.DecodeExchange call it
+// first, so an envelope at an unsupported version changes nothing.
+func checkEnvelopeVersions(p Profile, data []byte) error {
+	var codec, schema uint32
+	for b := data; len(b) > 0; {
+		num, typ, n := protowire.ConsumeTag(b)
+		if n < 0 {
+			return fmt.Errorf("gossip: envelope: %w", protowire.ParseError(n))
+		}
+		b = b[n:]
+		if (num == envelopeCodecField || num == envelopeSchemaField) && typ == protowire.VarintType {
+			v, m := protowire.ConsumeVarint(b)
+			if m < 0 {
+				return fmt.Errorf("gossip: envelope: %w", protowire.ParseError(m))
+			}
+			if num == envelopeCodecField {
+				codec = uint32(v)
+			} else {
+				schema = uint32(v)
+			}
+			b = b[m:]
+			continue
+		}
+		m := protowire.ConsumeFieldValue(num, typ, b)
+		if m < 0 {
+			return fmt.Errorf("gossip: envelope: %w", protowire.ParseError(m))
+		}
+		b = b[m:]
+	}
+	wantCodec, wantSchema := p.envelope()
+	if codec != wantCodec || schema != wantSchema || wantCodec == 0 {
+		return &EnvelopeVersionError{Codec: codec, Schema: schema, WantCodec: wantCodec, WantSchema: wantSchema}
+	}
+	return nil
+}
+
+// marshalEnvelope serialises a gossip envelope to protobuf, stamped with the
+// codec_version and schema_version p's codec writes.
+func marshalEnvelope(p Profile, meta *ExchangeMeta, records []lad.Record) ([]byte, error) {
 	env := &gossippb.GossipEnvelope{}
+	env.CodecVersion, env.SchemaVersion = p.envelope()
 
 	if meta != nil {
 		env.Meta = metaToProto(meta)
@@ -61,8 +142,13 @@ func marshalEnvelope(meta *ExchangeMeta, records []lad.Record) ([]byte, error) {
 	return proto.Marshal(env)
 }
 
-// unmarshalEnvelope deserialises a protobuf gossip envelope.
-func unmarshalEnvelope(data []byte) (*ExchangeMeta, []lad.Record, error) {
+// unmarshalEnvelope deserialises a protobuf gossip envelope. An envelope at a
+// version pair p's codec does not write is refused by checkEnvelopeVersions
+// before meta or any record decodes.
+func unmarshalEnvelope(p Profile, data []byte) (*ExchangeMeta, []lad.Record, error) {
+	if err := checkEnvelopeVersions(p, data); err != nil {
+		return nil, nil, err
+	}
 	var env gossippb.GossipEnvelope
 	if err := proto.Unmarshal(data, &env); err != nil {
 		return nil, nil, err

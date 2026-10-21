@@ -813,7 +813,10 @@ func Initialize(cfg Config) (*Runtime, error) {
 			// Create TransportManager for partition-aware transport routing
 			rt.transportMgr = manager.New()
 
-			// Base Noise config shared by all transports
+			// Base Noise config shared by all transports. WireVersions makes
+			// every handshake offer loom's entries (meshWireVersions), so a
+			// peer of another gossip codec, reconciliation profile or stream
+			// registry is refused before a connection exists.
 			baseCfg := noise.NoiseTransportConfig{
 				LocalNode:        rt.identity.NodeID,
 				PrivateKey:       rt.identity.PrivateKey,
@@ -826,6 +829,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 					MaxRate:   cfg.VL1.Relay.MaxRate,
 					TicketTTL: cfg.VL1.Relay.TicketTTL,
 				},
+				WireVersions: meshWireVersions(nil),
 			}
 
 			if len(cfg.Partitions) == 0 {

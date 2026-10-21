@@ -50,7 +50,7 @@ func ReconcileDriver() *whisper.ReconcileDriver {
 	return d
 }
 
-// SetSnapshotDriver registers the process-wide G5 snapshot driver.
+// SetSnapshotDriver registers the process-wide G6 snapshot driver.
 func SetSnapshotDriver(d *whisper.SnapshotDriver) {
 	if d == nil {
 		sharedSnapshotDriver.Store((*whisper.SnapshotDriver)(nil))

@@ -9,9 +9,17 @@ option go_package = "github.com/bbmumford/loom/core/directory/gossip/pb";
 // does not know or care about record structure. Each consumer defines its
 // own record proto; LADRecord below is the directory's, and the envelope
 // does not depend on it.
+//
+// codec_version and schema_version name the encoding of the envelope and of
+// its records. The sender writes the pair its session's negotiated
+// gossip.codec version maps to, and the receiver reads the two fields before it
+// decodes meta or any record, refusing a pair that version does not write
+// (loom core/directory/gossip checkEnvelopeVersions).
 message GossipEnvelope {
     ExchangeMeta meta = 1;
     repeated bytes records = 2;  // opaque serialised records
+    uint32 codec_version = 3;
+    uint32 schema_version = 4;
 }
 
 // ExchangeMeta carries per-exchange metadata piggybacked on gossip frames.

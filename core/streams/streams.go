@@ -10,18 +10,32 @@ import "github.com/ORBTR/aether"
 // of a session read this table to decide what arrives on an ID, so adding,
 // moving or dropping an assignment is a wire change and raises this number:
 // two peers reading different versions do not agree on what an ID carries.
-const RegistryVersion = 1
+// It is the streams.registry entry of every mesh session's wire version offer
+// (WireVersions), so two such peers refuse the session in its handshake.
+const RegistryVersion uint16 = 1
+
+// WireVersionRegistry names this table in a session's wire version offer.
+const WireVersionRegistry = "streams.registry"
+
+// WireVersions returns the entry this package adds to a mesh session's wire
+// version offer: streams.registry at RegistryVersion, required, because a
+// session whose two ends read different tables cannot agree on what any
+// stream carries. node's meshWireVersions adds it to the Noise transports'
+// and the byte-stream sessions' options.
+func WireVersions() aether.WireVersions {
+	return aether.WireVersions{{Name: WireVersionRegistry, Versions: []uint16{RegistryVersion}, Required: true}}
+}
 
 // Setup streams. node/mesh_connection.go opens 0-4 on the initiator and
 // claims the same numbers with AcceptStreamByID on the responder, so both
 // ends must agree on every one.
 const (
-	StreamGossip    uint64 = 0 // LAD gossip exchange (G1 delta + G3 rumor ACK)
+	StreamGossip    uint64 = 0 // gossip: G1 exchange, G2 digest probe, GB bucket digest, G3 rumor, G5 rumor ACK
 	StreamRPC       uint64 = 1 // Bidirectional RPC dispatch
 	StreamKeepalive uint64 = 2 // Ping/pong connection liveness
 	StreamControl   uint64 = 3 // Handshake, key rotation, migration
-	// StreamReconcile carries G4 IBLT reconciliation and G5 snapshot
-	// frames on a stream separate from G1/G3 gossip. Sharing
+	// StreamReconcile carries G4 set-difference reconciliation and G6
+	// snapshot frames on a stream separate from the gossip stream. Sharing
 	// StreamGossip with magic-byte multiplexing breaks when a G4
 	// initiator round times out: its abandoned background read can
 	// pull the peer's late-arriving G4 response and discard it; the

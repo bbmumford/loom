@@ -33,13 +33,16 @@ import (
 // onExchange is called after each successful exchange with RTT and sync results.
 // metaProvider, if non-nil, returns ExchangeMeta for connection signaling.
 //
-// stream carries G1/G2/G3 (record exchange, digest probe, rumor push).
-// reconcileStream carries G4 IBLT reconciliation + G5 snapshot frames on a
-// dedicated aether stream — separating these traffic classes eliminates the
-// abandoned-read race where a timed-out G4 round's residual bytes poison G1's
-// read path on a shared stream (surfacing as "invalid magic 0x4734").
-// Both streams are required.
-func RunGossipLoopWithPeer(ctx context.Context, stream aether.Stream, reconcileStream aether.Stream, c *cache.DirectoryCache,
+// stream carries the stream-0 frames (G1 record exchange, G2 digest probe,
+// GB bucket digest, G3 rumor, G5 rumor ACK). reconcileStream carries G4
+// set-difference reconciliation and G6 snapshot frames on a dedicated aether
+// stream — separating these traffic classes eliminates the abandoned-read race
+// where a timed-out G4 round's residual bytes poison G1's read path on a shared
+// stream (surfacing as "invalid magic 0x4734"). Both streams are required.
+//
+// p is the gossip profile the session negotiated (NegotiatedProfile); every
+// exchange is written and read in its codec and reconciliation profile.
+func RunGossipLoopWithPeer(ctx context.Context, stream aether.Stream, reconcileStream aether.Stream, c *cache.DirectoryCache, p Profile,
 	interval time.Duration, peerNodeID string, dt *DeltaTracker, onExchange func(GossipResult), metaProvider ...func() *ExchangeMeta) {
 
 	if interval <= 0 {
@@ -64,7 +67,7 @@ func RunGossipLoopWithPeer(ctx context.Context, stream aether.Stream, reconcileS
 	if peerNodeID == "" {
 		dt = nil
 	}
-	runGossipLoopInternal(ctx, streamConn, reconcileConn, c, interval, onExchange, getMeta, dt, peerNodeID, nil, nil)
+	runGossipLoopInternal(ctx, streamConn, reconcileConn, c, p, interval, onExchange, getMeta, dt, peerNodeID, nil, nil)
 	dbgGossipStream.Printf("Loop exited: streamID=%d, ctxErr=%v", stream.StreamID(), ctx.Err())
 }
 
@@ -78,11 +81,12 @@ func RunGossipLoopWithPeer(ctx context.Context, stream aether.Stream, reconcileS
 // then writes its response. This avoids the deadlock where both sides write
 // and wait for a response that never comes.
 //
-// reconcileStream is the dedicated aether stream for G4/G5 frames; a parallel
-// responder loop dispatches G4 (IBLT) and G5 (snapshot) frames on that stream
-// while G1/G2/G3 stay on `stream`. Both streams are required. dt is the
-// caller's delta tracker, as for RunGossipLoopWithPeer.
-func RunGossipResponder(ctx context.Context, stream aether.Stream, reconcileStream aether.Stream, c *cache.DirectoryCache,
+// reconcileStream is the dedicated aether stream for G4/G6 frames; a parallel
+// responder loop dispatches G4 (set-difference reconcile) and G6 (snapshot)
+// frames on that stream while G1, G2 and GB stay on `stream`. Both streams are
+// required. dt is the caller's delta tracker and p the session's negotiated
+// gossip profile, as for RunGossipLoopWithPeer.
+func RunGossipResponder(ctx context.Context, stream aether.Stream, reconcileStream aether.Stream, c *cache.DirectoryCache, p Profile,
 	peerNodeID string, dt *DeltaTracker, onExchange func(GossipResult),
 	metaProvider ...func() *ExchangeMeta) {
 
@@ -101,7 +105,7 @@ func RunGossipResponder(ctx context.Context, stream aether.Stream, reconcileStre
 		dt = nil
 	}
 
-	runGossipResponderLoop(ctx, streamConn, reconcileConn, c, onExchange, getMeta, dt, peerNodeID)
+	runGossipResponderLoop(ctx, streamConn, reconcileConn, c, p, onExchange, getMeta, dt, peerNodeID)
 	dbgGossipStream.Printf("Responder exited: streamID=%d, ctxErr=%v", stream.StreamID(), ctx.Err())
 }
 

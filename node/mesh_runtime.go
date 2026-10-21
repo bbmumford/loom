@@ -41,9 +41,14 @@ func (rt *Runtime) SessionOptions() aether.SessionOptions {
 }
 
 // SetupMeshSession creates the appropriate transport adapter for the
-// connection. Aether has no version negotiation — there is only one wire
-// protocol and identity is established by the underlying crypto handshake
-// (Noise XX/XK, QUIC TLS, WS Ed25519 header, gRPC metadata).
+// connection. Identity is established by the underlying crypto handshake
+// (Noise XX/XK, QUIC TLS, WS Ed25519 header, gRPC metadata). The wire version
+// set is negotiated by aether: a Noise conn carries the set its handshake
+// chose, and a byte-stream session exchanges a preface offering the options'
+// WireVersions, which this function sets to loom's entries
+// (meshWireVersions) beside any the runtime's options carry, so a peer of
+// another gossip codec, reconciliation profile or stream registry is refused
+// before a stream exists.
 //
 // Uses the options-accepting factory so runtime-level tuning (idle timeout,
 // max concurrent streams, FEC/compression toggles, congestion algo, frame
@@ -55,9 +60,12 @@ func (rt *Runtime) SetupMeshSession(ctx context.Context, conn net.Conn, nodeID s
 	// Map node Protocol to aether.Protocol
 	transportProto := mapProtocol(proto)
 
+	opts := rt.sessionOpts
+	opts.WireVersions = meshWireVersions(opts.WireVersions)
+
 	// Create transport-appropriate adapter
 	session, err := adapter.NewSessionForProtocol(conn, transportProto,
-		rt.identity.NodeID, aether.NodeID(nodeID), rt.sessionOpts)
+		rt.identity.NodeID, aether.NodeID(nodeID), opts)
 	if err != nil {
 		return nil, err
 	}

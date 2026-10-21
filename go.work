@@ -26,6 +26,13 @@ use ../ledger
 
 use ../reach
 
+// loom/go.mod pins a whisper release that lacks WithDigestBucketBounds and
+// ReadBucketDigestBodyIn, which core/directory/gossip calls to bound the GB
+// bucket count to the negotiated reconciliation profile; they exist only in
+// the unpublished ../whisper working tree. Resolve it locally until it is
+// published and loom bumps its pin.
+use ../whisper
+
 // loom/go.mod pins a tursoraft release, but node/meshdb_transport.go implements
 // tursoraft's mesh.Mesh contract and node/runtime.go passes it as
 // ManagerConfig.Mesh; both exist only in the unpublished ../tursoraft
