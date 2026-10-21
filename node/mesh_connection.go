@@ -71,12 +71,24 @@ func bidiScopeLabel(peer *peerConn, localRegion string) string {
 //
 // All connections use Aether natively. Owns the full session lifecycle:
 // stream setup, gossip, RPC, keepalive, control, cleanup.
+//
+// The session's gossip runs under the profile its negotiated wire version set
+// selects (gossip.NegotiatedProfile). A session whose set selects none — one
+// that reports no set, or one without loom's entries — is closed and the
+// *gossip.WireProfileError returned before anything is recorded for the peer.
 func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts AcceptMeshConnectionOpts) error {
 	nodeID := aether.NormalizeNodeID(opts.NodeID)
 
 	dbgSessionHealth.Printf("accepting Aether connection nodeID=%s proto=%s initiator=%v", truncID(nodeID), opts.Proto, opts.IsInitiator)
 	log.Printf("[AETHER] AcceptMeshConnection: nodeID=%s, proto=%s, initiator=%v",
 		truncID(nodeID), opts.Proto, opts.IsInitiator)
+
+	gossipProfile, profileErr := gossip.NegotiatedProfile(meshSessionWireVersions(opts.Session))
+	if profileErr != nil {
+		log.Printf("[AETHER] %s: refusing session: %v", truncID(nodeID), profileErr)
+		_ = opts.Session.Close()
+		return profileErr
+	}
 
 	// Create a cancellable context for this connection's lifetime
 	connCtx, connCancel := context.WithCancel(ctx)
@@ -404,7 +416,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			log.Printf("[AETHER] %s: failed to open control stream: %v", truncID(nodeID), err)
 			goto cleanup
 		}
-		// Reconcile stream — carries G4 IBLT cells + G5 snapshot frames.
+		// Reconcile stream — carries G4 set-difference cells + G6 snapshot frames.
 		// Same priority class as gossip (lower than RPC/keepalive/control)
 		// because reconcile is bulk-ish convergence traffic. Initial
 		// credit smaller than gossip's because typical G4 rounds are
@@ -899,7 +911,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 
 					dbgAether.Printf("%s: gossip initiator starting (grade=%s, interval=%v)",
 						truncID(nodeID), ourGrade, m.rt.cfg.GossipInterval)
-					gossip.RunGossipLoopWithPeer(gossipCtx, gossipStream, reconcileStream, m.rt.cache, m.rt.cfg.GossipInterval, nodeID,
+					gossip.RunGossipLoopWithPeer(gossipCtx, gossipStream, reconcileStream, m.rt.cache, gossipProfile, m.rt.cfg.GossipInterval, nodeID,
 						m.rt.deltaTracker, gossipCallback)
 					gossipCancel()
 
@@ -941,7 +953,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			// Restart on exit so the peer's retrying initiator has a responder.
 			for connCtx.Err() == nil {
 				dbgAether.Printf("%s: gossip responder starting", truncID(nodeID))
-				gossip.RunGossipResponder(connCtx, gossipStream, reconcileStream, m.rt.cache, nodeID,
+				gossip.RunGossipResponder(connCtx, gossipStream, reconcileStream, m.rt.cache, gossipProfile, nodeID,
 					m.rt.deltaTracker, gossipCallback)
 				if connCtx.Err() != nil {
 					break

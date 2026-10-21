@@ -20,7 +20,7 @@ import (
 // shared whisper.ReedSolomonErasure helper. Records ride the wire as
 // the same protobuf-marshalled LADRecord form used elsewhere — keeps
 // the cache.Apply path identical between G1 sync, G3 rumor, G4
-// reconcile, and G5 snapshot transfers.
+// reconcile, and G6 snapshot transfers.
 type ladSnapshotCodec struct {
 	whisper.ReedSolomonErasure
 }

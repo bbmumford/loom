@@ -22,7 +22,8 @@ const goldenEnvelope = "" +
 	"2d31180a22010b2a08726567696f6e2d622a0a0a066e6f64652d63100c32230a" +
 	"066e6f64652d6412066e6f64652d651a06616464722d32220471756963280d32" +
 	"010e123b0a05746f70696312066e6f64652d611a03702d312204626f64792801" +
-	"30023803400148045206726561736f6e5a0105600668077201087a03636964"
+	"30023803400148045206726561736f6e5a0105600668077201087a03636964" +
+	"18102011"
 
 // TestDescriptorPackage asserts the registered descriptor declares the neutral
 // proto package and that its go_package is the import path this generated
@@ -109,6 +110,8 @@ func wireFixture(t *testing.T) *GossipEnvelope {
 				Signature:     []byte{0x0e},
 			},
 		},
-		Records: [][]byte{rec},
+		Records:       [][]byte{rec},
+		CodecVersion:  16,
+		SchemaVersion: 17,
 	}
 }

@@ -126,10 +126,16 @@ func decodeRecord(data []byte) (lad.Record, error) {
 // envelope format. Records arrive at the codec already protobuf-
 // marshalled (from ladStateStore.Snapshot/Delta), so the codec only
 // wraps them in the envelope and attaches the ExchangeMeta proto.
-type ladG1Codec struct{}
+// profile is the session's negotiated gossip profile: its codec names the
+// version pair the codec stamps on what it encodes and requires of what it
+// decodes.
+type ladG1Codec struct {
+	profile Profile
+}
 
-// newLADG1Codec returns a codec suitable for WithG1Codec.
-func newLADG1Codec() *ladG1Codec { return &ladG1Codec{} }
+// newLADG1Codec returns a codec suitable for WithG1Codec, for a session that
+// negotiated p.
+func newLADG1Codec(p Profile) *ladG1Codec { return &ladG1Codec{profile: p} }
 
 // EncodeExchange builds a GossipEnvelope containing the pre-marshalled
 // records and the whisper-native ExchangeMeta. The records are already
@@ -137,6 +143,7 @@ func newLADG1Codec() *ladG1Codec { return &ladG1Codec{} }
 // the envelope's Records field without re-marshalling.
 func (c *ladG1Codec) EncodeExchange(records [][]byte, meta *whisper.ExchangeMeta) ([]byte, error) {
 	env := &gossippb.GossipEnvelope{Records: records}
+	env.CodecVersion, env.SchemaVersion = c.profile.envelope()
 	if meta != nil {
 		env.Meta = metaToProto(meta)
 	}
@@ -147,8 +154,13 @@ func (c *ladG1Codec) EncodeExchange(records [][]byte, meta *whisper.ExchangeMeta
 // per-record protobuf bytes for the StateStore to apply. SeenNodeIDs
 // is populated by peeking each record's NodeID field — cheaper than
 // decoding the full record twice because the handler will re-decode
-// anyway inside Apply.
+// anyway inside Apply. An envelope at a version pair the codec does not
+// write is refused by checkEnvelopeVersions before meta or any record
+// decodes; whisper's G1 handler then applies nothing and writes no reply.
 func (c *ladG1Codec) DecodeExchange(body []byte) (whisper.DecodedExchange, error) {
+	if err := checkEnvelopeVersions(c.profile, body); err != nil {
+		return whisper.DecodedExchange{}, err
+	}
 	var env gossippb.GossipEnvelope
 	if err := proto.Unmarshal(body, &env); err != nil {
 		return whisper.DecodedExchange{}, err

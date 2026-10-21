@@ -93,20 +93,20 @@ func returnBufToPool(bufPtr *[]byte, buf []byte) {
 	gossipBufPool.Put(bufPtr)
 }
 
-// GossipOverConn performs one bidirectional cache exchange over conn.
-// Both sides simultaneously send their cache dump and read the peer's dump.
+// GossipOverConn performs one G1 exchange over conn as the initiator: it
+// writes this node's records, then reads and applies the responder's.
 // Returns the round-trip time measured from write-start to read-complete.
 //
-// If meta is non-nil, the payload is sent as a v2 envelope (JSON object with
-// "meta" and "records" keys). If meta is nil, a v2 envelope with no meta is
-// still sent (new nodes always send v2). The receiver auto-detects v1 vs v2
-// by checking whether the payload starts with '[' (v1 array) or '{' (v2 object).
+// The payload is a GossipEnvelope protobuf stamped with the version pair p's
+// codec writes; meta, when non-nil, rides in it. The responder's envelope is
+// refused with an *EnvelopeVersionError, before any record decodes or the
+// cache changes, when it carries another pair.
 //
 // The optional since parameter enables delta sync: when set, only records
 // with Timestamp after the given time are sent. If omitted or zero, the
 // full cache is dumped. Delta sync cuts steady-state gossip bandwidth by
 // roughly 90%.
-func GossipOverConn(ctx context.Context, conn net.Conn, c *cache.DirectoryCache, meta *ExchangeMeta, since ...time.Time) (GossipResult, error) {
+func GossipOverConn(ctx context.Context, conn net.Conn, c *cache.DirectoryCache, p Profile, meta *ExchangeMeta, since ...time.Time) (GossipResult, error) {
 	var result GossipResult
 
 	// Serialize cache records: delta (since watermark) or full dump
@@ -119,7 +119,7 @@ func GossipOverConn(ctx context.Context, conn net.Conn, c *cache.DirectoryCache,
 	result.RecordsSent = len(records)
 
 	// Marshal as protobuf — ~50% smaller on the wire than JSON.
-	payload, err := marshalEnvelope(meta, records)
+	payload, err := marshalEnvelope(p, meta, records)
 	if err != nil {
 		return result, fmt.Errorf("gossip: marshal cache dump: %w", err)
 	}
@@ -193,7 +193,7 @@ func GossipOverConn(ctx context.Context, conn net.Conn, c *cache.DirectoryCache,
 		result.RTT = result.NetworkRTT
 
 		// Unmarshal protobuf envelope
-		peerMeta, peerRecords, err := unmarshalEnvelope(inbuf)
+		peerMeta, peerRecords, err := unmarshalEnvelope(p, inbuf)
 		if err != nil {
 			returnBufToPool(inbufPtr, inbuf)
 			return result, fmt.Errorf("gossip: unmarshal peer envelope: %w", err)
@@ -224,33 +224,38 @@ func GossipOverConn(ctx context.Context, conn net.Conn, c *cache.DirectoryCache,
 
 // escalateBucketDigest runs one G2B bucketed-digest round on conn AFTER a G1
 // exchange whose piggybacked cache fingerprints still disagree. It sends this
-// node's per-bucket XOR digest; the responder compares it against its own,
-// records which of the (default 64) buckets diverge, and replies with its
-// digest. That recorded divergence makes the responder's NEXT G1 reply serve
-// only the diverging buckets' records — its G1 handler drains the set via
-// takeDivergingBuckets — so the caller's scoped follow-up GossipOverConn moves
-// O(diverging buckets) records instead of a full re-dump, which is the whole
-// point: it replaces the expensive full-sync a stale-watermark divergence would
-// otherwise force.
+// node's per-bucket XOR digest at rp.Buckets buckets; the responder digests its
+// own cache at the count the request carries, records which buckets diverge,
+// and replies with its digest. That recorded divergence makes the responder's
+// NEXT G1 reply serve only the diverging buckets' records — its G1 handler
+// drains the set via takeDivergingBuckets — so the caller's scoped follow-up
+// GossipOverConn moves O(diverging buckets) records instead of a full re-dump,
+// which is the whole point: it replaces the expensive full-sync a
+// stale-watermark divergence would otherwise force.
+//
+// rp is the session's negotiated gossip.reconcile profile. Both peers chose it
+// in the handshake, so the responder's G2B handler is registered and admits
+// any count in [rp.MinBuckets, rp.MaxBuckets] (whisper.WithDigestBucketBounds,
+// set by runGossipResponderLoop); the responder digesting at the requester's
+// count, rather than at a count of its own, is what makes the two vectors
+// compare one bucket partition. A count rp does not admit is refused before
+// anything is written, and a reply at any count other than the one sent is
+// refused (whisper.ReadBucketDigestBodyIn with both bounds at rp.Buckets),
+// each with a *whisper.DigestBucketCountError. The reply is drained even
+// though this escalation does not diff it locally — leaving an unread frame
+// would desync the scoped follow-up.
 //
 // The round is a single write-then-read — the same deadlock-safe shape as
 // GossipOverConn: Aether's stream.Send enqueues non-blocking and the writeLoop
 // flushes within ~1ms, so writing before reading cannot self-deadlock. It reuses
 // the deadline GossipOverConn set moments earlier and does NOT call SetDeadline
 // mid-round, which on an Aether StreamConn would flush the read buffer.
-//
-// Sending the 0x4742 frame unconditionally is safe because the mesh redeploys
-// end-to-end: every peer's responder auto-wires the bucket-digest handler from
-// its G1 store (whisper's ensureDefaults), so there is no mixed-version window in
-// which a peer treats 0x4742 as an unknown magic and tears the stream down. The
-// peer's digest reply is drained even though this minimal escalation does not
-// diff it locally — leaving an unread frame would desync the scoped follow-up.
-func escalateBucketDigest(conn net.Conn, c *cache.DirectoryCache) error {
-	// Must match the responder's bucket count. The responder does not override
-	// WithDigestBuckets, so both sides use whisper's default of 64.
-	const digestBuckets uint16 = 64
-
-	if err := whisper.WriteBucketDigest(conn, c.BucketDigest(digestBuckets), 0); err != nil {
+func escalateBucketDigest(conn net.Conn, c *cache.DirectoryCache, rp ReconcileProfile) error {
+	n := rp.Buckets
+	if n == 0 || n < rp.MinBuckets || n > rp.MaxBuckets || n > 256 {
+		return &whisper.DigestBucketCountError{Count: int(n), Min: int(rp.MinBuckets), Max: int(rp.MaxBuckets)}
+	}
+	if err := whisper.WriteBucketDigest(conn, c.BucketDigest(n), 0); err != nil {
 		return fmt.Errorf("write bucket digest: %w", err)
 	}
 
@@ -261,7 +266,7 @@ func escalateBucketDigest(conn net.Conn, c *cache.DirectoryCache) error {
 	if got := binary.BigEndian.Uint16(magic[:]); got != whisper.DigestBucketMagic {
 		return fmt.Errorf("expected digest magic 0x%04X, got 0x%04X", whisper.DigestBucketMagic, got)
 	}
-	if _, _, err := whisper.ReadBucketDigestBody(conn); err != nil {
+	if _, _, err := whisper.ReadBucketDigestBodyIn(conn, int(n), int(n)); err != nil {
 		return fmt.Errorf("read digest reply body: %w", err)
 	}
 	return nil
@@ -278,10 +283,13 @@ type RTTProvider interface {
 	AvgRTT() time.Duration
 }
 
-// runGossipLoopInternal is the initiator-side gossip loop. conn carries
-// G1/G2/G3 traffic; reconcileConn is the dedicated wire used for G4 IBLT
-// reconciliation and G5 snapshot frames. Both must be non-nil: multiplexing
-// both on one stream lets abandoned-G4-read bytes corrupt G1's read path.
+// runGossipLoopInternal is the initiator-side gossip loop. conn carries the
+// stream-0 frames (G1 exchange, GB bucket digest, G3 rumor, G5 rumor ACK);
+// reconcileConn is the dedicated wire used for G4 set-difference
+// reconciliation and G6 snapshot frames. Both must be non-nil: multiplexing
+// both on one stream lets abandoned-G4-read bytes corrupt G1's read path. p is
+// the session's negotiated gossip profile: every G1 envelope is written and
+// read in its codec, and the GB round uses its reconciliation profile.
 //
 // It runs periodic exchanges until ctx is cancelled or the connection closes.
 // onExchange is called after each successful exchange (e.g., to publish
@@ -289,7 +297,7 @@ type RTTProvider interface {
 // is called before each exchange to build the ExchangeMeta carried in the
 // outbound gossip envelope (connection-count signaling the rebalancer reads to
 // detect hotspots).
-func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net.Conn, c *cache.DirectoryCache, interval time.Duration, onExchange func(GossipResult), getMeta func() *ExchangeMeta, dt *DeltaTracker, peerNodeID string, bpMonitor *BackpressureMonitor, peerBackoff *PeerBackoff) {
+func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net.Conn, c *cache.DirectoryCache, p Profile, interval time.Duration, onExchange func(GossipResult), getMeta func() *ExchangeMeta, dt *DeltaTracker, peerNodeID string, bpMonitor *BackpressureMonitor, peerBackoff *PeerBackoff) {
 	dbgGossip.Printf("Gossip loop started: peerNodeID=%s, interval=%v, connType=%T", peerNodeID, interval, conn)
 	if interval <= 0 {
 		interval = 30 * time.Second
@@ -440,7 +448,7 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 		}
 
 		exchangeTime := time.Now()
-		res, err := GossipOverConn(ctx, conn, c, meta, since)
+		res, err := GossipOverConn(ctx, conn, c, p, meta, since)
 		if err != nil {
 			return res, err
 		}
@@ -455,7 +463,7 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 		// converged pair never pays for the extra round-trip.
 		if res.PeerMeta != nil && res.PeerMeta.CacheFingerprint != 0 &&
 			res.PeerMeta.CacheFingerprint != c.Fingerprint() {
-			if escErr := escalateBucketDigest(conn, c); escErr != nil {
+			if escErr := escalateBucketDigest(conn, c, p.Reconcile); escErr != nil {
 				// Actually tear the stream down, as the comment above
 				// promises. escalateBucketDigest may have written its request but
 				// timed out on the reply, leaving that reply buffered on conn; the
@@ -466,7 +474,7 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 				_ = conn.Close()
 				return res, fmt.Errorf("gossip: G2B escalation to %s: %w", peerNodeID, escErr)
 			}
-			scoped, scErr := GossipOverConn(ctx, conn, c, meta, since)
+			scoped, scErr := GossipOverConn(ctx, conn, c, p, meta, since)
 			if scErr != nil {
 				return res, fmt.Errorf("gossip: G2B scoped follow-up to %s: %w", peerNodeID, scErr)
 			}
@@ -593,21 +601,25 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 // because it's also waiting.
 //
 // Two whisper engines run in parallel:
-//   - Gossip engine on conn — handles G1 (record exchange), G2 (digest probe),
-//     G3 (rumor push) + G3-ACK.
-//   - Reconcile engine on reconcileConn — handles G4 (IBLT) + G5 (snapshot).
+//   - Gossip engine on conn — handles G1 (record exchange), G2 (digest probe)
+//     and GB (bucket digest). It holds no rumor pusher, so whisper registers
+//     no G3 (rumor) or G5 (rumor ACK) handler on it.
+//   - Reconcile engine on reconcileConn — handles G4 (set-difference
+//     reconcile) and G6 (snapshot).
 //
 // Splitting these onto separate streams isolates frame queues so an
 // abandoned read on one protocol can never poison another's magic-byte
-// dispatch. Both conns are required.
-func runGossipResponderLoop(ctx context.Context, conn net.Conn, reconcileConn net.Conn, c *cache.DirectoryCache,
+// dispatch. Both conns are required. p is the session's negotiated gossip
+// profile: the G1 codec reads and writes envelopes in its codec, and the GB
+// handler answers the counts its reconciliation profile admits.
+func runGossipResponderLoop(ctx context.Context, conn net.Conn, reconcileConn net.Conn, c *cache.DirectoryCache, p Profile,
 	onExchange func(GossipResult), getMeta func() *ExchangeMeta, dt *DeltaTracker, peerNodeID string) {
 
 	dbgGossip.Printf("Gossip responder started: peerNodeID=%s, connType=%T", peerNodeID, conn)
 
-	// Gossip engine: G1 (record exchange) + G2 (digest probe).
-	// Reconcile/snapshot drivers are NOT attached here — they belong on
-	// the reconcile engine below so G4/G5 frames are only ever read
+	// Gossip engine: G1 (record exchange) + G2 (digest probe) + GB
+	// (bucket digest). Reconcile/snapshot drivers are NOT attached here —
+	// they belong on the reconcile engine below so G4/G6 frames are only ever read
 	// from the reconcile stream. No rumor pump (G3) is attached:
 	// receivers subscribe to no RumorPusher and carry no reach-freshness
 	// payload path.
@@ -618,7 +630,8 @@ func runGossipResponderLoop(ctx context.Context, conn net.Conn, reconcileConn ne
 		whisper.WithRumorApplyFn(ladRumorApplyFn(c, nil)),
 		whisper.WithRumorDedupKeyFunc(ladRumorDedupKey),
 		whisper.WithG1Store(newLADStateStore(c)),
-		whisper.WithG1Codec(newLADG1Codec()),
+		whisper.WithG1Codec(newLADG1Codec(p)),
+		whisper.WithDigestBucketBounds(p.Reconcile.MinBuckets, p.Reconcile.MaxBuckets),
 		whisper.WithG1ExchangeObserver(func(res whisper.GossipResult, _ string) {
 			if onExchange != nil {
 				onExchange(res)
@@ -654,9 +667,9 @@ func runGossipResponderLoop(ctx context.Context, conn net.Conn, reconcileConn ne
 		}
 	}()
 
-	// Reconcile engine: G4 (IBLT) + G5 (snapshot) only. No G1
-	// store/codec, no rumor handlers — the initiator only ever
-	// writes G4/G5 magics here, and any other magic on this stream
+	// Reconcile engine: G4 (set-difference reconcile) + G6 (snapshot)
+	// only. No G1 store/codec, no rumor handlers — the initiator only ever
+	// writes G4/G6 magics here, and any other magic on this stream
 	// is a protocol error the engine will surface as "unknown frame
 	// magic" rather than silently dispatch onto the wrong handler.
 	rcOpts := []whisper.EngineOption{

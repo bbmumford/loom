@@ -83,15 +83,16 @@ func gossipRound(t *testing.T, initiator, responder *cache.DirectoryCache, respI
 	gInit, gResp := net.Pipe() // G1 record-exchange stream
 	rInit, rResp := net.Pipe() // reconcile stream (unused here; kept open so the responder can read it)
 
+	p := testProfile(t)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		runGossipResponderLoop(ctx, gResp, rResp, responder, nil,
+		runGossipResponderLoop(ctx, gResp, rResp, responder, p, nil,
 			func() *ExchangeMeta { return &ExchangeMeta{} },
 			whisper.NewDeltaTracker(), respID)
 	}()
 
-	_, err := GossipOverConn(ctx, gInit, initiator, &ExchangeMeta{})
+	_, err := GossipOverConn(ctx, gInit, initiator, p, &ExchangeMeta{})
 
 	// The initiator's single round-trip is complete (or errored). Close the
 	// initiator ends so the responder's next blocking reads on both streams return
