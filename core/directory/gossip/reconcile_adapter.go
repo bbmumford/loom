@@ -75,8 +75,16 @@ func (c *ladReconcileCodec) DecodeTable(body []byte) (*iblt.IBLT, whisper.Reconc
 	// k (the IBLT hash-function count) comes off the wire and is
 	// passed straight into iblt.New, which may allocate proportional to it. A
 	// real table uses a small k (typically 3-4); reject implausible values.
-	if k == 0 || k > 16 {
+	// iblt.New raises a k below 2 to 2 and a count below 1 to 1, so a table
+	// decoded from such values would have a shape the wire did not declare
+	// and the responder's own table, built from the decoded shape, would
+	// hash into cells the initiator never wrote; both are refused here so the
+	// decoded table is the one the bytes describe.
+	if k < 2 || k > 16 {
 		return nil, 0, fmt.Errorf("reconcile: implausible IBLT k=%d", k)
+	}
+	if count == 0 {
+		return nil, 0, fmt.Errorf("reconcile: table of 0 cells")
 	}
 	tbl := iblt.New(int(count), int(k), seed)
 	cells := tbl.Cells()
