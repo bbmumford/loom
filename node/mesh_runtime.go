@@ -12,6 +12,7 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/adapter"
+	"github.com/bbmumford/loom/core/directory/gossip"
 )
 
 // Mesh session-establishment counters, exposed as mesh_initiator_sessions /
@@ -41,14 +42,23 @@ func (rt *Runtime) SessionOptions() aether.SessionOptions {
 }
 
 // SetupMeshSession creates the appropriate transport adapter for the
-// connection. Identity is established by the underlying crypto handshake
-// (Noise XX/XK, QUIC TLS, WS Ed25519 header, gRPC metadata). The wire version
-// set is negotiated by aether: a Noise conn carries the set its handshake
-// chose, and a byte-stream session exchanges a preface offering the options'
-// WireVersions, which this function sets to loom's entries
+// connection and returns it once its wire version set is chosen and selects
+// a gossip profile. Identity is established by the underlying crypto
+// handshake (Noise XX/XK, QUIC TLS, WS Ed25519 header, gRPC metadata). The
+// wire version set is negotiated by aether: a Noise conn carries the set its
+// handshake chose, and a byte-stream session exchanges a preface offering the
+// options' WireVersions, which this function sets to loom's entries
 // (meshWireVersions) beside any the runtime's options carry, so a peer of
 // another gossip codec, reconciliation profile or stream registry is refused
 // before a stream exists.
+//
+// A byte-stream session runs its preface exchange on its own goroutines, so
+// this function waits for the exchange to end (awaitMeshSessionProfile) and
+// returns the refusal, with the session closed (closeRefusedMeshSession) and
+// nothing counted, as its own error. DialAndAcceptMesh's failure branch
+// (recordFailedMeshDial) runs only on this function's error: connectPeer
+// credits the dial and marks the peer PeerConnecting before the hand-off, so
+// a refusal that surfaced later would leave both as they are.
 //
 // Uses the options-accepting factory so runtime-level tuning (idle timeout,
 // max concurrent streams, FEC/compression toggles, congestion algo, frame
@@ -70,9 +80,15 @@ func (rt *Runtime) SetupMeshSession(ctx context.Context, conn net.Conn, nodeID s
 		return nil, err
 	}
 
-	// Count AFTER the adapter succeeds, so the gauge measures sessions actually
-	// established rather than attempts — a failed setup returns above and must
-	// not inflate the denominator the resumption reading depends on.
+	if _, err := awaitMeshSessionProfile(ctx, session); err != nil {
+		closeRefusedMeshSession(ctx, session)
+		return nil, err
+	}
+
+	// Count AFTER the session's set is chosen and selects a profile, so the
+	// gauge measures sessions actually established rather than attempts — a
+	// refused setup returns above and must not inflate the denominator the
+	// resumption reading depends on.
 	if isInitiator {
 		atomic.AddUint64(&meshInitiatorSessions, 1)
 	} else {
@@ -85,6 +101,61 @@ func (rt *Runtime) SetupMeshSession(ctx context.Context, conn net.Conn, nodeID s
 		truncID(nodeID), proto, isInitiator)
 
 	return session, nil
+}
+
+// awaitMeshSessionProfile returns the gossip profile a session's chosen wire
+// version set selects (gossip.NegotiatedProfile), waiting for the set while
+// the session is still choosing it: aether.SessionWireVersions returns on a
+// byte-stream session when its preface exchange ends, bounded by aether's
+// preface timeout, and at once on a Noise session, whose handshake chose the
+// set before the conn existed. A set that selects no profile, which is what
+// a refused or closed exchange leaves, returns the *gossip.WireProfileError.
+// When ctx ends first the session is closed, which ends the wait, and ctx's
+// error is returned; the wait's goroutine then completes into the buffered
+// channel and exits.
+func awaitMeshSessionProfile(ctx context.Context, s aether.Session) (gossip.Profile, error) {
+	type outcome struct {
+		profile gossip.Profile
+		err     error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		profile, err := gossip.NegotiatedProfile(meshSessionWireVersions(s))
+		done <- outcome{profile, err}
+	}()
+	select {
+	case o := <-done:
+		return o.profile, o.err
+	case <-ctx.Done():
+		_ = s.Close()
+		return gossip.Profile{}, ctx.Err()
+	}
+}
+
+// closeRefusedMeshSession closes a session whose chosen set selected no
+// gossip profile, after letting the session finish refusing its peer. A
+// byte-stream session that refused the peer's preface chose nothing and is
+// closing itself: aether's TCPSession.readLoop holds the conn open until this
+// side's own preface write has returned, so the peer reads both offers and
+// refuses on the same entry instead of reading a bare end of stream. A Close
+// here before that write returned, or the conn.Close that DialAndAcceptMesh's
+// failure branch runs next, ends the conn under the write and the peer sees
+// only the end of stream. So for a session that chose nothing this function
+// waits for the session's own close signal, bounded by ctx, and closes the
+// session only then (a no-op when the session closed itself). A session that
+// chose a set and still selected no profile is not closing itself, so it is
+// closed at once; the wait is bounded by ctx and by aether's own preface
+// deadline, which ends the exchange and closes the session when the peer
+// never reads this side's preface.
+func closeRefusedMeshSession(ctx context.Context, s aether.Session) {
+	set, _ := aether.SessionWireVersions(s)
+	if cs, ok := s.(interface{ CloseSignal() <-chan struct{} }); ok && len(set.Entries()) == 0 {
+		select {
+		case <-cs.CloseSignal():
+		case <-ctx.Done():
+		}
+	}
+	_ = s.Close()
 }
 
 // AcceptIncomingMeshSession handles an incoming transport session by creating
@@ -153,34 +224,7 @@ func (rt *Runtime) DialAndAcceptMesh(ctx context.Context, conn net.Conn,
 	if err != nil {
 		log.Printf("[AETHER] Dial setup failed for %s: %v", truncID(nodeID), err)
 		conn.Close()
-		// connectPeer set the peer to PeerConnecting before this async handoff;
-		// on setup failure reset it so scanAndConnect re-dials rather than
-		// leaving it wedged in PeerConnecting forever.
-		//
-		// Gated on the dial claim because resetConnectingState checks the STATE, not
-		// who established it. A walker probe, hole punch or multipath dial that
-		// fails while connectPeer has concurrently marked the same peer
-		// PeerConnecting would otherwise clear a live connect attempt's state,
-		// and scanAndConnect would re-dial a peer already being dialled.
-		if rt.connMgr != nil {
-			// A completed transport dial that then fails its mesh handshake is
-			// still a failed path, and until this it recorded nothing. The dial
-			// sites credit recordDialSuccess the moment dialWithProtocol returns
-			// a conn (connectPeer and dialAdditionalPath both do), which clears
-			// the per-(peer, protocol) cooldown ladder. With no counterpart on
-			// this branch a peer that accepts connections but never completes a
-			// session had its ladder cleared on every attempt and was re-dialled
-			// at the base delay forever, so the back-off could not escalate.
-			//
-			// Recorded for every caller, not only the owning one: the handshake
-			// failed on this protocol to this peer whoever initiated it, and the
-			// ladder is keyed by that pair rather than by the dialer.
-			rt.connMgr.recordDialFailure(nodeID, proto)
-
-			if bool(owns) {
-				rt.connMgr.resetConnectingState(nodeID)
-			}
-		}
+		rt.recordFailedMeshDial(nodeID, proto, owns)
 		return
 	}
 
@@ -221,7 +265,7 @@ func (rt *Runtime) DialAndAcceptMesh(ctx context.Context, conn net.Conn,
 	// dialWithProtocol, and Runtime.DialByProtocol, through dialNoiseUDP.
 
 	if rt.connMgr != nil {
-		rt.connMgr.AcceptMeshConnection(ctx, AcceptMeshConnectionOpts{
+		err := rt.connMgr.AcceptMeshConnection(ctx, AcceptMeshConnectionOpts{
 			Session:       session,
 			NodeID:        nodeID,
 			Region:        region,
@@ -232,6 +276,41 @@ func (rt *Runtime) DialAndAcceptMesh(ctx context.Context, conn net.Conn,
 			Roles:         roles,
 			Partition:     transportPartitionOf(conn),
 		})
+		// AcceptMeshConnection returns an error only from its own profile
+		// check, before it records anything for the peer and with the session
+		// closed, so the dial failed the same way as a refused setup.
+		if err != nil {
+			log.Printf("[AETHER] Dial refused for %s: %v", truncID(nodeID), err)
+			conn.Close()
+			rt.recordFailedMeshDial(nodeID, proto, owns)
+		}
+	}
+}
+
+// recordFailedMeshDial is DialAndAcceptMesh's failure branch: the transport
+// dial completed and the mesh session was refused, so the path failed. It
+// debits the per-(peer, protocol) dial ladder for every caller, because the
+// dial sites (connectPeer, dialAdditionalPath, probeUpgrade, attemptHolePunch)
+// credit recordDialSuccess the moment dialWithProtocol returns a conn, which
+// clears that ladder; without this debit a peer that accepts connections and
+// refuses every session is re-dialled at the base delay with no back-off. The
+// ladder is keyed by (peer, protocol), not by the dialer, so the debit does
+// not depend on who initiated.
+//
+// The connecting state is cleared only for the dial that owns it, which is
+// connectPeer's: it marks the peer PeerConnecting before the hand-off, and
+// resetConnectingState checks the STATE, not who set it, so a borrowing dial
+// (the walker, hole punch or multipath dialer) that failed while connectPeer
+// had concurrently marked the same peer PeerConnecting would otherwise clear
+// that live attempt and scanAndConnect would re-dial a peer already being
+// dialled.
+func (rt *Runtime) recordFailedMeshDial(nodeID string, proto Protocol, owns ownsConnectingState) {
+	if rt.connMgr == nil {
+		return
+	}
+	rt.connMgr.recordDialFailure(nodeID, proto)
+	if bool(owns) {
+		rt.connMgr.resetConnectingState(nodeID)
 	}
 }
 
