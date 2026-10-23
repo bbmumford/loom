@@ -128,54 +128,61 @@ func wireTestRuntime(t *testing.T) *Runtime {
 // A byte-stream mesh session that SetupMeshSession builds offers loom's
 // entries even when the runtime's session options carry none, so a peer whose
 // streams.registry, gossip.codec or gossip.reconcile differs is refused by
-// both ends before either opens a stream, and the refusal names the entry. A
-// peer of this build is admitted with every entry chosen.
+// both ends before either opens a stream: SetupMeshSession returns the
+// gossip profile refusal in place of a session, and the peer's own refusal
+// names the entry. A peer of this build is admitted with every entry chosen.
 func TestByteStreamMeshSessionsRefuseAPeerWhoseLoomEntryDiffers(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	pair := func(t *testing.T, peerOffer aether.WireVersions) (aether.Session, aether.Session) {
+	// pair builds the peer's session on the far end of a pipe first, so that
+	// its preface is there for SetupMeshSession to read, and starts the
+	// peer's gossip-stream accept, whose result accepted carries.
+	pair := func(t *testing.T, peerOffer aether.WireVersions) (aether.Session, error, <-chan error) {
 		t.Helper()
 		rt := wireTestRuntime(t)
 		other := wireTestRuntime(t)
 		near, far := net.Pipe()
-		sess, err := rt.SetupMeshSession(ctx, near, string(other.identity.NodeID), ProtoWebSocket, true)
-		if err != nil {
-			t.Fatalf("SetupMeshSession: %v", err)
-		}
 		opts := aether.DefaultSessionOptions()
 		opts.WireVersions = peerOffer
 		peer := adapter.NewTCPSession(far, other.identity.NodeID, rt.identity.NodeID, aether.ProtoTCP, opts)
-		t.Cleanup(func() { _ = sess.Close(); _ = peer.Close() })
-		return sess, peer
+		accepted := make(chan error, 1)
+		go func() {
+			st, err := peer.AcceptStreamByID(ctx, streams.StreamGossip)
+			if st != nil {
+				err = errors.New("the peer accepted the gossip stream")
+			}
+			accepted <- err
+		}()
+		sess, err := rt.SetupMeshSession(ctx, near, string(other.identity.NodeID), ProtoWebSocket, true)
+		t.Cleanup(func() {
+			if sess != nil {
+				_ = sess.Close()
+			}
+			_ = peer.Close()
+		})
+		return sess, err, accepted
 	}
 
 	for _, name := range loomEntryNames {
 		t.Run(name, func(t *testing.T) {
-			sess, peer := pair(t, withLoomEntryAt(t, name, 2))
-			accepted := make(chan error, 1)
-			go func() {
-				st, err := peer.AcceptStreamByID(ctx, streams.StreamGossip)
-				if st != nil {
-					err = errors.New("the peer accepted the gossip stream")
-				}
-				accepted <- err
-			}()
-			st, err := sess.OpenStream(ctx, aether.StreamConfig{StreamID: streams.StreamGossip})
-			if st != nil {
-				t.Fatal("the gossip stream opened on a session whose peer differs in " + name)
+			sess, err, accepted := pair(t, withLoomEntryAt(t, name, 2))
+			if sess != nil {
+				t.Fatal("SetupMeshSession returned a session whose peer differs in " + name)
+			}
+			if !errors.Is(err, gossip.ErrWireProfile) {
+				t.Fatalf("SetupMeshSession err = %v, want gossip.ErrWireProfile", err)
 			}
 			var me *aether.WireVersionMismatchError
-			if !errors.As(err, &me) || me.Name != name {
-				t.Fatalf("OpenStream err = %v, want a mismatch naming %s", err, name)
-			}
 			if err := <-accepted; !errors.As(err, &me) || me.Name != name {
 				t.Fatalf("the peer's AcceptStreamByID err = %v, want a mismatch naming %s", err, name)
 			}
 		})
 	}
 
-	sess, peer := pair(t, meshWireVersions(nil))
-	go func() { _, _ = peer.AcceptStreamByID(ctx, streams.StreamGossip) }()
+	sess, err, _ := pair(t, meshWireVersions(nil))
+	if err != nil {
+		t.Fatalf("a peer of this build: SetupMeshSession: %v", err)
+	}
 	if _, err := sess.OpenStream(ctx, aether.StreamConfig{StreamID: streams.StreamGossip}); err != nil {
 		t.Fatalf("a peer of this build: OpenStream: %v", err)
 	}

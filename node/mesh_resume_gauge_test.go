@@ -10,8 +10,10 @@ import (
 	"net"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/ORBTR/aether"
+	"github.com/ORBTR/aether/adapter"
 	"github.com/ORBTR/aether/noise"
 	"github.com/bbmumford/loom/core/transport/manager"
 )
@@ -91,7 +93,10 @@ func TestMeshResume_CapabilityCensusMeasuresReachability(t *testing.T) {
 // these are package-level counters and other tests in this package may establish
 // sessions too. An absolute assertion here would be a coin-flip under -shuffle.
 func TestMeshResume_SetupMeshSessionCountsBothDirections(t *testing.T) {
-	rt := &Runtime{identity: &NodeIdentity{}}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rt := wireTestRuntime(t)
+	peer := wireTestRuntime(t)
 
 	beforeInit := atomic.LoadUint64(&meshInitiatorSessions)
 	beforeResp := atomic.LoadUint64(&meshResponderSessions)
@@ -107,22 +112,28 @@ func TestMeshResume_SetupMeshSessionCountsBothDirections(t *testing.T) {
 	// With 2/1, correct code gives (2,1) and swapped code gives (1,2). Symmetric
 	// data cannot detect an asymmetric defect.
 	//
-	// net.Pipe is enough: adapter.NewSessionForProtocol is a pure constructor
-	// (factory.go switches on protocol and wraps the conn), so no handshake or
-	// I/O happens here.
+	// SetupMeshSession counts a session only once its wire version set is
+	// chosen, so the far end of each pipe runs a byte-stream session of this
+	// build, whose preface the near end's session reads; ProtoWebSocket
+	// selects the byte-stream adapter on the near end.
 	for _, initiator := range []bool{true, true, false} {
 		c1, c2 := net.Pipe()
 		defer c1.Close()
 		defer c2.Close()
+		opts := aether.DefaultSessionOptions()
+		opts.WireVersions = meshWireVersions(nil)
+		far := adapter.NewTCPSession(c2, peer.identity.NodeID, rt.identity.NodeID, aether.ProtoTCP, opts)
+		defer far.Close()
 
-		sess, err := rt.SetupMeshSession(context.Background(), c1, "peer-node-id",
-			ProtoNoiseUDP, initiator)
+		sess, err := rt.SetupMeshSession(ctx, c1, string(peer.identity.NodeID),
+			ProtoWebSocket, initiator)
 		if err != nil {
 			t.Fatalf("SetupMeshSession(initiator=%v): %v", initiator, err)
 		}
 		if sess == nil {
 			t.Fatalf("SetupMeshSession(initiator=%v) returned a nil session", initiator)
 		}
+		defer sess.Close()
 	}
 
 	gotInit := atomic.LoadUint64(&meshInitiatorSessions) - beforeInit

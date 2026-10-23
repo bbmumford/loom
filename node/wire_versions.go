@@ -43,6 +43,10 @@ func meshWireVersions(app aether.WireVersions) aether.WireVersions {
 
 // meshSessionWireVersions returns the set a mesh session negotiated, or the
 // empty set for a session that reports none, which selects no gossip profile.
+// On a byte-stream session aether.SessionWireVersions returns only when the
+// preface exchange has ended, so awaitMeshSessionProfile, which SetupMeshSession
+// runs before it counts a session, reads the exchange's result and not an
+// empty set the exchange has yet to fill.
 func meshSessionWireVersions(s aether.Session) aether.NegotiatedWireVersions {
 	set, _ := aether.SessionWireVersions(s)
 	return set
