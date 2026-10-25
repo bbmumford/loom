@@ -6,6 +6,9 @@
 package node
 
 import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"net"
 	"path/filepath"
@@ -43,27 +46,55 @@ func startDeltaMeshRuntime(t *testing.T, dir string) *Runtime {
 	return rt
 }
 
+// seedWithShortFormPeerID draws an ed25519 seed whose identity
+// (identityFromSeed) has a PeerID, the first eight bytes of the node id's
+// fingerprint (aether.NodeID.ToPeerID), beginning with a byte in the range
+// aether.IsShortHeader names, 0x82-0x8F, which the short-form indicators of the
+// frame grammar occupy. 14 of the 256 first bytes lie in it, so a draw lands
+// within a few dozen key derivations; the bound is far above that.
+func seedWithShortFormPeerID(t *testing.T) []byte {
+	t.Helper()
+	seed := make([]byte, ed25519.SeedSize)
+	for range 4096 {
+		if _, err := rand.Read(seed); err != nil {
+			t.Fatal(err)
+		}
+		id, err := identityFromSeed(seed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if peerID := id.NodeID.ToPeerID(); aether.IsShortHeader(peerID[0]) {
+			return seed
+		}
+	}
+	t.Fatal("4096 seeds gave no PeerID beginning with a short-form byte; 14 of 256 first bytes do")
+	return nil
+}
+
 // newDeltaMeshRuntime starts a runtime over a new data directory, which gives
-// it a new identity, and returns the runtime with that directory. It starts
-// again over another directory while the frame codec cannot carry the identity
-// it drew: a full frame header begins with the sender's PeerID, and
-// aether.ReadNextFrame reads a first byte that aether.IsShortHeader accepts as
-// a short header, so a session with such a runtime ends on the first full
-// header it sends and carries no exchange.
-//
-// TODO: start once, when a full header can no longer be read as a short one.
+// it a new identity, and returns the runtime with that directory. The identity
+// is one whose PeerID begins with a short-form byte (seedWithShortFormPeerID),
+// written to the directory as the node key file GenerateIdentity loads, so a
+// restart over the same directory keeps it. Every full frame the runtime's
+// sessions write begins with aether.FullFrameDiscriminator (aether.EncodeFrame)
+// and the peer's aether.ReadNextFrame decides a frame's form from that byte
+// alone, so the SenderID behind it is never read as a short form: the exchange
+// a test then runs holds only while the grammar carries an identity beginning
+// with any byte, and a reader that took the header's first byte as the form
+// would end the session on this runtime's first full header instead.
 func newDeltaMeshRuntime(t *testing.T) (*Runtime, string) {
 	t.Helper()
-	for range 64 {
-		dir := t.TempDir()
-		rt := startDeltaMeshRuntime(t, dir)
-		if peerID := rt.identity.NodeID.ToPeerID(); !aether.IsShortHeader(peerID[0]) {
-			return rt, dir
-		}
-		_ = rt.Shutdown()
+	dir := t.TempDir()
+	keyPath := filepath.Join(dir, nodeIdentityFileName)
+	if err := persistIdentitySeed(context.Background(), keyPath, seedWithShortFormPeerID(t)); err != nil {
+		t.Fatalf("write the node key %s: %v", keyPath, err)
 	}
-	t.Fatal("no new identity had a PeerID the frame codec carries in a full header")
-	return nil, ""
+	rt := startDeltaMeshRuntime(t, dir)
+	if peerID := rt.identity.NodeID.ToPeerID(); !aether.IsShortHeader(peerID[0]) {
+		t.Fatalf("premise wrong: the runtime's PeerID begins 0x%02x, outside the short-form range, "+
+			"so its exchange shows nothing about a full frame carrying such an identity", peerID[0])
+	}
+	return rt, dir
 }
 
 // joinDeltaPeers opens a loopback TCP connection between two runtimes and runs
@@ -117,6 +148,30 @@ func exchangeOverASession(t *testing.T, dialler, accepter *Runtime) {
 		p := dialler.connMgr.peers[accepterID]
 		return p != nil && !p.lastExchange.IsZero()
 	})
+	requireNegotiatedFrameGrammar(t, dialler, accepterID)
+}
+
+// requireNegotiatedFrameGrammar fails unless rt's dispatch table holds a
+// session to peerID whose chosen wire version set names aether's frame
+// grammar (aether.WireVersionFrame). exchangeOverASession calls it once the
+// exchange has completed: the frames that carried the exchange were written and
+// read in the grammar both ends chose in their preface, which is what makes the
+// exchange evidence of that grammar carrying the runtimes' identities.
+func requireNegotiatedFrameGrammar(t *testing.T, rt *Runtime, peerID string) {
+	t.Helper()
+	rt.connMgr.dispatchMu.RLock()
+	session := rt.connMgr.meshSessions[peerID]
+	rt.connMgr.dispatchMu.RUnlock()
+	if session == nil {
+		t.Fatalf("premise wrong: the dispatch table holds no session to %s after an exchange with it", truncID(peerID))
+	}
+	set, ok := aether.SessionWireVersions(session)
+	if !ok {
+		t.Fatal("premise wrong: the session that carried the exchange reports no wire version set")
+	}
+	if _, ok := set.Version(aether.WireVersionFrame); !ok {
+		t.Fatalf("premise wrong: the session's chosen set %v names no frame grammar, so the exchange says nothing about one", set)
+	}
 }
 
 // holdsOpenMeshSession reports whether rt's dispatch table lists a session for
