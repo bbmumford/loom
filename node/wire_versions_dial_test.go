@@ -88,7 +88,8 @@ func sessionCounters() (initiator, responder uint64) {
 // debited and the path suppressed, the connecting state connectPeer set is
 // cleared, nothing is recorded for the peer, and neither session gauge moves.
 // A second refusal re-arms the suppression. A dial that borrowed the
-// connecting state is debited the same way and leaves the state to its owner.
+// connecting state is debited the same way and leaves the state to the
+// connectPeer dial that set it.
 // The peer's own refusal names the entry, so the pair refused at the preface
 // and no stream existed on either end.
 func TestARefusedByteStreamDialTakesTheSetupFailureBranch(t *testing.T) {
