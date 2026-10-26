@@ -371,7 +371,7 @@ func TestCall_ForwardingSessionNotCached(t *testing.T) {
 
 	// Forwarding sessions should NOT be cached
 	caller.mu.RLock()
-	_, cached := caller.sessions["support"]
+	_, cached := caller.sessions[sessionKey("support", "support.CheckHealth")]
 	caller.mu.RUnlock()
 	if cached {
 		t.Fatal("forwarding session should NOT be cached")

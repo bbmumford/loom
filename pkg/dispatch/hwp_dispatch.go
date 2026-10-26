@@ -107,12 +107,12 @@ func (cs *cachedSession) idleSince() time.Duration {
 //   - Forwarding sessions NOT cached (prevents lock-in)
 type HWPCaller struct {
 	mu       sync.RWMutex
-	sessions map[string]*cachedSession // role → cached session
+	sessions map[string]*cachedSession // sessionKey(role, handler) → cached session
 	finder   SessionFinder
 	// findGroup coalesces concurrent getOrFindSession callers for the
-	// same role onto one in-flight result, so one cache miss runs one
-	// FindSession and one StreamPool fill instead of N that overwrite
-	// each other.
+	// same role and handler onto one in-flight result, so one cache miss
+	// runs one FindSession and one StreamPool fill instead of N that
+	// overwrite each other.
 	findGroup singleflight.Group
 
 	stopCh chan struct{}
@@ -482,7 +482,7 @@ func (c *HWPCaller) evictExpiredCaches() {
 func (c *HWPCaller) evictIdle() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for role, cs := range c.sessions {
+	for key, cs := range c.sessions {
 		switch {
 		case cs.session.IsClosed():
 		case cs.idleSince() > callerMaxIdle:
@@ -495,7 +495,7 @@ func (c *HWPCaller) evictIdle() {
 		if cs.pool != nil {
 			cs.pool.Drain()
 		}
-		delete(c.sessions, role)
+		delete(c.sessions, key)
 	}
 }
 
@@ -1126,17 +1126,27 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 	}
 }
 
-// getOrFindSession returns a cached healthy session or finds a new one.
+// sessionKey is the key getOrFindSession caches a session under: the role
+// and the handler together. FindSession picks the peer for both, and peers
+// that share a role serve different handlers of it (node.orbtr.ai serves
+// orbtr.provisioning.CreatePartitionDatabase, node.orbtr.io serves
+// orbtr.provisioning.GetTenant and not the create), so a session found for
+// one handler is not a session to a peer serving another.
+func sessionKey(role, handler string) string { return role + "\x00" + handler }
+
+// getOrFindSession returns a cached healthy session or finds a new one,
+// per role and handler (sessionKey).
 //
-// Singleflight per role: when N concurrent calls hit the same cache miss
-// for a role, only ONE invokes c.finder.FindSession + builds the pool;
-// the others wait on the same in-flight result. Without it a thundering
-// herd of cache-miss dispatches would each walk the directory and
-// overwrite the cache, orphaning the others' StreamPool fills.
+// Singleflight per key: when N concurrent calls hit the same cache miss,
+// only ONE invokes c.finder.FindSession + builds the pool; the others
+// wait on the same in-flight result. Without it a thundering herd of
+// cache-miss dispatches would each walk the directory and overwrite the
+// cache, orphaning the others' StreamPool fills.
 func (c *HWPCaller) getOrFindSession(ctx context.Context, role, handler string) (aether.Session, *cachedSession, error) {
+	key := sessionKey(role, handler)
 	// Fast path: cache hit on a healthy session.
 	c.mu.RLock()
-	if cs, ok := c.sessions[role]; ok && cs.isHealthy() {
+	if cs, ok := c.sessions[key]; ok && cs.isHealthy() {
 		cs.touchUsed()
 		c.mu.RUnlock()
 		return cs.session, cs, nil
@@ -1144,13 +1154,13 @@ func (c *HWPCaller) getOrFindSession(ctx context.Context, role, handler string) 
 	c.mu.RUnlock()
 
 	// Slow path: singleflight the FindSession round. Coalesce concurrent
-	// callers for the same role onto one in-flight result.
-	v, err, _ := c.findGroup.Do(role, func() (any, error) {
+	// callers for the same key onto one in-flight result.
+	v, err, _ := c.findGroup.Do(key, func() (any, error) {
 		// Re-check cache under the singleflight lock — a sibling caller
 		// may have populated the cache between our cache-miss above and
 		// our singleflight admission.
 		c.mu.RLock()
-		if cs, ok := c.sessions[role]; ok && cs.isHealthy() {
+		if cs, ok := c.sessions[key]; ok && cs.isHealthy() {
 			cs.touchUsed()
 			c.mu.RUnlock()
 			return findResult{session: cs.session, cached: cs}, nil
@@ -1176,7 +1186,7 @@ func (c *HWPCaller) getOrFindSession(ctx context.Context, role, handler string) 
 		}
 		cs.pool.Fill(c.lifeCtx, session)
 		c.mu.Lock()
-		c.sessions[role] = cs
+		c.sessions[key] = cs
 		c.mu.Unlock()
 		return findResult{session: session, cached: cs}, nil
 	})
@@ -1311,11 +1321,11 @@ func (c *HWPCaller) Close() {
 	c.lifeCancel()
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	for role, cs := range c.sessions {
+	for key, cs := range c.sessions {
 		if cs.pool != nil {
 			cs.pool.Drain()
 		}
-		delete(c.sessions, role)
+		delete(c.sessions, key)
 	}
 }
 
