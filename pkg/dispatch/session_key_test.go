@@ -1,5 +1,6 @@
 /*
- * Copyright (c) 2026 ORBTR Pty Ltd. All Rights Reserved.
+ * Copyright (c) 2026 HSTLES / ORBTR Pty Ltd. All Rights Reserved.
+ * Queries: licensing@hstles.com
  */
 package dispatch
 
@@ -89,30 +90,30 @@ func (f *handlerFinder) IsSupersededByUpgrade(aether.Session) bool { return fals
 
 // TestAProvisioningCreateNeverLandsOnAPeerLackingIt: two peers share the role
 // orbtr.provisioning and serve different handlers of it. After a call that
-// finds and caches the peer serving GetTenant, a create takes the same
+// finds and caches the peer serving ProvisionPartition, a create takes the same
 // no-route path and is sent only to the peer serving the create.
 func TestAProvisioningCreateNeverLandsOnAPeerLackingIt(t *testing.T) {
 	const (
 		role      = "orbtr.provisioning"
-		getTenant = "orbtr.provisioning.GetTenant"
+		provision = "orbtr.provisioning.ProvisionPartition"
 		create    = "orbtr.provisioning.CreatePartitionDatabase"
 	)
-	io := &servingSession{node: "node-io", serves: map[string]bool{getTenant: true}}
+	io := &servingSession{node: "node-io", serves: map[string]bool{provision: true}}
 	ai := &servingSession{node: "node-ai", serves: map[string]bool{create: true}}
 	caller := NewHWPCaller(&handlerFinder{peers: []*servingSession{io, ai}})
 	defer caller.Close()
 
-	if _, err := caller.Call(context.Background(), role, getTenant, nil); err != nil {
-		t.Fatalf("GetTenant: %v", err)
+	if _, err := caller.Call(context.Background(), role, provision, nil); err != nil {
+		t.Fatalf("ProvisionPartition: %v", err)
 	}
-	if !io.got(getTenant) {
-		t.Fatal("GetTenant did not reach the peer serving it; the fixture routes nothing")
+	if !io.got(provision) {
+		t.Fatal("ProvisionPartition did not reach the peer serving it; the fixture routes nothing")
 	}
 	if _, err := caller.Call(context.Background(), role, create, nil); err != nil {
 		t.Fatalf("CreatePartitionDatabase: %v", err)
 	}
 	if io.got(create) {
-		t.Error("the create was sent to the peer serving GetTenant, which lacks it, over the session cached for the role")
+		t.Error("the create was sent to the peer serving ProvisionPartition, which lacks it, over the session cached for the role")
 	}
 	if !ai.got(create) {
 		t.Error("the create did not reach the peer serving it")

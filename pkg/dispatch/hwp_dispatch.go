@@ -1128,10 +1128,10 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 
 // sessionKey is the key getOrFindSession caches a session under: the role
 // and the handler together. FindSession picks the peer for both, and peers
-// that share a role serve different handlers of it (node.orbtr.ai serves
-// orbtr.provisioning.CreatePartitionDatabase, node.orbtr.io serves
-// orbtr.provisioning.GetTenant and not the create), so a session found for
-// one handler is not a session to a peer serving another.
+// that share a role serve different handlers of it (one serves
+// orbtr.provisioning.CreatePartitionDatabase, another serves
+// orbtr.provisioning.ProvisionPartition and not the create), so a session
+// found for one handler is not a session to a peer serving another.
 func sessionKey(role, handler string) string { return role + "\x00" + handler }
 
 // getOrFindSession returns a cached healthy session or finds a new one,
