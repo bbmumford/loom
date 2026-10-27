@@ -10,7 +10,6 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
-	lad "github.com/bbmumford/ledger"
 	"github.com/bbmumford/loom/pkg/dispatch"
 )
 
@@ -278,27 +277,25 @@ func (m *ConnectionManager) FindRoutes(ctx context.Context, role, handler string
 	return routes
 }
 
-// findNodeForRole returns the NodeID of a peer that serves the given role,
-// preferring nodes that handle the specific handler when one is provided.
-// When multiple peers qualify, picks the one with the lowest measured
-// latency to the local node (load-aware routing); ties break on grade.
+// findNodeForRole returns the NodeID of a peer that serves the given role
+// and, when handler is non-empty, advertises that handler. When multiple
+// peers qualify, picks the one with the lowest measured latency to the
+// local node (load-aware routing); ties break on grade.
 //
 // Sourced from the swarm RoleTable; returns "" when the swarm subsystem
-// isn't initialized yet or no peer advertises the role.
+// isn't initialized yet, no peer advertises the role, or no peer of the
+// role advertises the handler. A peer's record lists every handler it
+// executes (PeerPublisher), so a peer of the role whose record lacks the
+// handler refuses it as not found when targeted (RPCServer), and peers
+// sharing a role serve different handlers of it. On "" FindRoutes offers no
+// route and FindSession offers a forwarding session, so the request leaves
+// with no target and a receiving node's forwarder resolves it.
 func (m *ConnectionManager) findNodeForRole(ctx context.Context, role, handler string) string {
 	if m.rt.swarm == nil || m.rt.swarm.RoleTable == nil {
 		return ""
 	}
 
-	var nodes []lad.RoleRecord
-	if handler != "" {
-		if result := m.rt.swarm.RoleTable.Lookup(role, handler); len(result) > 0 {
-			nodes = result
-		}
-	}
-	if len(nodes) == 0 {
-		nodes = m.rt.swarm.RoleTable.Lookup(role, "")
-	}
+	nodes := m.rt.swarm.RoleTable.Lookup(role, handler)
 	if len(nodes) == 0 {
 		return ""
 	}
