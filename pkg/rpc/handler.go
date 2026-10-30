@@ -8,6 +8,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	sharedDispatch "github.com/bbmumford/loom/pkg/dispatch"
+	"github.com/bbmumford/loom/pkg/rpc/effect"
 	"github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
@@ -33,6 +34,26 @@ var ErrGradeTooLow = sharedDispatch.ErrGradeTooLow
 // and never gains time. Like ErrGradeTooLow it is dispatch's sentinel under
 // this package's name, and it keeps its type across hops the same way.
 var ErrRouteDeadline = sharedDispatch.ErrRouteDeadline
+
+// ErrAmbiguousEffect is returned when a call to an operation that is not
+// effect.Class.Repeatable was sent and its outcome is unknown: the handler may
+// or may not have run. The dispatcher neither resends it nor sends it on
+// another route, and the HTTP bridge answers it with a 502 it marks not
+// retryable. It is dispatch's sentinel under this package's name.
+var ErrAmbiguousEffect = sharedDispatch.ErrAmbiguousEffect
+
+// Effect is the effect class a Handler declares in its Effect field: package
+// effect's Class under this package's name, so a declaration names the type and
+// its values without a second import.
+type Effect = effect.Class
+
+// The effect classes a Handler declares in its Effect field: package effect's
+// values under this package's names.
+const (
+	EffectUnsafe     = effect.Unsafe
+	EffectIdempotent = effect.Idempotent
+	EffectReadOnly   = effect.ReadOnly
+)
 
 // OperationClass is the class a Handler declares for its transport
 // requirements. node's grade gate uses grade.OperationClass
@@ -114,6 +135,7 @@ type Handler struct {
 	Requirement      *scope.Requirement      // two-arm authorization; when set it supersedes Scope at the enforcement seam. nil = fall back to Scope/PresencePolicy.
 	Tags             []string                // Classification: "status", "write", "feature:policy.full"
 	OpClass          OperationClass          // declared operation class (zero value: OpStandard); loom does not read it, a caller forwards a class as the opClass hint via dispatch.WithOpClass
+	Effect           effect.Class            // what a second execution does (zero value: effect.Unsafe); dispatch sends only an effect.Class.Repeatable operation down more than one route or again after an unknown outcome
 	WebhookSignature *WebhookSignatureConfig // optional: declare this handler is a webhook-class receiver; the registry runs signature verification pre-dispatch
 }
 

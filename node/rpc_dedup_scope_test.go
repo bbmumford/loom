@@ -18,10 +18,10 @@ import (
 // — SCOPING THE RESPONSE-DEDUP CACHE KEY (the coding contract).
 //
 // req().Id is a caller-supplied wire string in one process-global namespace,
-// read at handleRequest step 0a before any principal is bound and written for
-// every successful local execution with a 10s TTL. A cache keyed on it alone
-// answers one request with another's response whenever two share an id,
-// regardless of who sent them or what they called.
+// read at handleRequest's dedup step and written for every successful local
+// execution with a 10s TTL. A cache keyed on it alone answers one request with
+// another's response whenever two share an id, regardless of who sent them or
+// what they called.
 //
 // 🔴 THE KEY CANNOT REST ON THE IDS BEING UNIQUE. The ids this module mints
 // carry random bytes (pkg/dispatch newRequestID, BidiRPC.nextWireID), but the
@@ -67,12 +67,13 @@ func fromPeer(peer string) context.Context {
 	return withCallerNode(context.Background(), peer)
 }
 
-// 🔴🔴 THE HEADLINE DEFECT: ONE PEER'S RESPONSE SERVED TO ANOTHER.
-// Both peers send the same request id for the same handler. Before the fix the
-// second peer received the first peer's cached response and the handler never
-// ran for it — a cross-peer response substitution decided purely by string
-// equality on a wire-supplied field.
-func TestTwoPeersSharingARequestIDDoNotShareAResponse(t *testing.T) {
+// 🔴🔴 ONE PEER'S RESPONSE MUST NEVER BE SERVED TO ANOTHER.
+// Both peers send the same request id for the same handler, with no sealed
+// principal. An unsealed request names no caller, so the delivering peer is
+// its caller dimension (dedupCaller), and each peer's request runs.
+// TestTwoPrincipalsSharingARequestIDNeverShareAResponse holds the same for
+// sealed requests, whose caller dimension is the principal.
+func TestTwoPeersSendingUnsealedRequestsWithOneIDDoNotShareAResponse(t *testing.T) {
 	s, probes := dedupServer(t, "orbtr.test.Dedup")
 	req := func() *pb.RPCRequest {
 		return &pb.RPCRequest{Id: "42", Handler: "orbtr.test.Dedup"}
@@ -221,8 +222,8 @@ func TestTheDedupKeyCannotBeForgedByAChosenRequestID(t *testing.T) {
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			ka := dedupCacheKey(tc.a[0], tc.a[1], tc.a[2])
-			kb := dedupCacheKey(tc.b[0], tc.b[1], tc.b[2])
+			ka := dedupCacheKey(tc.a[0], tc.a[1], tc.a[2], "digest")
+			kb := dedupCacheKey(tc.b[0], tc.b[1], tc.b[2], "digest")
 			if ka == kb {
 				t.Errorf("two different (caller, handler, id) triples produced the same "+
 					"key %q — a caller can choose a request id that lands on another "+
@@ -236,21 +237,22 @@ func TestTheDedupKeyCannotBeForgedByAChosenRequestID(t *testing.T) {
 // Each dimension must independently separate keys; a key that ignored one of
 // the three would still pass a test that only varied the others.
 func TestEachKeyDimensionSeparatesIndependently(t *testing.T) {
-	base := dedupCacheKey("peer-a", "handler-1", "id-1")
+	base := dedupCacheKey("peer-a", "handler-1", "id-1", "digest-1")
 	for _, tc := range []struct {
 		dim string
 		key string
 	}{
-		{"caller", dedupCacheKey("peer-b", "handler-1", "id-1")},
-		{"handler", dedupCacheKey("peer-a", "handler-2", "id-1")},
-		{"requestID", dedupCacheKey("peer-a", "handler-1", "id-2")},
+		{"caller", dedupCacheKey("peer-b", "handler-1", "id-1", "digest-1")},
+		{"handler", dedupCacheKey("peer-a", "handler-2", "id-1", "digest-1")},
+		{"requestID", dedupCacheKey("peer-a", "handler-1", "id-2", "digest-1")},
+		{"digest", dedupCacheKey("peer-a", "handler-1", "id-1", "digest-2")},
 	} {
 		if tc.key == base {
 			t.Errorf("changing %s alone did not change the key — that dimension is "+
 				"absent from the key, so responses cross it freely", tc.dim)
 		}
 	}
-	if again := dedupCacheKey("peer-a", "handler-1", "id-1"); again != base {
+	if again := dedupCacheKey("peer-a", "handler-1", "id-1", "digest-1"); again != base {
 		t.Errorf("the key is not deterministic: %q then %q", base, again)
 	}
 }
@@ -266,7 +268,7 @@ func TestNoCollisionsAcrossAThousandTriples(t *testing.T) {
 					fmt.Sprintf("orbtr.test.H%d", h),
 					fmt.Sprintf("%d", i),
 				}
-				k := dedupCacheKey(trip[0], trip[1], trip[2])
+				k := dedupCacheKey(trip[0], trip[1], trip[2], "digest")
 				if prev, dup := seen[k]; dup {
 					t.Fatalf("collision: %v and %v both key to %q", prev, trip, k)
 				}
@@ -294,24 +296,26 @@ func TestTheKeyEncodingIsInjectiveOverAHostileAlphabet(t *testing.T) {
 	// component can imitate a boundary if the scheme lets it.
 	alphabet := []string{"", "a", ":", "0", "0:", "a0:", ":0", "10:", "1:a"}
 
-	seen := map[string][3]string{}
+	seen := map[string][4]string{}
 	for _, c := range alphabet {
 		for _, h := range alphabet {
 			for _, i := range alphabet {
-				trip := [3]string{c, h, i}
-				k := dedupCacheKey(c, h, i)
-				if prev, dup := seen[k]; dup {
-					t.Fatalf("NOT INJECTIVE: %q and %q both key to %q — a caller who "+
-						"controls the request id can construct one that lands on another "+
-						"peer's or handler's cache entry, turning an accidental collision "+
-						"into a targeted read of a response it was never entitled to",
-						prev, trip, k)
+				for _, d := range alphabet {
+					quad := [4]string{c, h, i, d}
+					k := dedupCacheKey(c, h, i, d)
+					if prev, dup := seen[k]; dup {
+						t.Fatalf("NOT INJECTIVE: %q and %q both key to %q — a caller who "+
+							"controls the request id can construct one that lands on another "+
+							"peer's or handler's cache entry, turning an accidental collision "+
+							"into a targeted read of a response it was never entitled to",
+							prev, quad, k)
+					}
+					seen[k] = quad
 				}
-				seen[k] = trip
 			}
 		}
 	}
-	if want := len(alphabet) * len(alphabet) * len(alphabet); len(seen) != want {
-		t.Errorf("produced %d distinct keys from %d distinct triples", len(seen), want)
+	if want := len(alphabet) * len(alphabet) * len(alphabet) * len(alphabet); len(seen) != want {
+		t.Errorf("produced %d distinct keys from %d distinct tuples", len(seen), want)
 	}
 }

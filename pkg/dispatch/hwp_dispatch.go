@@ -19,6 +19,7 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
+	"github.com/bbmumford/loom/pkg/rpc/effect"
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/pkg/trace"
 	"golang.org/x/sync/singleflight"
@@ -198,7 +199,10 @@ type SessionFinder interface {
 	FindSession(ctx context.Context, role, handler string) (aether.Session, error)
 	FindAnySession() (aether.Session, bool)
 	// CallViaBidi sends an RPC via BidiRPC (Stream 1) if available for the node.
-	// Returns (nil, false, nil) if no BidiRPC channel exists for this node.
+	// Returns (nil, false, nil) if no BidiRPC channel exists for this node, or
+	// if the channel closed before the request left on it. A channel that
+	// closed after taking the request returns (nil, true, err) with err
+	// unwrapping to ErrChannelClosed, because the peer may have run it.
 	//
 	// The finder picks the session the request leaves on, and HWPCaller never
 	// sees it, so the finder runs the grade gate on that session
@@ -233,17 +237,14 @@ var requestIDCounter uint64
 
 // newRequestID mints a logical request id: 128 random bits in hex, then this
 // process's counter in base 36 as a trace suffix. One call keeps one id across
-// its attempts: Call's parallel probes clone one request, and callOnce's
-// dynamic-stream attempt reuses the id of its bidi attempt. The receiving
-// RPCServer keys its dedup cache on the id a request arrives with, so it must
-// not collide with an id another process minted.
+// its attempts: Call's routes clone one request, and callOnce's dynamic-stream
+// attempt reuses the id of its bidi attempt. The receiving RPCServer builds its
+// dedup key on this id, so it must not collide with an id another process
+// minted.
 //
-// A request sent over a bidi channel does not arrive with this id: node's
-// BidiRPC.Call puts the channel's own wire id in its place, and restores this
-// one only on the caller's copy.
-// TODO: carry the logical id beside the bidi channel's wire id, so the
-// receiver can join a bidi attempt with the dynamic-stream attempt that
-// follows it.
+// The id travels twice: as Id and under LogicalIDKey in Context. node's
+// BidiRPC.Call puts its channel's own wire id in Id for correlation, so the
+// Context copy is the one that reaches the receiver unchanged on every path.
 func newRequestID() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:]) // crypto/rand.Read does not fail on the platforms Go supports
@@ -526,11 +527,14 @@ func (c *HWPCaller) refillPools() {
 }
 
 // Call sends an RPC to the mesh node serving the given role.
-// Computes up to 3 routes via LAD and probes them in parallel.
-// First response wins. Each probe is governed by the circuit for (method,
-// first-hop node, first-hop session generation). When the FQN
-// "role/method" appears in the cacheable-handlers config the response
-// is served from / stored in the caller-side cache automatically.
+// Computes up to 3 routes via LAD. An operation whose effect class is
+// effect.Class.Repeatable (handlerEffect) is probed on all of them in parallel
+// and the first response wins; any other operation is sent on one route at a
+// time by callUnsafe, and on the next only when the send before provably never
+// left. Each attempt is governed by the circuit for (method, first-hop node,
+// first-hop session generation). When the FQN "role/method" appears in the
+// cacheable-handlers config the response is served from / stored in the
+// caller-side cache automatically.
 //
 // The call leaves only on a first hop that grades at or above the floor of
 // its operation class (the WithOpClass hint; none is Standard). With no such
@@ -561,6 +565,10 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 		}
 	}
 
+	// The class the holders advertise for method decides how many sends the
+	// call may make: one at a time unless it is Repeatable.
+	class := c.handlerEffect(role, method)
+
 	// Memoized FindRoutes lookup: the directory cache walk costs
 	// 50-200µs on the warm path; a 5s TTL keeps it inside the freshness
 	// window of the underlying directory snapshot.
@@ -568,7 +576,7 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 	if len(routes) == 0 {
 		// Fallback: sequential callOnce (no routes means LAD has no data).
 		// callOnce settles the circuit of its own attempt.
-		resp, err := c.callOnce(ctx, role, method, payload)
+		resp, err := c.callOnce(ctx, role, method, payload, class)
 		if err == nil {
 			c.metrics.RecordCall(role, time.Since(start), true)
 			if ttl > 0 {
@@ -600,6 +608,20 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 	// Set absolute deadline for per-hop TTL
 	if remaining > 0 {
 		baseReq.Deadline = time.Now().Add(remaining).UnixNano()
+	}
+
+	if !class.Repeatable() {
+		resp, err := c.callUnsafe(ctx, method, baseReq, routes)
+		if err != nil {
+			c.invalidateRouteCache(role, method)
+			c.metrics.RecordCall(role, time.Since(start), false)
+			return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, err)
+		}
+		c.metrics.RecordCall(role, time.Since(start), true)
+		if ttl > 0 {
+			c.StoreCachedResult(fqn, payload, resp, ttl)
+		}
+		return resp, nil
 	}
 
 	// Launch parallel probes — one per route
@@ -674,12 +696,16 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 						resultCh <- probeResult{nodeID: r.NodeID, err: err}
 						return
 					}
-					// Inner-deadline-only fallthrough: only the bidi cap
-					// (or the parent probeCtx caused by another probe's
-					// quick success cancelling everyone) fired. If the
+					// Fallthrough: the bidi cap fired (or the parent probeCtx,
+					// cancelled by another probe's quick success), the bidi
+					// channel closed after taking the request, or the request
+					// never left on it. The operation is Repeatable, so a
+					// second send cannot make a second change. If the
 					// caller's ctx is still healthy AND probeCtx has time
 					// left, try the dynamic-stream fallback.
-					if !errors.Is(err, context.DeadlineExceeded) || ctx.Err() != nil {
+					fallthroughable := errors.Is(err, context.DeadlineExceeded) ||
+						errors.Is(err, ErrChannelClosed) || errors.Is(err, ErrNotSent)
+					if !fallthroughable || ctx.Err() != nil {
 						unanswered(err)
 						return
 					}
@@ -774,6 +800,114 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 	return nil, fmt.Errorf("dispatch %s/%s: all %d probes failed: %v", role, method, len(routes), lastErr)
 }
 
+// callUnsafe sends a call to an operation that is not effect.Class.Repeatable.
+// It tries routes in the order findRoutesCached sorted them and sends on the
+// next only when the attempt before was Unsent, so the handler runs at most
+// once: a request two holders could each run, or one holder could run twice,
+// is never in flight on two routes. The first answer, success or rejection,
+// ends the call; an attempt that was sent and not answered ends it with an
+// *AmbiguousEffectError. Every attempt shares one probe budget,
+// defaultProbeTimeout under the caller's deadline.
+func (c *HWPCaller) callUnsafe(ctx context.Context, method string, baseReq *pb.RPCRequest, routes []aether.ProbeRoute) ([]byte, error) {
+	probeCtx, probeCancel := context.WithTimeout(ctx, defaultProbeTimeout)
+	defer probeCancel()
+
+	var lastErr error
+	for i, r := range routes {
+		payload, err := c.sendOnRoute(ctx, probeCtx, method, baseReq, i, r)
+		if err == nil {
+			return payload, nil
+		}
+		if !Unsent(err) {
+			return nil, err
+		}
+		lastErr = err
+		if probeCtx.Err() != nil {
+			break
+		}
+	}
+	return nil, fmt.Errorf("every route refused the call before it was sent (%d routes): %w", len(routes), lastErr)
+}
+
+// sendOnRoute makes callUnsafe's one attempt on route r: over the first hop's
+// bidi channel when it has one, otherwise over a dynamic stream, never both
+// once the request has left. It settles the route's circuit before it
+// returns. Its error is Unsent when nothing left this node, typed when the
+// route refused the call, ErrHandlerError when the handler answered with a
+// rejection, and an *AmbiguousEffectError when the request left and no answer
+// came back.
+func (c *HWPCaller) sendOnRoute(ctx, probeCtx context.Context, method string, baseReq *pb.RPCRequest, idx int, r aether.ProbeRoute) ([]byte, error) {
+	cb := c.getBreaker(method, r.NodeID, r.Session)
+	if !cb.Allow() {
+		return nil, ErrCircuitOpen
+	}
+
+	req := proto.Clone(baseReq).(*pb.RPCRequest)
+	req.RequestNonce = fmt.Sprintf("%s-%d", baseReq.Id, idx)
+	req.TargetNodeId = r.TargetNodeID
+	req.RouteList = r.RouteList
+
+	ambiguous := func(err error) error {
+		settleUnanswered(ctx, probeCtx, cb)
+		return &AmbiguousEffectError{Handler: method, Cause: err}
+	}
+	answered := func(resp *pb.RPCResponse) ([]byte, error) {
+		cb.RecordSuccess() // transport worked regardless of app result
+		if !resp.Success {
+			return nil, responseError(method, resp)
+		}
+		return resp.Payload, nil
+	}
+
+	// The bidi attempt runs on the whole probe budget: with no second send
+	// after it, nothing needs the bidiProbeTimeout carve-out the parallel
+	// probes keep for their dynamic-stream fallback.
+	resp, ok, err := c.finder.CallViaBidi(probeCtx, r.NodeID, req)
+	if ok {
+		switch {
+		case err == nil && resp != nil:
+			return answered(resp)
+		case err == nil:
+			return nil, ambiguous(fmt.Errorf("bidi: nil response"))
+		case errors.Is(err, ErrGradeTooLow):
+			cb.Release()
+			return nil, err
+		case !errors.Is(err, ErrNotSent):
+			return nil, ambiguous(err)
+		}
+		// The request never left on the bidi channel; the dynamic stream
+		// below is its first send.
+	}
+
+	if r.Session == nil || r.Session.IsClosed() {
+		settleUnanswered(ctx, probeCtx, cb)
+		return nil, NotSent(fmt.Errorf("session closed before send"))
+	}
+	reqData, err := pb.MarshalRequest(req)
+	if err != nil {
+		cb.Release()
+		return nil, NotSent(fmt.Errorf("marshal: %w", err))
+	}
+	stream, err := c.openDynamicStream(probeCtx, r.Session, priorityForOpClass(req.Context["opClass"]))
+	if err != nil {
+		settleUnanswered(ctx, probeCtx, cb)
+		return nil, NotSent(fmt.Errorf("open stream: %w", err))
+	}
+	defer releaseDynamicStream(r.Session, stream)
+	if err := stream.Send(probeCtx, reqData); err != nil {
+		return nil, ambiguous(fmt.Errorf("send: %w", err))
+	}
+	respData, err := stream.Receive(probeCtx)
+	if err != nil {
+		return nil, ambiguous(fmt.Errorf("receive: %w", err))
+	}
+	dynResp, err := pb.UnmarshalResponse(respData)
+	if err != nil {
+		return nil, ambiguous(fmt.Errorf("unmarshal: %w", err))
+	}
+	return answered(dynResp)
+}
+
 // CallCacheable wraps Call with the caller-side result cache for
 // idempotent reads. If a fresh entry exists for (role+method, payload)
 // it returns immediately (0-RTT local hit); otherwise it dispatches via
@@ -809,7 +943,12 @@ func (c *HWPCaller) CallCacheable(ctx context.Context, role, method string, payl
 // the path failed counts against it, and one that ended with no verdict
 // releases its half-open lease. Call's no-route branch is the only caller and
 // settles nothing itself.
-func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload []byte) ([]byte, error) {
+//
+// class is the operation's effect class. Only an effect.Class.Repeatable
+// operation is sent again over a dynamic stream after its bidi attempt left and
+// went unanswered; any other one ends there with an *AmbiguousEffectError, as
+// does an unanswered dynamic-stream send.
+func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload []byte, class effect.Class) ([]byte, error) {
 	session, cs, err := c.getOrFindSession(ctx, role, method)
 	if err != nil {
 		return nil, fmt.Errorf("find session: %w", err)
@@ -873,15 +1012,23 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 				return nil, err
 			}
 			if err != nil {
-				// Inner-deadline-only: the 10s defaultProbeTimeout cap
-				// fired but the caller's ctx is still healthy. Fall
-				// through to the dynamic-stream path rather than hard-
-				// failing the dispatch. Without this check the cap
-				// would be a hard ceiling instead of a recovery trigger,
-				// and a wedged bidi would fail every dispatch it carries.
-				if errors.Is(err, context.DeadlineExceeded) && ctx.Err() == nil {
+				// A request that never left on the bidi channel falls
+				// through to the dynamic stream, which is then its first
+				// send. A Repeatable one also falls through when the 10s
+				// defaultProbeTimeout cap fired with the caller's ctx still
+				// healthy, or when the channel closed after taking it:
+				// without that the cap would be a hard ceiling instead of a
+				// recovery trigger, and a wedged bidi would fail every
+				// dispatch it carries. Any other operation that left stops
+				// here, because the peer may have run it.
+				resend := class.Repeatable() &&
+					(errors.Is(err, context.DeadlineExceeded) || errors.Is(err, ErrChannelClosed))
+				if ctx.Err() == nil && (errors.Is(err, ErrNotSent) || resend) {
 					// no breaker failure here — the fallback attempt
 					// will record its own success/failure
+				} else if !class.Repeatable() && !errors.Is(err, ErrNotSent) {
+					settleUnanswered(ctx, bidiCtx, cb)
+					return nil, &AmbiguousEffectError{Handler: method, Cause: fmt.Errorf("bidi: %w", err)}
 				} else if ctx.Err() != nil {
 					// The caller's context ended: its cancellation is
 					// not the path's availability.
@@ -936,6 +1083,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 	req := buildRPCRequestCtx(ctx, role, method, payload, remaining, rpcTimeout)
 	if logicalID != "" {
 		req.Id = logicalID
+		req.Context[LogicalIDKey] = logicalID
 	}
 	reqData, err := pb.MarshalRequest(req)
 	if err != nil {
@@ -946,6 +1094,15 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 	rpcCtx, cancel := context.WithTimeout(ctx, rpcTimeout)
 	defer cancel()
 
+	// unanswered is the error for a dynamic-stream send that left and got no
+	// usable answer: ambiguous for an operation that is not Repeatable.
+	unanswered := func(err error) error {
+		if !class.Repeatable() {
+			return &AmbiguousEffectError{Handler: method, Cause: err}
+		}
+		return err
+	}
+
 	// Send request
 	if err := stream.Send(rpcCtx, reqData); err != nil {
 		if cs != nil {
@@ -953,7 +1110,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 		}
 		c.metrics.RecordTimeout(role)
 		settleUnanswered(ctx, ctx, cb)
-		return nil, fmt.Errorf("send: %w", err)
+		return nil, unanswered(fmt.Errorf("send: %w", err))
 	}
 
 	// Receive response
@@ -964,14 +1121,14 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 		}
 		c.metrics.RecordTimeout(role)
 		settleUnanswered(ctx, ctx, cb)
-		return nil, fmt.Errorf("receive: %w", err)
+		return nil, unanswered(fmt.Errorf("receive: %w", err))
 	}
 
 	// Decode response
 	resp, err := pb.UnmarshalResponse(respData)
 	if err != nil {
 		settleUnanswered(ctx, ctx, cb)
-		return nil, fmt.Errorf("unmarshal: %w", err)
+		return nil, unanswered(fmt.Errorf("unmarshal: %w", err))
 	}
 	// The path answered: whatever the answer, the circuit closes.
 	cb.RecordSuccess()
@@ -1089,7 +1246,7 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 		timeout = remaining
 	}
 	id := newRequestID()
-	rpcCtx := map[string]string{"role": role}
+	rpcCtx := map[string]string{"role": role, LogicalIDKey: id}
 	if oc := opClassFromContext(ctx); oc != "" {
 		rpcCtx["opClass"] = oc
 	}

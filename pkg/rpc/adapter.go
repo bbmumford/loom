@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/bbmumford/loom/node/handlers"
+	"github.com/bbmumford/loom/pkg/rpc/effect"
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
@@ -78,6 +79,13 @@ func (s *registryShim) AllowedPartitions() []string { return nil }
 func (s *registryShim) Requirement() *rpcscope.Requirement { return s.handler.Requirement }
 
 var _ handlers.RequirementDeclarer = (*registryShim)(nil)
+
+// Effect forwards the wrapped handler's declared effect class, so RPCServer
+// judges a local run after an unknown forward outcome by the class the handler
+// was registered with.
+func (s *registryShim) Effect() effect.Class { return s.handler.Effect }
+
+var _ handlers.EffectDeclarer = (*registryShim)(nil)
 
 // RPCHandler interface — decodes req.Payload into the handler's request
 // prototype, calls the handler, and marshals the response. Payload

@@ -14,6 +14,7 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
+	"github.com/bbmumford/loom/pkg/rpc/effect"
 )
 
 // These tests cover how HWPCaller settles the circuit of an attempt, on the
@@ -223,14 +224,15 @@ func TestCancelledCallsNeverOpenAClosedCircuit(t *testing.T) {
 
 // A probe that a sibling probe beat is cancelled by Call, not failed by its
 // path: it releases a half-open lease and records nothing, although Call has
-// already returned and no longer reads its result.
+// already returned and no longer reads its result. Only a Repeatable operation
+// is probed on two routes at once.
 func TestAProbeASiblingBeatSettlesItsOwnCircuit(t *testing.T) {
 	s := newStall()
 	fast := &rpcMockSession{resp: &pb.RPCResponse{Success: true, Payload: []byte("fast")}}
 	slow := &stalledSession{stall: s}
 	defer forgetSession(fast)
 	defer forgetSession(slow)
-	caller := NewHWPCaller(&multiRouteFinder{routes: []aether.ProbeRoute{
+	caller := NewHWPCaller(&multiRouteFinder{class: effect.Idempotent, routes: []aether.ProbeRoute{
 		{Session: fast, NodeID: "node-a", TargetNodeID: "target"},
 		{Session: slow, NodeID: "node-b", TargetNodeID: "target"},
 	}})

@@ -137,6 +137,11 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 	}
 	minGrade := class.MinGrade()
 
+	// The effect class decides what may follow a send that went unanswered:
+	// another path only for a Repeatable handler. Any other handler is sent on
+	// one path, and its unanswered send ends the forward as ambiguous.
+	repeatable := f.rt.handlerEffect(req.Handler).Repeatable()
+
 	// FAST PATH: If request has a RouteList, try the intended hop first.
 	// This is the common case for relayed requests from parallel probing.
 	// The hop is held to the same floor and budget as a re-routed path; one
@@ -181,6 +186,12 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 				proto := unmapProtocol(session.Protocol())
 				f.rt.connMgr.recordDialFailure(nextHop, proto)
 			}
+			// The intended hop took the request and gave no answer, so its
+			// target may have run it: only a Repeatable handler, or a request
+			// that never left, is re-routed.
+			if !repeatable && !dispatch.Unsent(err) {
+				return nil, &dispatch.AmbiguousEffectError{Handler: req.Handler, Cause: err}
+			}
 			// Intended path broken — fall through to re-route
 			log.Printf("[RPC] Forward %s: intended route to %s broken (%v), re-routing via LAD",
 				req.Handler, aether.NodeID(nextHop).Short(), err)
@@ -219,7 +230,7 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 
 	// No target found — nobody serves this role. Fail fast instead of bouncing.
 	if targetNodeID == "" {
-		return nil, fmt.Errorf("no node serves role %s (handler %s)", role, req.Handler)
+		return nil, dispatch.NotSent(fmt.Errorf("no node serves role %s (handler %s)", role, req.Handler))
 	}
 
 	// Parallel re-route: build up to 3 candidate paths and probe simultaneously.
@@ -284,7 +295,7 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 	}
 
 	if len(paths) == 0 {
-		return nil, fmt.Errorf("no route to handler %s (role: %s, target: %s)", req.Handler, role, targetNodeID)
+		return nil, dispatch.NotSent(fmt.Errorf("no route to handler %s (role: %s, target: %s)", req.Handler, role, targetNodeID))
 	}
 
 	// Composite path scoring so same-region direct paths win over
@@ -393,7 +404,10 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 	// request. A forwarded (Hops>0) request therefore takes a SINGLE best path,
 	// so total in-flight is bounded to ~originFanout × depth (linear). paths is
 	// ordered best-first, so paths[:1] keeps the strongest candidate.
-	if req.Hops > 0 && len(paths) > 1 {
+	//
+	// A handler that is not Repeatable takes the single best path at every
+	// hop, the origin included, because two paths could each run it.
+	if (req.Hops > 0 || !repeatable) && len(paths) > 1 {
 		paths = paths[:1]
 	}
 
@@ -455,10 +469,22 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 			}
 			lastErr = result.err
 		case <-ctx.Done():
+			if !repeatable {
+				return nil, &dispatch.AmbiguousEffectError{Handler: req.Handler, Cause: ctx.Err()}
+			}
 			return nil, ctx.Err()
 		}
 	}
 
+	// A handler that is not Repeatable went down one path. Its failure is
+	// passed on as it stands when nothing left, so the hop before may try
+	// elsewhere, and as ambiguous otherwise.
+	if !repeatable {
+		if dispatch.Unsent(lastErr) {
+			return nil, fmt.Errorf("forward %s: the re-route path refused it before sending: %w", req.Handler, lastErr)
+		}
+		return nil, &dispatch.AmbiguousEffectError{Handler: req.Handler, Cause: lastErr}
+	}
 	return nil, fmt.Errorf("forward %s: all %d re-route paths failed: %v", req.Handler, len(paths), lastErr)
 }
 
@@ -502,7 +528,7 @@ func (f *runtimeForwarder) callOverMeshSession(ctx context.Context, session aeth
 	// Fallback: open a dynamic stream (ID 10+) for this RPC.
 	reqBytes, err := pb.MarshalRequest(req)
 	if err != nil {
-		return nil, fmt.Errorf("marshal forward request: %w", err)
+		return nil, dispatch.NotSent(fmt.Errorf("marshal forward request: %w", err))
 	}
 	id := atomic.AddUint64(&forwardStreamCounter, 1) + 9
 	rpcStream, err := session.OpenStream(ctx, aether.StreamConfig{
@@ -511,7 +537,7 @@ func (f *runtimeForwarder) callOverMeshSession(ctx context.Context, session aeth
 		Priority:    128,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("open RPC stream: %w", err)
+		return nil, dispatch.NotSent(fmt.Errorf("open RPC stream: %w", err))
 	}
 	// Close the dynamic stream when we're done. Returning without
 	// closing leaked one client-side stream per fallback forward, and left the

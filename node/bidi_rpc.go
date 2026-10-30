@@ -18,6 +18,7 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
+	"github.com/bbmumford/loom/pkg/dispatch"
 )
 
 // Message type prefixes for bidirectional RPC on Stream 1.
@@ -223,7 +224,17 @@ func (b *BidiRPC) Call(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse
 		}
 	}()
 
+	// Id leaves as this channel's wire id, which the pending map correlates the
+	// answer by. The logical id rides on in Context under dispatch.LogicalIDKey,
+	// written here for a request built without it, so the receiver's dedup key
+	// joins this attempt with the call's attempts on other paths.
 	originalID := req.Id
+	if originalID != "" && req.Context[dispatch.LogicalIDKey] == "" {
+		if req.Context == nil {
+			req.Context = make(map[string]string, 1)
+		}
+		req.Context[dispatch.LogicalIDKey] = originalID
+	}
 	wireID := b.nextWireID()
 	req.Id = wireID
 
@@ -249,7 +260,7 @@ func (b *BidiRPC) Call(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse
 	reqBytes, err := pb.MarshalRequest(req)
 	if err != nil {
 		req.Id = originalID
-		return nil, fmt.Errorf("bidi marshal request: %w", err)
+		return nil, dispatch.NotSent(fmt.Errorf("bidi marshal request: %w", err))
 	}
 
 	msg := make([]byte, 1+len(reqBytes))
@@ -313,11 +324,18 @@ func (b *BidiRPC) readLoop() {
 		// hanging until their own ctx fires.
 		b.ctxCancel()
 		close(b.done)
+		//
+		// Each drained response is stamped ambiguous (dispatch.StampRefusal):
+		// its request was handed to the peer, which may have run it, so
+		// HWPCaller must read it as an unknown outcome and never as a handler's
+		// rejection.
 		b.mu.Lock()
 		for id, ch := range b.pending {
+			closed := &pb.RPCResponse{Id: id, Success: false, Error: "bidi stream closed"}
+			dispatch.StampRefusal(closed, &dispatch.AmbiguousEffectError{Cause: dispatch.ErrChannelClosed})
 			// Non-blocking send; receivers drain via select with b.done.
 			select {
-			case ch <- &pb.RPCResponse{Id: id, Success: false, Error: "bidi stream closed"}:
+			case ch <- closed:
 			default:
 			}
 		}
