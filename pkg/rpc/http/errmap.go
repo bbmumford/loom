@@ -12,6 +12,8 @@ import (
 // optional retry hint. Used by the bridge to surface accurate failure modes
 // to gateway callers instead of collapsing every cause to 502 Bad Gateway.
 //
+//   - dispatch.ErrAmbiguousEffect → 502, NOT retried: the call left and its
+//     outcome is unknown, so a retry could run the operation a second time
 //   - DeadlineExceeded            → 504 Gateway Timeout
 //   - dispatch.ErrCircuitOpen     → 503 Service Unavailable + Retry-After: 1
 //   - "session closed before send" → 502 + retry-eligible (the call never
@@ -28,11 +30,18 @@ import (
 // because the call never reached the remote handler (no side effects). We
 // only set it for the strict "before send" case — every other path could
 // have crossed the wire and lost only the response, so retry could double-
-// execute. If a future per-handler idempotency flag is wired in, broader
-// retry can be re-introduced gated on that flag.
+// execute.
+// TODO: allow a broader retry for an operation whose effect.Class is
+// Repeatable; the bridge does not read the class.
 func classifyMeshError(err error) (status int, retryAfter string, retryEligible bool) {
 	if err == nil {
 		return 500, "", false
+	}
+	// An ambiguous effect was sent and may have run; any resend could run it
+	// again. It is checked before the deadline mapping because its cause is
+	// often the deadline that ended the wait.
+	if errors.Is(err, dispatch.ErrAmbiguousEffect) {
+		return 502, "", false
 	}
 	if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, dispatch.ErrRouteDeadline) {
 		return 504, "", false

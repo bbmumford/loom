@@ -163,9 +163,10 @@ func isRouteRefusal(err error) bool {
 // (responseError). RPCServer.executeLocal builds its response without
 // Metadata, so no handler can set these keys.
 const (
-	refusalKindKey      = "refusal"
-	refusalKindGrade    = "grade"
-	refusalKindDeadline = "deadline"
+	refusalKindKey       = "refusal"
+	refusalKindGrade     = "grade"
+	refusalKindDeadline  = "deadline"
+	refusalKindAmbiguous = "ambiguous"
 
 	refusalClassKey     = "refusal.class"
 	refusalUnknownKey   = "refusal.unknown-class"
@@ -175,11 +176,13 @@ const (
 	refusalNeedKey      = "refusal.need-ns"
 )
 
-// StampRefusal records err on resp when err is a typed route refusal, so the
-// node that receives resp can return the same typed error to its caller. Any
-// other error leaves resp as it is. node's RPCServer calls it on the failed
-// response it builds for a refused forward, for a request naming an
-// undeclared class, and for a request that arrived after its deadline.
+// StampRefusal records err on resp when err is a typed route refusal or an
+// ambiguous outcome (ErrAmbiguousEffect), so the node that receives resp can
+// return the same typed error to its caller. Any other error leaves resp as it
+// is. node's RPCServer calls it on the failed response it builds for a refused
+// or ambiguous forward, for a request naming an undeclared class, and for a
+// request that arrived after its deadline. An ambiguous outcome travels typed
+// because HWPCaller must not send an Unsafe call on another route after one.
 func StampRefusal(resp *pb.RPCResponse, err error) {
 	if resp == nil {
 		return
@@ -187,6 +190,8 @@ func StampRefusal(resp *pb.RPCResponse, err error) {
 	var gte *GradeTooLowError
 	var rde *RouteDeadlineError
 	switch {
+	case errors.Is(err, ErrAmbiguousEffect):
+		resp.Metadata = map[string]string{refusalKindKey: refusalKindAmbiguous}
 	case errors.As(err, &gte):
 		resp.Metadata = map[string]string{
 			refusalKindKey:     refusalKindGrade,
@@ -235,6 +240,8 @@ func responseError(handler string, resp *pb.RPCResponse) error {
 			Required:     grade.Grade(required),
 			UnknownClass: unknown,
 		}
+	case refusalKindAmbiguous:
+		return &AmbiguousEffectError{Handler: handler, Cause: errors.New(resp.Error)}
 	case refusalKindDeadline:
 		remaining, _ := strconv.ParseInt(resp.Metadata[refusalRemainingKey], 10, 64)
 		need, _ := strconv.ParseInt(resp.Metadata[refusalNeedKey], 10, 64)

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bbmumford/loom/internal/securityctx"
+	"github.com/bbmumford/loom/pkg/rpc/effect"
 	"github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/pkg/trace"
 	"github.com/bbmumford/loom/ports"
@@ -97,6 +98,23 @@ type HandlerMeta interface {
 // none, or returns nil, is judged by its scope tag as before.
 type RequirementDeclarer interface {
 	Requirement() *scope.Requirement
+}
+
+// EffectDeclarer is an optional interface a HandlerMeta implements to declare
+// its operation's effect class. RPCServer reads it, through EffectOf, before it
+// runs a request locally after a forward whose outcome is unknown; a
+// HandlerMeta that does not implement it is Unsafe.
+type EffectDeclarer interface {
+	Effect() effect.Class
+}
+
+// EffectOf returns the effect class meta declares, and effect.Unsafe when meta
+// is nil or declares none.
+func EffectOf(meta HandlerMeta) effect.Class {
+	if d, ok := meta.(EffectDeclarer); ok {
+		return d.Effect()
+	}
+	return effect.Unsafe
 }
 
 // RPCHandler handles synchronous request/response operations.

@@ -15,6 +15,7 @@ import (
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/health"
 	"github.com/ORBTR/aether/rpc/pb"
+	"github.com/bbmumford/loom/pkg/rpc/effect"
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
@@ -206,12 +207,16 @@ func (m *rpcMockSession) CongestionWindow() int64           { return 0 }
 func (m *rpcMockSession) Protocol() aether.Protocol         { return aether.ProtoWebSocket }
 func (m *rpcMockSession) Metrics() aether.SessionMetrics    { return aether.SessionMetrics{} }
 
-// mockFinder implements SessionFinder for tests.
+// mockFinder implements SessionFinder for tests. class is the effect class it
+// reports for every operation (EffectFinder); the zero value is Unsafe.
 type mockFinder struct {
 	session    aether.Session
 	anySession aether.Session
 	findErr    error
+	class      effect.Class
 }
+
+func (f *mockFinder) HandlerEffect(role, handler string) effect.Class { return f.class }
 
 func (f *mockFinder) FindSession(ctx context.Context, role, handler string) (aether.Session, error) {
 	if f.findErr != nil {
@@ -284,10 +289,14 @@ func TestCall_ParallelProbeFailover(t *testing.T) {
 	}
 }
 
-// multiRouteFinder returns multiple routes for parallel probing tests.
+// multiRouteFinder returns multiple routes for parallel probing tests. class
+// is the effect class it reports for every operation; the zero value is Unsafe.
 type multiRouteFinder struct {
 	routes []aether.ProbeRoute
+	class  effect.Class
 }
+
+func (f *multiRouteFinder) HandlerEffect(role, handler string) effect.Class { return f.class }
 
 func (f *multiRouteFinder) FindSession(ctx context.Context, role, handler string) (aether.Session, error) {
 	if len(f.routes) > 0 {

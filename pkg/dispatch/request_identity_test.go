@@ -11,6 +11,7 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
+	"github.com/bbmumford/loom/pkg/rpc/effect"
 )
 
 // timedOutBidiFinder has a bidi channel whose call hits its time cap while
@@ -71,11 +72,11 @@ func (st *sentStream) Send(_ context.Context, data []byte) error {
 	return nil
 }
 
-// One call keeps one request id across its attempts: the bidi attempt that
-// timed out and the dynamic-stream attempt that follows it carry the same id,
-// on the probed-route path and on callOnce. The receiving server keys its
-// dedup cache on the id, so two ids make one call two requests to it. A
-// second call gets an id of its own.
+// One call to a Repeatable operation keeps one request id across its
+// attempts: the bidi attempt that timed out and the dynamic-stream attempt that
+// follows it carry the same id, on the probed-route path and on callOnce. The
+// receiving server builds its dedup key on the id, so two ids make one call two
+// requests to it. A second call gets an id of its own.
 func TestACallKeepsOneRequestIDAcrossItsAttempts(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
@@ -87,7 +88,7 @@ func TestACallKeepsOneRequestIDAcrossItsAttempts(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			sess := &sentSession{}
 			defer forgetSession(sess)
-			finder := &timedOutBidiFinder{mockFinder: mockFinder{session: sess}, noRoutes: tc.noRoutes}
+			finder := &timedOutBidiFinder{mockFinder: mockFinder{session: sess, class: effect.Idempotent}, noRoutes: tc.noRoutes}
 			caller := NewHWPCaller(finder)
 			defer caller.Close()
 
@@ -114,13 +115,14 @@ func TestACallKeepsOneRequestIDAcrossItsAttempts(t *testing.T) {
 	}
 }
 
-// The parallel probes of one call carry one request id, each over its own
-// route, so the node they converge on can tell they are one request.
+// The parallel probes of one call to a Repeatable operation carry one request
+// id, each over its own route, so the node they converge on can tell they are
+// one request.
 func TestTheProbesOfOneCallShareItsRequestID(t *testing.T) {
 	first, second := &sentSession{}, &sentSession{}
 	defer forgetSession(first)
 	defer forgetSession(second)
-	caller := NewHWPCaller(&multiRouteFinder{routes: []aether.ProbeRoute{
+	caller := NewHWPCaller(&multiRouteFinder{class: effect.Idempotent, routes: []aether.ProbeRoute{
 		{Session: first, NodeID: "node-a", TargetNodeID: "target"},
 		{Session: second, NodeID: "node-b", TargetNodeID: "target"},
 	}})

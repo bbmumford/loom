@@ -92,9 +92,15 @@ func (m *ConnectionManager) IsSupersededByUpgrade(session aether.Session) bool {
 // the dispatch loop would surface "bidi stream closed" as the probe error
 // and skip the dynamic-stream fallback, so every probe of a caller fails
 // with "bidi stream closed" whenever WS sessions to cross-origin anchors
-// churn. So a dead bidi is treated as "no bidi" and the stale entry is
-// evicted, and the next call goes straight to the dynamic-stream path
-// until a fresh bidi is registered.
+// churn. So a bidi found dead before the call is treated as "no bidi" and the
+// stale entry is evicted, and the next call goes straight to the
+// dynamic-stream path until a fresh bidi is registered.
+//
+// A bidi that dies DURING the call is evicted the same way, but the request
+// may already have reached the peer. Unless the call's error says it never
+// left (dispatch.Unsent), the answer is (nil, true, err) with err unwrapping to
+// dispatch.ErrChannelClosed: HWPCaller resends it over a dynamic stream only for
+// an effect.Class.Repeatable operation, and CallNode returns it.
 //
 // Implements dispatch.SessionFinder.CallViaBidi.
 func (m *ConnectionManager) CallViaBidi(ctx context.Context, nodeID string, req *pb.RPCRequest) (*pb.RPCResponse, bool, error) {
@@ -130,11 +136,12 @@ func (m *ConnectionManager) CallViaBidi(ctx context.Context, nodeID string, req 
 	}
 	resp, err := bidi.Call(ctx, req)
 	if err != nil && !bidi.IsAlive() {
-		// Bidi died DURING the call (stream closed under us). Evict +
-		// signal fallthrough to dynamic stream — the caller would
-		// otherwise surface this as a routing failure.
+		// Bidi died DURING the call (stream closed under us).
 		m.evictDeadBidiForSession(sess, bidi)
-		return nil, false, nil
+		if dispatch.Unsent(err) {
+			return nil, false, nil
+		}
+		return nil, true, fmt.Errorf("%w: %w", dispatch.ErrChannelClosed, err)
 	}
 	return resp, true, err
 }

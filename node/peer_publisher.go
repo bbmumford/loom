@@ -429,7 +429,7 @@ func (p *PeerPublisher) publishOnce() {
 	// forwarder and findNodeForRole pick a node for an FQN, so carrying such
 	// an entry would send its callers here for a forwarding hop, or to the
 	// "not found on target node" refusal when they target this node.
-	var handlers []string
+	var handlers, handlerEffects []string
 	if reg != nil {
 		registered := reg.All() // sorted by FQN
 		handlers = make([]string, 0, len(registered))
@@ -439,6 +439,10 @@ func (p *PeerPublisher) publishOnce() {
 			}
 			handlers = append(handlers, handler.FQN())
 		}
+		// The effect class of each listed handler rides beside its FQN, so
+		// a caller's RoleTable.HandlerEffect can tell whether the operation
+		// may be sent down more than one route.
+		handlerEffects = effectTags(registered)
 	}
 
 	// Operator-facing metadata (service name + region) rides Capabilities.tags.
@@ -452,6 +456,7 @@ func (p *PeerPublisher) publishOnce() {
 	if region != "" {
 		tags = append(tags, "region="+region)
 	}
+	tags = append(tags, handlerEffects...)
 
 	// conn_count: how many peers this node currently holds an open session
 	// with. Receivers feed it into ConnectionMap via the fleet.peer ingest,

@@ -6,6 +6,8 @@ package node
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -23,9 +25,12 @@ import (
 	"github.com/bbmumford/loom/internal/securityctx"
 	"github.com/bbmumford/loom/node/handlers"
 	"github.com/bbmumford/loom/pkg/dispatch"
+	"github.com/bbmumford/loom/pkg/rpc/effect"
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/pkg/trace"
 	"github.com/bbmumford/loom/ports"
+	"golang.org/x/sync/singleflight"
+	"google.golang.org/protobuf/proto"
 )
 
 // RPCForwarder finds and sends RPCs to the correct handler node when
@@ -319,6 +324,10 @@ type RPCServer struct {
 	unsealedRequests     int64          // atomic
 	responseCache        *ResponseCache // dedup cache for parallel probes
 
+	// inflight coalesces concurrent local runs of one dedup key into one
+	// (executeOnce).
+	inflight singleflight.Group
+
 	// authValidator stamps wire-envelope partition IDs onto the platform-
 	// canonical context key (convention (b) in handleRequest). Injected
 	// from Config.AuthValidator; defaults to the loom-local securityctx
@@ -583,32 +592,38 @@ func callerNodeFromCtx(ctx context.Context) string {
 }
 
 // dedupCacheKey composes the response-cache key from every dimension a cached
-// response must not cross.
+// response must not cross: the caller (dedupCaller), the handler, the call's
+// logical request id and the digest of its payload. requestDedupKey builds it
+// for handleRequest, which looks it up before running or forwarding a request
+// and coalesces concurrent arrivals of one key into one execution.
 //
-// 🔴 req.Id ALONE IS NOT AN IDENTITY. It is a caller-supplied wire string in a
-// process-global namespace, read at step 0a before any principal is bound and
-// written for every successful local execution with a 10s TTL. Keyed on it
-// alone, any two requests sharing an id collide regardless of who sent them or
-// what they called — peer A's `example.auth.Login` response answers peer B's
+// 🔴 THE REQUEST ID ALONE IS NOT AN IDENTITY. It is a caller-supplied wire
+// string in a process-global namespace, and an entry is written for every
+// successful local execution with a 10s TTL. Keyed on it alone, any two
+// requests sharing an id collide regardless of who sent them or what they
+// called — one caller's `example.auth.Login` response answers another's
 // `example.dhcp.ListLeases`, because the only thing compared is "42" == "42".
 // The ids this module mints carry random bytes (newRequestID in
-// pkg/dispatch/hwp_dispatch.go, and a bidi channel's wire id in
-// BidiRPC.nextWireID) and do not collide by chance, but the server reads
-// whatever id a peer sends, so the key cannot rest on that.
+// pkg/dispatch/hwp_dispatch.go) and do not collide by chance, but the server
+// reads whatever id a peer sends, so the key cannot rest on that. The payload
+// digest keeps one id reused with a different body from reading the first
+// body's answer.
 //
 // 🔑 LENGTH-PREFIXED, NOT DELIMITER-JOINED. requestID is fully caller-
 // controlled, so any fixed separator is forgeable: with "a|b|c" a caller could
 // send Id = "|example.auth.Login|42" and land on another handler's entry.
 // Length prefixes make the encoding injective — one key can be produced by
-// exactly one triple — so no choice of requestID can impersonate a different
-// (caller, handler) pair.
-//
-// callerNode is empty for requests that arrived over no peer session; those
-// share one namespace with each other, still separated by handler.
-func dedupCacheKey(callerNode, handler, requestID string) string {
+// exactly one tuple — so no choice of requestID can impersonate a different
+// (caller, handler, digest).
+func dedupCacheKey(caller, handler, requestID, digest string) string {
+	return lengthPrefixed(caller, handler, requestID, digest)
+}
+
+// lengthPrefixed joins parts so that one string comes from exactly one parts
+// list: each part is written as its length, a colon, then the part.
+func lengthPrefixed(parts ...string) string {
 	var b strings.Builder
-	b.Grow(len(callerNode) + len(handler) + len(requestID) + 12)
-	for _, part := range []string{callerNode, handler, requestID} {
+	for _, part := range parts {
 		b.WriteString(strconv.Itoa(len(part)))
 		b.WriteByte(':')
 		b.WriteString(part)
@@ -616,23 +631,47 @@ func dedupCacheKey(callerNode, handler, requestID string) string {
 	return b.String()
 }
 
+// requestDedupKey is req's dedup key, or "" when req carries no request id and
+// so cannot be joined with another attempt. The id is the logical one under
+// dispatch.LogicalIDKey when present, because BidiRPC.Call replaces Id with its
+// channel's wire id, and Id otherwise. handleRequest calls it only after any
+// sealed principal on req was bound, so dedupCaller reads a principal this
+// node admitted.
+func requestDedupKey(ctx context.Context, req *pb.RPCRequest) string {
+	logical := req.Context[dispatch.LogicalIDKey]
+	if logical == "" {
+		logical = req.Id
+	}
+	if logical == "" {
+		return ""
+	}
+	digest := sha256.Sum256(req.Payload)
+	return dedupCacheKey(dedupCaller(ctx, req), req.Handler, logical, hex.EncodeToString(digest[:]))
+}
+
+// dedupCaller is the caller dimension of a dedup key. A request carrying a
+// sealed principal is keyed by that principal, encoded deterministically, and
+// not by the peer that delivered it: a call relayed through another node and
+// the same call sent direct arrive from different peers, and both must join
+// one entry for the handler to run once. Two principals never share an entry.
+// A request without one names no caller, so the delivering peer
+// (callerNodeFromCtx) is the only caller it has; requests that arrived over no
+// peer session share one namespace with each other.
+func dedupCaller(ctx context.Context, req *pb.RPCRequest) string {
+	if req.Principal != nil {
+		if b, err := (proto.MarshalOptions{Deterministic: true}).Marshal(req.Principal); err == nil {
+			return lengthPrefixed("principal", string(b))
+		}
+	}
+	return lengthPrefixed("peer", callerNodeFromCtx(ctx))
+}
+
 // handleRequest processes a binary RPC request with intelligent dispatch.
-// Dispatch chain: timeout enforcement → context enrichment → load-aware local/forward decision → error.
+// Dispatch chain: deadline and class refusal → timeout enforcement → context enrichment and principal bind → dedup → relay forward or load-aware local/forward decision → error.
 func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.RPCResponse {
 	startTime := time.Now()
 
-	// The dedup identity for this request. Scoped by delivering peer and
-	// handler, not by the caller-supplied id alone — see dedupCacheKey.
-	dedupKey := dedupCacheKey(callerNodeFromCtx(ctx), req.Handler, req.Id)
-
-	// 0a. Dedup check — return cached response for parallel probes
-	if req.Id != "" && s.responseCache != nil {
-		if cached := s.responseCache.Get(dedupKey); cached != nil {
-			return cached
-		}
-	}
-
-	// 0b. Absolute deadline — a request that arrives past its deadline is
+	// 0a. Absolute deadline — a request that arrives past its deadline is
 	// refused before it is executed or forwarded, with the typed refusal the
 	// forwarder gives one it meets expired. The refusal is stamped on the
 	// response because the Error text alone reaches the origin as a handler
@@ -650,7 +689,7 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 		return resp
 	}
 
-	// 0c. Operation class — a request naming a class the grade gate does not
+	// 0b. Operation class — a request naming a class the grade gate does not
 	// declare is refused before it is executed or forwarded. The forwarder
 	// refuses such a request too, but only on the forward path: without this
 	// check the local path below would run it under no class at all, and the
@@ -723,12 +762,41 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 		atomic.AddInt64(&s.unsealedRequests, 1)
 	}
 
-	// 3. Intelligent dispatch: local vs forward decision
+	// 3. Dedup — a request whose logical id, caller and payload match one this
+	// node already answered with success, within the cache TTL, gets that
+	// answer again instead of a second run. The lookup follows the principal
+	// bind above, because the key's caller dimension is the bound principal
+	// (requestDedupKey).
+	dedupKey := requestDedupKey(ctx, req)
+	if dedupKey != "" && s.responseCache != nil {
+		if cached := s.responseCache.Get(dedupKey); cached != nil {
+			cached.Id = req.Id
+			return cached
+		}
+	}
+
+	// 4. Intelligent dispatch: local vs forward decision
 	var hasLocal bool
 	if s.registry != nil {
 		_, hasLocal = s.registry.GetMeta(req.Handler)
 	}
 	canForward := s.forwarder != nil && req.Hops < pb.MaxRPCHops
+
+	// A request that names another node as its target reaches this node only
+	// as a relay hop. A relay forwards; it never runs the handler, even one it
+	// registers, because the caller chose the target and may have sent the
+	// same call to it by another route.
+	if req.TargetNodeId != "" && s.localID != "" && req.TargetNodeId != s.localID {
+		if !canForward {
+			return &pb.RPCResponse{
+				Id:        req.Id,
+				Success:   false,
+				Error:     fmt.Sprintf("relay cannot forward %s to its target %s (hop %d)", req.Handler, req.TargetNodeId, req.Hops),
+				LatencyNs: int64(time.Since(startTime)),
+			}
+		}
+		return s.forwardOnward(ctx, req, startTime)
+	}
 
 	// If both paths available, check if we should forward instead of local
 	//
@@ -746,29 +814,24 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 			s.metrics.RecordForward(req.Handler, time.Since(startTime))
 			return resp
 		}
-		// Forwarding failed — fall back to local execution. This forward is
-		// load relief for a handler this node serves, so a forward that
-		// fails, or that the forwarder refuses because no path meets the
-		// class floor or the remaining budget, leaves the request to run
-		// here: a local run leaves on no route, so no route floor applies to
-		// it. The request's class is a declared one by step 0c.
 		req.Hops-- // restore for local execution
+		// Forwarding failed. This forward is load relief for a handler this
+		// node serves, so a forward that never left (dispatch.Unsent: the
+		// forwarder found no path, or refused every path for the class floor
+		// or the remaining budget) leaves the request to run here: a local
+		// run leaves on no route, so no route floor applies to it. The
+		// request's class is a declared one by step 0b. A forward that left
+		// and went unanswered may have run on the peer, so only a Repeatable
+		// handler runs here after one.
+		if !dispatch.Unsent(err) && !s.localEffect(req.Handler).Repeatable() {
+			s.metrics.RecordForwardFail(req.Handler, time.Since(startTime))
+			return forwardFailure(req, err, startTime, &dispatch.AmbiguousEffectError{Handler: req.Handler, Cause: err})
+		}
 	}
 
 	// Execute locally if handler registered
 	if hasLocal {
-		resp := s.executeLocal(ctx, req, startTime)
-		s.metrics.RecordLocal(req.Handler, resp.Success, time.Since(startTime))
-		// Cache only successful responses.
-		// Caching failures (e.g., "handler not found" returned because
-		// of a hot-reload race) poisons subsequent parallel-probe
-		// lookups for 10 s — even when a different valid target
-		// exists in the mesh. Treating failures as cacheable
-		// effectively rate-limits recovery to the cache TTL.
-		if req.Id != "" && s.responseCache != nil && resp != nil && resp.Success {
-			s.responseCache.Put(dedupKey, resp)
-		}
-		return resp
+		return s.executeOnce(ctx, req, dedupKey, startTime)
 	}
 
 	// If this node was the intended target but doesn't have the handler,
@@ -784,24 +847,7 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 
 	// Forward to a peer that handles it
 	if canForward {
-		req.Hops++
-		resp, err := s.forwarder.Forward(ctx, req)
-		if err != nil {
-			s.metrics.RecordForwardFail(req.Handler, time.Since(startTime))
-			failed := &pb.RPCResponse{
-				Id:        req.Id,
-				Success:   false,
-				Error:     fmt.Sprintf("forward %s failed (hop %d): %v", req.Handler, req.Hops, err),
-				LatencyNs: int64(time.Since(startTime)),
-			}
-			// The Error text alone reaches the origin as a handler rejection.
-			// A grade or deadline refusal is stamped on the response as well,
-			// so dispatch.HWPCaller there returns it to its caller typed.
-			dispatch.StampRefusal(failed, err)
-			return failed
-		}
-		s.metrics.RecordForward(req.Handler, time.Since(startTime))
-		return resp
+		return s.forwardOnward(ctx, req, startTime)
 	}
 
 	// No handler found anywhere
@@ -922,6 +968,88 @@ func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startT
 		Error:     resp.Error,
 		LatencyNs: int64(resp.Latency),
 	}
+}
+
+// forwardOnward sends req on through the forwarder, as a relay hop or for a
+// handler this node does not register, and answers with the forwarded response
+// or a failed one.
+func (s *RPCServer) forwardOnward(ctx context.Context, req *pb.RPCRequest, startTime time.Time) *pb.RPCResponse {
+	req.Hops++
+	resp, err := s.forwarder.Forward(ctx, req)
+	if err != nil {
+		s.metrics.RecordForwardFail(req.Handler, time.Since(startTime))
+		return forwardFailure(req, err, startTime, err)
+	}
+	s.metrics.RecordForward(req.Handler, time.Since(startTime))
+	return resp
+}
+
+// forwardFailure is the failed response for a forward of req that ended with
+// err. The Error text alone reaches the origin as a handler rejection, so stamp
+// is stamped on it as well (dispatch.StampRefusal): a grade or deadline
+// refusal, or an ambiguous outcome, reaches dispatch.HWPCaller there typed.
+func forwardFailure(req *pb.RPCRequest, err error, startTime time.Time, stamp error) *pb.RPCResponse {
+	failed := &pb.RPCResponse{
+		Id:        req.Id,
+		Success:   false,
+		Error:     fmt.Sprintf("forward %s failed (hop %d): %v", req.Handler, req.Hops, err),
+		LatencyNs: int64(time.Since(startTime)),
+	}
+	dispatch.StampRefusal(failed, stamp)
+	return failed
+}
+
+// localEffect is the effect class this node's registry declares for handler,
+// and effect.Unsafe when it declares none or does not register it.
+func (s *RPCServer) localEffect(handler string) effect.Class {
+	if s.registry == nil {
+		return effect.Unsafe
+	}
+	meta, ok := s.registry.GetMeta(handler)
+	if !ok {
+		return effect.Unsafe
+	}
+	return handlers.EffectOf(meta)
+}
+
+// executeOnce runs req on this node's handler once per dedupKey: an arrival
+// while the key's run is in flight waits for that run and receives a copy of
+// its response, and a successful response is cached under the key for the
+// cache TTL. Concurrent arrivals are the case the cache alone misses, because
+// the cache holds an answer only after the first run returns, and the routes
+// of one call can deliver it to this node at the same moment. A request with no
+// dedupKey runs on its own.
+func (s *RPCServer) executeOnce(ctx context.Context, req *pb.RPCRequest, dedupKey string, startTime time.Time) *pb.RPCResponse {
+	run := func() *pb.RPCResponse {
+		resp := s.executeLocal(ctx, req, startTime)
+		s.metrics.RecordLocal(req.Handler, resp.Success, time.Since(startTime))
+		// Cache only successful responses.
+		// Caching failures (e.g., "handler not found" returned because
+		// of a hot-reload race) poisons subsequent parallel-probe
+		// lookups for 10 s — even when a different valid target
+		// exists in the mesh. Treating failures as cacheable
+		// effectively rate-limits recovery to the cache TTL.
+		if dedupKey != "" && s.responseCache != nil && resp.Success {
+			s.responseCache.Put(dedupKey, resp)
+		}
+		return resp
+	}
+	if dedupKey == "" {
+		return run()
+	}
+	v, _, _ := s.inflight.Do(dedupKey, func() (any, error) {
+		if s.responseCache != nil {
+			if cached := s.responseCache.Get(dedupKey); cached != nil {
+				return cached, nil
+			}
+		}
+		return run(), nil
+	})
+	// Every waiter gets its own copy: callers write resp.Id for correlation
+	// (BidiRPC.handleIncomingRequest), and the shared value is one pointer.
+	resp := cloneRPCResponse(v.(*pb.RPCResponse))
+	resp.Id = req.Id
+	return resp
 }
 
 // readMessage reads a binary TLV message from the session.
