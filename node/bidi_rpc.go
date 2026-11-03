@@ -18,6 +18,7 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
+	"github.com/bbmumford/loom/node/handlers"
 	"github.com/bbmumford/loom/pkg/dispatch"
 )
 
@@ -71,6 +72,15 @@ type BidiRPC struct {
 	// organisation's private network; another origin = the path
 	// traverses the 6PN hairpin or edge-WS path.
 	scope string
+
+	// partition is the transport partition the session this bidi rides on
+	// was bound to by its handshake (AcceptMeshConnectionOpts.Partition).
+	// handleIncomingRequest stamps it on every request's context, because
+	// RPCServer.handleRequest reads the transport partition from there and
+	// bindAuthenticatedPrincipal refuses a request's principal when it is
+	// empty. "" means the session names none, and a principal sent over it
+	// is refused.
+	partition string
 
 	// Pending outbound calls awaiting responses, keyed by wire-side ID
 	// (the bidi-unique id we stamp at Send time — NOT the caller's id).
@@ -126,6 +136,16 @@ type BidiRPC struct {
 // instrumentation (test bidis, ad-hoc construction without a peer
 // context).
 func NewBidiRPC(stream aether.Stream, remoteID aether.NodeID, server *RPCServer, transport, scope string) *BidiRPC {
+	return NewPartitionedBidiRPC(stream, remoteID, server, transport, scope, "")
+}
+
+// NewPartitionedBidiRPC is NewBidiRPC for a session its handshake bound to a
+// transport partition. Every request the peer sends on it is served under
+// that partition, so the principal it carries is judged by the consumer's
+// admitter against the transport it arrived on, exactly as a request on an
+// accepted RPC session is. AcceptMeshConnection builds every session's bidi
+// through it.
+func NewPartitionedBidiRPC(stream aether.Stream, remoteID aether.NodeID, server *RPCServer, transport, scope, partition string) *BidiRPC {
 	ctx, cancel := context.WithCancel(context.Background())
 	// 5 random bytes → a per-instance wire-ID namespace so ids never
 	// collide across bidis/peers in the responder's shared dedup cache.
@@ -137,6 +157,7 @@ func NewBidiRPC(stream aether.Stream, remoteID aether.NodeID, server *RPCServer,
 		server:       server,
 		transport:    transport,
 		scope:        scope,
+		partition:    partition,
 		wireIDPrefix: "b" + hex.EncodeToString(pfx[:]) + "-",
 		pending:      make(map[string]chan *pb.RPCResponse),
 		ctx:          ctx,
@@ -468,6 +489,9 @@ func (b *BidiRPC) handleIncomingRequest(payload []byte) {
 		// request's TimeoutNs as a hard cap.
 		// The delivering peer scopes this request's dedup entry.
 		hctx := withCallerNode(b.ctx, string(b.remoteID))
+		if b.partition != "" {
+			hctx = handlers.WithTransportPartition(hctx, b.partition)
+		}
 		if req.TimeoutNs > 0 {
 			var hcancel context.CancelFunc
 			hctx, hcancel = context.WithTimeout(hctx, time.Duration(req.TimeoutNs))
