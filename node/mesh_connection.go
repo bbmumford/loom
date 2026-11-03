@@ -20,6 +20,7 @@ import (
 	lad "github.com/bbmumford/ledger"
 	"github.com/bbmumford/loom/core/directory/gossip"
 	"github.com/bbmumford/loom/core/streams"
+	"github.com/bbmumford/loom/node/handlers"
 )
 
 // AcceptMeshConnectionOpts holds parameters for accepting an Aether connection.
@@ -533,12 +534,18 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			bidiTransport = "ws"
 		}
 		bidiScope := bidiScopeLabel(peer, m.rt.cfg.Platform.Region())
-		bidiRPC := NewBidiRPC(rpcStream, aether.NodeID(nodeID), m.rt.rpcServer, bidiTransport, bidiScope)
+		bidiRPC := NewPartitionedBidiRPC(rpcStream, aether.NodeID(nodeID), m.rt.rpcServer, bidiTransport, bidiScope, opts.Partition)
 		m.registerBidiRPC(opts.Session, bidiRPC)
 
 		// Dynamic stream handler — accepts every stream no consumer claimed
 		// by ID. Each dynamic RPC stream (IDs 10-99) carries one
 		// request-response pair; serveUnclaimedStream refuses the rest.
+		// Its requests are served under the session's transport partition,
+		// as the bidi's are, so a principal one carries is judged against it.
+		streamCtx := connCtx
+		if opts.Partition != "" {
+			streamCtx = handlers.WithTransportPartition(connCtx, opts.Partition)
+		}
 		go func() {
 			for {
 				stream, err := opts.Session.AcceptStream(connCtx)
@@ -547,7 +554,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 					return
 				}
 				dbgAether.Printf("%s: accepted dynamic stream %d", truncID(nodeID), stream.StreamID())
-				go m.rt.rpcServer.serveUnclaimedStream(connCtx, stream, aether.NodeID(nodeID))
+				go m.rt.rpcServer.serveUnclaimedStream(streamCtx, stream, aether.NodeID(nodeID))
 			}
 		}()
 
