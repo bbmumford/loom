@@ -310,13 +310,18 @@ func (m *ConnectionManager) FindRoutes(ctx context.Context, role, handler string
 // sharing a role serve different handlers of it. On "" FindRoutes offers no
 // route and FindSession offers a forwarding session, so the request leaves
 // with no target and a receiving node's forwarder resolves it.
+//
+// It picks only among RoleTable.Answerers, so an advert that does not hold the
+// requirement its operation's other adverts name is never picked. Where the
+// adverts disagree it returns "": HWPCaller refuses such a call through
+// CheckAnswerers before it asks for a route, and the forwarder refuses it too.
 func (m *ConnectionManager) findNodeForRole(ctx context.Context, role, handler string) string {
 	if m.rt.swarm == nil || m.rt.swarm.RoleTable == nil {
 		return ""
 	}
 
-	nodes := m.rt.swarm.RoleTable.Lookup(role, handler)
-	if len(nodes) == 0 {
+	nodes, err := m.rt.swarm.RoleTable.Answerers(role, handler)
+	if err != nil || len(nodes) == 0 {
 		return ""
 	}
 	if len(nodes) == 1 {

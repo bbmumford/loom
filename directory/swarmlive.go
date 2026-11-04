@@ -349,12 +349,20 @@ func (d *SwarmDirectory) projectPeerLocked(r ports.Record) {
 	d.reach[r.NodeID] = addrs
 
 	d.dropHandlersLocked(r.NodeID)
-	for _, fqn := range pr.RpcHandlers {
-		d.handlers[fqn] = append(d.handlers[fqn], ports.HandlerAdvert{
+	var requirements []string
+	if pr.Capabilities != nil {
+		requirements = HandlerRequirements(pr.Capabilities.Tags, len(pr.RpcHandlers))
+	}
+	for i, fqn := range pr.RpcHandlers {
+		advert := ports.HandlerAdvert{
 			Name:   fqn,
 			NodeID: r.NodeID,
 			Roles:  m.Roles,
-		})
+		}
+		if requirements != nil {
+			advert.RequiredScopes = []string{requirements[i]}
+		}
+		d.handlers[fqn] = append(d.handlers[fqn], advert)
 	}
 }
 

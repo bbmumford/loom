@@ -30,7 +30,7 @@ var goldenRuntimeMethods = []string{
 	"HasSession", "HealthCheck", "HealthEvaluator", "HealthRegistry",
 	"HijackRelayHandler", "Identity", "IdentityPrivateKey", "InitRoute",
 	"InitSwarm", "IsHealthy", "LADSnapshot", "LADSnapshotCache", "Ledger",
-	"LocalLoad", "LookupRoleViaSwarm", "MeshDB", "MeshMetrics",
+	"LiveDirectory", "LocalLoad", "LookupRoleViaSwarm", "MeshDB", "MeshMetrics",
 	"MeshSessionCount", "MetricsExporter", "NATBehaviour", "NATStrategy",
 	"NodeID", "PeerDispatchHealth", "PickTraversalMethod",
 	"PublishHandlersToLAD", "PublishRPCHandlersToLAD", "ReachLookupHandler",

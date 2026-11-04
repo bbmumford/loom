@@ -5,7 +5,11 @@
 
 package ports
 
-import "context"
+import (
+	"context"
+	"sort"
+	"strings"
+)
 
 // Member is the typed membership projection of a fleet.peer record.
 type Member struct {
@@ -128,6 +132,77 @@ type HandlerAdvert struct {
 	Name   string // FQN, e.g. "example.<domain>.<Op>"
 	NodeID NodeID
 	Roles  []string
+	// RequiredScopes is what the advertising node asks of a caller before it
+	// runs the operation, as that node's record names it. Empty when the record
+	// names nothing, which is a different statement from naming "open".
+	// JudgeHandlerAdverts compares it across the adverts of one Name.
+	RequiredScopes []string
+}
+
+// HandlerAnswerers is what JudgeHandlerAdverts finds across the adverts of one
+// operation.
+type HandlerAnswerers struct {
+	Name string
+	// Answerers are the nodes a call may reach, ordered by NodeID. Empty when
+	// the adverts disagree, because nothing here can say which of them is right.
+	Answerers []NodeID
+	// Undeclared are the nodes whose advert names no requirement while another
+	// advert of the operation names one. They are not answerers.
+	Undeclared []NodeID
+	// Requirements holds each distinct requirement with the nodes naming it.
+	Requirements map[string][]NodeID
+}
+
+// Disagree reports whether the adverts name different requirements.
+func (a HandlerAnswerers) Disagree() bool { return len(a.Requirements) > 1 }
+
+// JudgeHandlerAdverts compares what the adverts of one operation require of a
+// caller. Several adverts naming one requirement are all answerers, however many
+// there are: that is how the mesh carries load and survives a node going away.
+//
+// A router picks among answerers without looking at what each requires, so an
+// advert asking for less than another would take the call from the caller that
+// could not have passed the stricter one. So adverts naming different
+// requirements yield no answerers, and an advert naming none while another names
+// one is left out. When no advert names one there is nothing to compare, and all
+// of them stand.
+//
+// node.RoleTable.Answerers runs it on the peers routing picks from, so a call is
+// refused before it leaves, and the endpoint spine's fleet audit runs it on the
+// results of HandlersByName to report the same finding.
+func JudgeHandlerAdverts(adverts []HandlerAdvert) HandlerAnswerers {
+	out := HandlerAnswerers{}
+	named := map[string][]NodeID{}
+	var bare []NodeID
+	for _, a := range adverts {
+		out.Name = a.Name
+		if len(a.RequiredScopes) == 0 {
+			bare = append(bare, a.NodeID)
+			continue
+		}
+		scopes := append([]string(nil), a.RequiredScopes...)
+		sort.Strings(scopes)
+		key := strings.Join(scopes, "+")
+		named[key] = append(named[key], a.NodeID)
+	}
+	if len(named) == 0 {
+		out.Answerers = sortedNodeIDs(bare)
+		return out
+	}
+	out.Undeclared = sortedNodeIDs(bare)
+	out.Requirements = make(map[string][]NodeID, len(named))
+	for key, nodes := range named {
+		out.Requirements[key] = sortedNodeIDs(nodes)
+		if len(named) == 1 {
+			out.Answerers = out.Requirements[key]
+		}
+	}
+	return out
+}
+
+func sortedNodeIDs(ids []NodeID) []NodeID {
+	sort.Slice(ids, func(i, j int) bool { return ids[i] < ids[j] })
+	return ids
 }
 
 // RoleAdvert is one node's service-role advertisement.
@@ -229,9 +304,10 @@ type LiveDirectory interface {
 	// reverts route/dispatch ordering to grade-only.
 	Latency(ctx context.Context, from, to NodeID) (s LatencySample, ok bool, err error)
 
-	// HandlersByName returns the nodes advertising an RPC handler FQN.
-	// rpc_forward target discovery reads handler adverts through
-	// RoleTable.Lookup, not LAD Roles records.
+	// HandlersByName returns the nodes advertising an RPC handler FQN, with what
+	// each advert requires of a caller. The endpoint spine's fleet audit reads it;
+	// rpc_forward target discovery reads handler adverts through RoleTable, not
+	// through this port, because that table is what it routes on.
 	HandlersByName(ctx context.Context, partition Partition, name string) ([]HandlerAdvert, error)
 
 	// RecordsByTopic returns the accepted records of one topic (KeyOps,

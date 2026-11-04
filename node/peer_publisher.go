@@ -430,6 +430,7 @@ func (p *PeerPublisher) publishOnce() {
 	// an entry would send its callers here for a forwarding hop, or to the
 	// "not found on target node" refusal when they target this node.
 	var handlers, handlerEffects []string
+	var handlerRequirements string
 	if reg != nil {
 		registered := reg.All() // sorted by FQN
 		handlers = make([]string, 0, len(registered))
@@ -443,6 +444,10 @@ func (p *PeerPublisher) publishOnce() {
 		// a caller's RoleTable.HandlerEffect can tell whether the operation
 		// may be sent down more than one route.
 		handlerEffects = effectTags(registered)
+		// What each listed handler asks of a caller rides the same way, so a
+		// caller's RoleTable can compare the holders of an operation before it
+		// picks one (RoleTable.Answerers).
+		handlerRequirements = requirementTag(registered)
 	}
 
 	// Operator-facing metadata (service name + region) rides Capabilities.tags.
@@ -457,6 +462,9 @@ func (p *PeerPublisher) publishOnce() {
 		tags = append(tags, "region="+region)
 	}
 	tags = append(tags, handlerEffects...)
+	if handlerRequirements != "" {
+		tags = append(tags, handlerRequirements)
+	}
 
 	// conn_count: how many peers this node currently holds an open session
 	// with. Receivers feed it into ConnectionMap via the fleet.peer ingest,
@@ -559,8 +567,8 @@ func (p *PeerPublisher) publishOnce() {
 		return
 	}
 	pubErr := p.node.Publish(topicFleetPeer, body)
-	log.Printf("[SWARM] publishOnce: Publish ok=%v topic=%s bodySize=%d roles=%v addrs=%d handlers=%d service=%s region=%s",
-		pubErr == nil, string(topicFleetPeer), len(body), roles, len(addrs), len(handlers), serviceName, region)
+	log.Printf("[SWARM] publishOnce: Publish ok=%v err=%v topic=%s bodySize=%d roles=%v addrs=%d handlers=%d service=%s region=%s",
+		pubErr == nil, pubErr, string(topicFleetPeer), len(body), roles, len(addrs), len(handlers), serviceName, region)
 }
 
 // topicFleetPeer is the swarm topic that carries fleet PeerRecords.

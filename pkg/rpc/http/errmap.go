@@ -16,6 +16,9 @@ import (
 //     outcome is unknown, so a retry could run the operation a second time
 //   - DeadlineExceeded            → 504 Gateway Timeout
 //   - dispatch.ErrCircuitOpen     → 503 Service Unavailable + Retry-After: 1
+//   - dispatch.ErrAnswerersDisagree → 503, NOT retried: the adverts of the
+//     operation disagree on what it requires, nothing left this node, and no
+//     resend changes that until the fleet's adverts do
 //   - "session closed before send" → 502 + retry-eligible (the call never
 //     reached the remote handler — Send hadn't started; safe to redo)
 //   - "all N probes failed"       → 502, NOT retried. Probes can have lost
@@ -48,6 +51,9 @@ func classifyMeshError(err error) (status int, retryAfter string, retryEligible 
 	}
 	if errors.Is(err, dispatch.ErrCircuitOpen) {
 		return 503, "1", false
+	}
+	if errors.Is(err, dispatch.ErrAnswerersDisagree) {
+		return 503, "", false
 	}
 	// HandlerError: the remote handler responded but reported an
 	// application-level failure (validation, not-found, conflict). The

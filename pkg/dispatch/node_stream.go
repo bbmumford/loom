@@ -60,6 +60,9 @@ func (c *HWPCaller) OpenNodeStream(ctx context.Context, nodeID, role, handler st
 	if !ok {
 		return nil, fmt.Errorf("stream %s: the finder names no session by node: %w", handler, ErrNoRouteToNode)
 	}
+	if err := c.checkAnswerers(role, handler, nodeID); err != nil {
+		return nil, fmt.Errorf("stream %s to node %s: %w", handler, nodeID, err)
+	}
 	session, ok := finder.MeshSessionForNode(nodeID)
 	if !ok || session == nil || session.IsClosed() {
 		return nil, fmt.Errorf("stream %s to node %s: %w", handler, nodeID, ErrNoRouteToNode)
