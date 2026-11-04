@@ -12,7 +12,7 @@ import "github.com/ORBTR/aether"
 // two peers reading different versions do not agree on what an ID carries.
 // It is the streams.registry entry of every mesh session's wire version offer
 // (WireVersions), so two such peers refuse the session in its handshake.
-const RegistryVersion uint16 = 1
+const RegistryVersion uint16 = 2
 
 // WireVersionRegistry names this table in a session's wire version offer.
 const WireVersionRegistry = "streams.registry"
@@ -105,12 +105,16 @@ const (
 	StreamDynamicBase uint64 = 600
 	StreamDynamicLast uint64 = 699
 
-	// StreamPlatformConversation and StreamPlatformCoordination are the two
-	// arms of the worker crossing: one session per worker carries both as
-	// distinct streams instead of separate dials. IDs above them in the 700
-	// band are left for the worker-edge channels that declare them.
+	// StreamPlatformConversation, StreamPlatformCoordination and
+	// StreamPlatformDispatch are the arms of the worker crossing: one session
+	// per worker carries each as a distinct stream instead of a separate dial.
+	// The worker opens all three and the edge's workeraccept claims each by ID.
+	// Dispatch carries the frames an addressed push sends a named worker. IDs
+	// above them in the 700 band are left for the worker-edge channels that
+	// declare them.
 	StreamPlatformConversation uint64 = 700
 	StreamPlatformCoordination uint64 = 701
+	StreamPlatformDispatch     uint64 = 702
 
 	// StreamHandlerBase through StreamHandlerLast carry one handler stream
 	// each (node.serveHandlerStream): an open frame naming the handler and the
@@ -175,6 +179,7 @@ func Registry() []Entry {
 		{Name: "dynamic peer", First: StreamDynamicBase, Last: StreamDynamicLast, Latency: aether.ClassBULK, OpenedBy: "the dialler"},
 		{Name: "platform conversation", First: StreamPlatformConversation, Last: StreamPlatformConversation, Latency: aether.ClassINTERACTIVE, OpenedBy: "the worker"},
 		{Name: "platform coordination", First: StreamPlatformCoordination, Last: StreamPlatformCoordination, Latency: aether.ClassINTERACTIVE, OpenedBy: "the worker"},
+		{Name: "platform dispatch", First: StreamPlatformDispatch, Last: StreamPlatformDispatch, Latency: aether.ClassINTERACTIVE, OpenedBy: "the worker"},
 		{Name: "handler stream", First: StreamHandlerBase, Last: StreamHandlerLast, Latency: aether.ClassINTERACTIVE, OpenedBy: "the caller, one per stream"},
 	}
 }

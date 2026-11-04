@@ -47,6 +47,7 @@ func TestStreamIDsAreFixedWireValues(t *testing.T) {
 		{"RemoteAccessDynamicFloor", RemoteAccessDynamicFloor, 610},
 		{"StreamPlatformConversation", StreamPlatformConversation, 700},
 		{"StreamPlatformCoordination", StreamPlatformCoordination, 701},
+		{"StreamPlatformDispatch", StreamPlatformDispatch, 702},
 		{"StreamHandlerBase", StreamHandlerBase, 1000},
 		{"StreamHandlerLast", StreamHandlerLast, 1999},
 	} {
@@ -151,6 +152,7 @@ func TestEveryDeclaredConstantIsInTheRegistry(t *testing.T) {
 		"StreamRemoteWeb":            StreamRemoteWeb,
 		"StreamPlatformConversation": StreamPlatformConversation,
 		"StreamPlatformCoordination": StreamPlatformCoordination,
+		"StreamPlatformDispatch":     StreamPlatformDispatch,
 	}
 	for name, id := range declared {
 		covered := false
@@ -188,7 +190,7 @@ func TestDefaultLatencyClassAnswersTheRegistry(t *testing.T) {
 // An ID the registry assigns to nothing gets the lowest class, so an
 // unrecognised stream cannot be scheduled ahead of a declared one.
 func TestAnUnassignedIDGetsTheBulkClass(t *testing.T) {
-	for _, id := range []uint64{5, 102, 450, 1000} {
+	for _, id := range []uint64{5, 102, 450, 2000} {
 		for _, e := range Registry() {
 			if id >= e.First && id <= e.Last {
 				t.Fatalf("%d is assigned to %s; pick an ID the registry leaves free", id, e.Name)
@@ -210,11 +212,29 @@ func TestDefaultLatencyClassKeepsPeerStreamsInteractive(t *testing.T) {
 }
 
 // The version travels with the assignments: a peer reading one version and a
-// peer reading another do not agree on what arrives on an ID.
+// peer reading another do not agree on what arrives on an ID. It is pinned to its
+// number, so an assignment added to Registry and this pin move in one change.
 func TestRegistryVersionIsDeclared(t *testing.T) {
-	if RegistryVersion < 1 {
-		t.Errorf("RegistryVersion = %d, want at least 1", RegistryVersion)
+	if RegistryVersion != 2 {
+		t.Errorf("RegistryVersion = %d, want 2", RegistryVersion)
 	}
+}
+
+// The worker opens every arm of its crossing, and the edge's workeraccept claims
+// each by ID, so the dispatch arm names the same opener and class as the two feeds
+// beside it: a second opener would land on the worker's stream, and a bulk class
+// would queue a pushed dispatch behind screen and file traffic.
+func TestTheWorkerOpensItsDispatchArm(t *testing.T) {
+	for _, e := range Registry() {
+		if e.First != StreamPlatformDispatch {
+			continue
+		}
+		if e.Last != e.First || e.OpenedBy != "the worker" || e.Latency != aether.ClassINTERACTIVE {
+			t.Errorf("the dispatch arm's entry is %+v, want one ID opened by the worker at the interactive class", e)
+		}
+		return
+	}
+	t.Fatalf("no registry entry starts at %d", StreamPlatformDispatch)
 }
 
 // The registry's version is an entry of every mesh session's wire version
