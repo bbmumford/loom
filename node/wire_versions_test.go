@@ -44,6 +44,10 @@ func loomNegotiatedSet() aether.NegotiatedWireVersions {
 // admits it.
 func (s *probeSession) WireVersions() aether.NegotiatedWireVersions { return loomNegotiatedSet() }
 
+// otherWireVersion is a version no loom entry offers, so a peer moved to it differs
+// from this build whichever version each entry stands at.
+const otherWireVersion uint16 = 60000
+
 // withLoomEntryAt returns loom's entries with name moved to version v, the
 // offer of a peer whose build reads another table or codec.
 func withLoomEntryAt(t *testing.T, name string, v uint16) aether.WireVersions {
@@ -165,7 +169,7 @@ func TestByteStreamMeshSessionsRefuseAPeerWhoseLoomEntryDiffers(t *testing.T) {
 
 	for _, name := range loomEntryNames {
 		t.Run(name, func(t *testing.T) {
-			sess, err, accepted := pair(t, withLoomEntryAt(t, name, 2))
+			sess, err, accepted := pair(t, withLoomEntryAt(t, name, otherWireVersion))
 			if sess != nil {
 				t.Fatal("SetupMeshSession returned a session whose peer differs in " + name)
 			}
@@ -325,7 +329,7 @@ func TestNoiseMeshTransportRefusesAPeerWhoseLoomEntryDiffers(t *testing.T) {
 		return err
 	}
 	for _, name := range []string{gossip.WireVersionCodec, streams.WireVersionRegistry} {
-		tr, id, addr := peerTransport(t, withLoomEntryAt(t, name, 2))
+		tr, id, addr := peerTransport(t, withLoomEntryAt(t, name, otherWireVersion))
 		if err := dial(tr, rtTarget); !errors.Is(err, aether.ErrWireVersionMismatch) {
 			t.Errorf("%s differs, peer dials the runtime: err = %v, want ErrWireVersionMismatch", name, err)
 		}

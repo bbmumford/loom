@@ -110,7 +110,7 @@ func TestARefusedByteStreamDialTakesTheSetupFailureBranch(t *testing.T) {
 			t.Fatal("premise wrong: the path is suppressed before the refused dial, so a debit cannot be observed")
 		}
 		near, far := loopbackTCP(t)
-		accepted := runPeerSession(ctx, far, peerRT.identity.NodeID, rt.identity.NodeID, withLoomEntryAt(t, gossip.WireVersionCodec, 2))
+		accepted := runPeerSession(ctx, far, peerRT.identity.NodeID, rt.identity.NodeID, withLoomEntryAt(t, gossip.WireVersionCodec, otherWireVersion))
 		initBefore, respBefore := sessionCounters()
 		returned := make(chan struct{})
 		go func() {
@@ -193,7 +193,7 @@ func TestARefusedIncomingByteStreamSessionIsClosedAndNotCounted(t *testing.T) {
 	peerRT := wireTestRuntime(t)
 	peerID := string(peerRT.identity.NodeID)
 	near, far := loopbackTCP(t)
-	accepted := runPeerSession(ctx, near, peerRT.identity.NodeID, rt.identity.NodeID, withLoomEntryAt(t, streams.WireVersionRegistry, 2))
+	accepted := runPeerSession(ctx, near, peerRT.identity.NodeID, rt.identity.NodeID, withLoomEntryAt(t, streams.WireVersionRegistry, otherWireVersion))
 	initBefore, respBefore := sessionCounters()
 
 	rt.AcceptIncomingMeshSession(ctx, far, peerID, ProtoWebSocket, "", "", "", "")
@@ -252,7 +252,7 @@ func TestARefusedSessionsOwnPrefaceReachesThePeerBeforeTheConnCloses(t *testing.
 	peerRT := wireTestRuntime(t)
 	const delay = 200 * time.Millisecond
 	near, far := loopbackTCP(t)
-	accepted := runPeerSession(ctx, far, peerRT.identity.NodeID, rt.identity.NodeID, withLoomEntryAt(t, gossip.WireVersionReconcile, 2))
+	accepted := runPeerSession(ctx, far, peerRT.identity.NodeID, rt.identity.NodeID, withLoomEntryAt(t, gossip.WireVersionReconcile, otherWireVersion))
 	initBefore, respBefore := sessionCounters()
 	started := time.Now()
 
