@@ -87,6 +87,18 @@ func (s *registryShim) Effect() effect.Class { return s.handler.Effect }
 
 var _ handlers.EffectDeclarer = (*registryShim)(nil)
 
+// HandleStream serves the wrapped handler's Stream, the one DispatchStream
+// reaches after judging its Requirement. An operation with none refuses.
+func (s *registryShim) HandleStream(ctx context.Context, stream handlers.MessageStream) error {
+	serve := s.handler.Stream
+	if serve == nil {
+		return handlers.ErrUnsupportedMode
+	}
+	return serve(ctx, stream)
+}
+
+var _ handlers.StreamHandler = (*registryShim)(nil)
+
 // RPCHandler interface — decodes req.Payload into the handler's request
 // prototype, calls the handler, and marshals the response. Payload
 // encoding is auto-detected: bytes starting with '{' are protojson (the

@@ -47,6 +47,8 @@ func TestStreamIDsAreFixedWireValues(t *testing.T) {
 		{"RemoteAccessDynamicFloor", RemoteAccessDynamicFloor, 610},
 		{"StreamPlatformConversation", StreamPlatformConversation, 700},
 		{"StreamPlatformCoordination", StreamPlatformCoordination, 701},
+		{"StreamHandlerBase", StreamHandlerBase, 1000},
+		{"StreamHandlerLast", StreamHandlerLast, 1999},
 	} {
 		if tc.got != tc.want {
 			t.Errorf("%s = %d, want %d", tc.name, tc.got, tc.want)

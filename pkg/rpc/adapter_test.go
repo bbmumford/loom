@@ -324,3 +324,19 @@ func TestFirstNonWhitespace(t *testing.T) {
 		}
 	}
 }
+
+// An exported operation's Stream is what a handler stream reaches, under the
+// registered shim; an operation with none refuses as no stream handler.
+func TestAnExportedOperationServesItsStreamOrRefuses(t *testing.T) {
+	reached := false
+	shim := newRegistryShim(&Handler{Stream: func(context.Context, handlers.MessageStream) error {
+		reached = true
+		return nil
+	}})
+	if err := shim.HandleStream(context.Background(), nil); err != nil || !reached {
+		t.Fatalf("HandleStream: %v, reached %v", err, reached)
+	}
+	if err := newRegistryShim(&Handler{}).HandleStream(context.Background(), nil); !errors.Is(err, handlers.ErrUnsupportedMode) {
+		t.Fatalf("no Stream: %v, want ErrUnsupportedMode", err)
+	}
+}

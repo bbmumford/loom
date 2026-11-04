@@ -80,6 +80,19 @@ func (m *ConnectionManager) IsSupersededByUpgrade(session aether.Session) bool {
 	return SessionGrade(current) > SessionGrade(session)
 }
 
+// MeshSessionForNode names the session this manager holds to nodeID, for a
+// handler stream (dispatch.NodeSessionFinder).
+func (m *ConnectionManager) MeshSessionForNode(nodeID string) (aether.Session, bool) {
+	if m == nil {
+		return nil, false
+	}
+	sess, ok := m.GetMeshSession(nodeID)
+	if !ok || sess == nil {
+		return nil, false
+	}
+	return sess, true
+}
+
 // CallViaBidi sends an RPC via BidiRPC (Stream 1) if available for the node.
 // Returns (nil, false, nil) if no BidiRPC channel exists OR the existing
 // one is dead — both cases signal the dispatch layer to use its dynamic-
