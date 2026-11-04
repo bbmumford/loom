@@ -7,6 +7,7 @@ import (
 
 	"google.golang.org/protobuf/proto"
 
+	"github.com/bbmumford/loom/node/handlers"
 	sharedDispatch "github.com/bbmumford/loom/pkg/dispatch"
 	"github.com/bbmumford/loom/pkg/rpc/effect"
 	"github.com/bbmumford/loom/pkg/rpc/scope"
@@ -137,6 +138,13 @@ type Handler struct {
 	OpClass          OperationClass          // declared operation class (zero value: OpStandard); loom does not read it, a caller forwards a class as the opClass hint via dispatch.WithOpClass
 	Effect           effect.Class            // what a second execution does (zero value: effect.Unsafe); dispatch sends only an effect.Class.Repeatable operation down more than one route or again after an unknown outcome
 	WebhookSignature *WebhookSignatureConfig // optional: declare this handler is a webhook-class receiver; the registry runs signature verification pre-dispatch
+
+	// Stream, when set, serves this operation as a handler stream as well
+	// (node.serveHandlerStream, reached with OpenNodeStream): frames both ways
+	// under the same Requirement the operation's Func is judged by. An
+	// operation that is only a stream keeps a Func refusing the single-shot
+	// call, because a Func is what exports it to the mesh registry.
+	Stream func(ctx context.Context, stream handlers.MessageStream) error
 }
 
 // FQN returns the fully-qualified handler name: "namespace.domain.Operation"

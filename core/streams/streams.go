@@ -111,6 +111,14 @@ const (
 	// band are left for the worker-edge channels that declare them.
 	StreamPlatformConversation uint64 = 700
 	StreamPlatformCoordination uint64 = 701
+
+	// StreamHandlerBase through StreamHandlerLast carry one handler stream
+	// each (node.serveHandlerStream): an open frame naming the handler and the
+	// caller's principal, then the handler's own frames both ways until either
+	// end closes. Above the assigned bands so a consumer holding a long-lived
+	// stream does not spend the short-lived RPC band.
+	StreamHandlerBase uint64 = 1000
+	StreamHandlerLast uint64 = 1999
 )
 
 // Channels of one remote-access session, numbered inside the dynamic peer
@@ -167,6 +175,7 @@ func Registry() []Entry {
 		{Name: "dynamic peer", First: StreamDynamicBase, Last: StreamDynamicLast, Latency: aether.ClassBULK, OpenedBy: "the dialler"},
 		{Name: "platform conversation", First: StreamPlatformConversation, Last: StreamPlatformConversation, Latency: aether.ClassINTERACTIVE, OpenedBy: "the worker"},
 		{Name: "platform coordination", First: StreamPlatformCoordination, Last: StreamPlatformCoordination, Latency: aether.ClassINTERACTIVE, OpenedBy: "the worker"},
+		{Name: "handler stream", First: StreamHandlerBase, Last: StreamHandlerLast, Latency: aether.ClassINTERACTIVE, OpenedBy: "the caller, one per stream"},
 	}
 }
 

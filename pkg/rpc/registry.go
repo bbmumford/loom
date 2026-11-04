@@ -129,7 +129,7 @@ func (r *Registry) registerAllAtomic(handlers []Handler, proxy bool) error {
 	seen := make(map[string]struct{}, len(handlers))
 	for _, h := range handlers {
 		if proxy {
-			h.Func = nil
+			h.Func, h.Stream = nil, nil
 			h.Middleware = nil
 		}
 		fqn, role, stored, err := r.prepareStored(h)
@@ -269,7 +269,7 @@ func (r *Registry) MetadataFor(fqn string) (Handler, bool) {
 		return Handler{}, false
 	}
 	out := *h
-	out.Func = nil
+	out.Func, out.Stream = nil, nil
 	if len(h.Middleware) > 0 {
 		out.Middleware = append([]Middleware(nil), h.Middleware...)
 	}
@@ -298,7 +298,7 @@ func StripFuncs(handlers []Handler) []Handler {
 	}
 	out := make([]Handler, len(handlers))
 	for i, h := range handlers {
-		h.Func = nil
+		h.Func, h.Stream = nil, nil
 		if len(h.Middleware) > 0 {
 			h.Middleware = append([]Middleware(nil), h.Middleware...)
 		}

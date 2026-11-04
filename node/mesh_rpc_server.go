@@ -85,8 +85,14 @@ func (s *RPCServer) ServeMeshStream(ctx context.Context, stream aether.Stream, r
 // StreamMeshDB and the like) lands here when its consumer does not run on
 // this node or had not armed AcceptStreamByID within aether's backlog grace;
 // served as RPC, its first frame would be parsed as a request. It is reset
-// instead, so the opener's consumer fails at once and can open again.
+// instead, so the opener's consumer fails at once and can open again. The
+// handler-stream band is the one application band served here
+// (serveHandlerStream).
 func (s *RPCServer) serveUnclaimedStream(ctx context.Context, stream aether.Stream, remoteID aether.NodeID) {
+	if id := stream.StreamID(); id >= streams.StreamHandlerBase && id <= streams.StreamHandlerLast {
+		s.serveHandlerStream(ctx, stream, remoteID)
+		return
+	}
 	if id := stream.StreamID(); id >= streams.ApplicationBand {
 		log.Printf("[RPC-AETHER] refused unclaimed application stream %d from %s", id, remoteID.Short())
 		_ = stream.Reset(aether.ResetRefused)
