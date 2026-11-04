@@ -13,6 +13,7 @@ import (
 	"time"
 
 	lad "github.com/bbmumford/ledger"
+	"github.com/bbmumford/loom/directory"
 	"github.com/bbmumford/swarm"
 	swarmpb "github.com/bbmumford/swarm/proto/pb"
 	"google.golang.org/protobuf/proto"
@@ -466,11 +467,19 @@ func peerRecordToRoleRecord(pr *swarmpb.PeerRecord, nodeIDStr string) lad.RoleRe
 	}
 	// Build HandlerMetadata from the PeerRecord's rpc_handlers list.
 	handlers := make([]lad.HandlerMetadata, 0, len(pr.RpcHandlers))
-	for _, fqn := range pr.RpcHandlers {
-		handlers = append(handlers, lad.HandlerMetadata{
+	var requirements []string
+	if pr.Capabilities != nil {
+		requirements = directory.HandlerRequirements(pr.Capabilities.Tags, len(pr.RpcHandlers))
+	}
+	for i, fqn := range pr.RpcHandlers {
+		h := lad.HandlerMetadata{
 			Name:      fqn,
 			TimeoutMs: 5000,
-		})
+		}
+		if requirements != nil {
+			h.RequiredScopes = []string{requirements[i]}
+		}
+		handlers = append(handlers, h)
 	}
 	return lad.RoleRecord{
 		NodeID:   nodeIDStr,

@@ -220,7 +220,10 @@ func bridgeReachFromSwarm(rt *Runtime, node swarm.Node, cache *ladcache.Director
 		// for consumers that still read it: isAnchorNode (peer_connections.go),
 		// BestGradeToHandler (runtime.go), and /mesh/status Roles passthrough
 		// (meshstatus/adapter.go). Without this they would all return empty
-		// because swarm PeerRecords are now the sole role source.
+		// because swarm PeerRecords are now the sole role source. Handlers stay off
+		// this record: it gossips in every full G1 exchange, under the 1 MiB
+		// maxGossipPayload, and a node's handlers would add tens of KB per machine.
+		// LADDirectory reads them from the RoleTable instead (SetHandlerAdverts).
 		role := lad.RoleRecord{
 			NodeID:   nodeID,
 			Roles:    roles,

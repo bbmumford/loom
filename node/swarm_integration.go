@@ -201,6 +201,12 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 		NodeID:     localID,
 		PrivKey:    ed25519.PrivateKey(rt.identity.PrivateKey),
 		TreeDegree: 4,
+		// One signed PeerRecord carries every operation a node executes, and
+		// swarm's default of 16 KiB refuses a node with some 500 of them at
+		// Publish: the node then stays absent from every RoleTable, and only its
+		// own log line says so. This is held by the publisher and by every
+		// receiver's inbound gate, so all nodes share the constant.
+		MaxRecordBytes: peerRecordMaxBytes,
 	}
 
 	// Inbound trust gate: loom's TrustPolicy wired as swarm's TrustCheck
@@ -258,6 +264,11 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	if err != nil {
 		log.Printf("[SWARM] InitSwarm: ERROR NewRoleTable: %v", err)
 		return nil, err
+	}
+	// The live directory answers handler adverts from this table, the records
+	// routing picks among (ladlive.go SetHandlerAdverts).
+	if rt.liveDirRaw != nil {
+		rt.liveDirRaw.SetHandlerAdverts(roleTable)
 	}
 	log.Printf("[SWARM] InitSwarm: RoleTable subscribed to fleet.peer")
 	addrTable, err := NewAddressTable(node)
@@ -587,6 +598,10 @@ func sweepStaleRolesUntil(ctx context.Context, rt *Runtime, node swarm.Node, rol
 func (rt *Runtime) Swarm() *SwarmIntegration {
 	return rt.swarm
 }
+
+// peerRecordMaxBytes bounds one node's fleet.peer record, read by InitSwarm for
+// swarm.Config.MaxRecordBytes.
+const peerRecordMaxBytes = 64 << 10
 
 // LookupRoleViaSwarm is the migration helper for mesh_session_finder and
 // other callers that still use `rt.cache.Roles(ctx, "", query)`. It

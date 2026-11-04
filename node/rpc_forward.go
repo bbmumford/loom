@@ -15,6 +15,7 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
+	lad "github.com/bbmumford/ledger"
 	"github.com/bbmumford/loom/pkg/dispatch"
 	"github.com/bbmumford/route"
 	"google.golang.org/protobuf/proto"
@@ -209,23 +210,28 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 		return nil, &RouteDeadlineError{Handler: req.Handler, Remaining: time.Duration(req.Deadline - now)}
 	}
 
-	targetNodeID := req.TargetNodeId
-	if targetNodeID == "" {
-		// Canonical source: swarm RoleTable. Nothing publishes to the LAD
-		// DirectoryCache.Roles path, so querying it returns empty fleet-wide.
-		// Without this
-		// switch every TargetNodeId-empty request returned "no node serves
-		// role" even when the receiving node's own swarm table knew the
-		// role.
-		if f.rt.swarm != nil && f.rt.swarm.RoleTable != nil {
-			nodes := f.rt.swarm.RoleTable.Lookup(role, req.Handler)
-			if len(nodes) == 0 {
-				nodes = f.rt.swarm.RoleTable.Lookup(role, "")
-			}
-			if len(nodes) > 0 {
-				targetNodeID = nodes[0].NodeID
-			}
+	// The peers a re-route may pick from, read once for the target below and for
+	// Path 3. Its source is the swarm RoleTable, the table every node's handler
+	// adverts reach on fleet.peer. An advert that does not hold the requirement
+	// its operation's other adverts name is left out, and adverts that disagree
+	// refuse the request here, before anything is sent, so a relay never takes a
+	// request to a holder the origin would have refused to pick. RPCServer stamps
+	// the refusal on its response so the origin gets it typed.
+	var roleNodes []lad.RoleRecord
+	if f.rt.swarm != nil && f.rt.swarm.RoleTable != nil {
+		answerers, err := f.rt.swarm.RoleTable.Answerers(role, req.Handler)
+		if err != nil {
+			return nil, err
 		}
+		roleNodes = answerers
+		if len(roleNodes) == 0 {
+			roleNodes = f.rt.swarm.RoleTable.Lookup(role, "")
+		}
+	}
+
+	targetNodeID := req.TargetNodeId
+	if targetNodeID == "" && len(roleNodes) > 0 {
+		targetNodeID = roleNodes[0].NodeID
 	}
 
 	// No target found — nobody serves this role. Fail fast instead of bouncing.
@@ -271,11 +277,7 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 	}
 
 	// Path 3+: Other nodes serving the same role (swarm RoleTable)
-	if len(paths) < 3 && f.rt.swarm != nil && f.rt.swarm.RoleTable != nil {
-		roleNodes := f.rt.swarm.RoleTable.Lookup(role, req.Handler)
-		if len(roleNodes) == 0 {
-			roleNodes = f.rt.swarm.RoleTable.Lookup(role, "")
-		}
+	if len(paths) < 3 {
 		for _, rn := range roleNodes {
 			if len(paths) >= 3 {
 				break

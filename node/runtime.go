@@ -1652,6 +1652,13 @@ func (rt *Runtime) Directory() *ladcache.DirectoryCache {
 	return rt.cache
 }
 
+// LiveDirectory returns the typed read surface over the LAD cache, nil when the
+// cache is (VL1 disabled). The endpoint spine's fleet audit reads handler adverts
+// and role claims through it.
+func (rt *Runtime) LiveDirectory() ports.LiveDirectory {
+	return rt.liveDir
+}
+
 // LADSnapshot returns the latest typed snapshot of LAD directory state.
 // Always non-nil; observability handlers should read from here instead of
 // calling Directory().Members/Reach/Roles/Latency/GossipLiveness on the
@@ -4744,13 +4751,7 @@ func (rt *Runtime) BestGradeToHandler(handler string) Grade {
 	if rt.cache == nil {
 		return GradeF
 	}
-	role := handler
-	for i, c := range handler {
-		if c == '.' {
-			role = handler[:i]
-			break
-		}
-	}
+	role := roleOfFQN(handler)
 	// Routed through the LiveDirectory seam, which is enough here because this
 	// caller needs only the node IDs NodesByRole returns. The empty partition
 	// argument names the unpartitioned bucket explicitly: role adverts are

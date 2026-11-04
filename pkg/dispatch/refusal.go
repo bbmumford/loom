@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/ORBTR/aether"
@@ -17,8 +18,9 @@ import (
 
 // The typed route refusals live here because every dispatcher returns them:
 // HWPCaller in this package, and node's forwarder and session finder, which
-// import this package. pkg/rpc re-exports the two sentinels and node aliases
-// the two types, so callers test either spelling with errors.Is and errors.As.
+// import this package. pkg/rpc re-exports the sentinels and node aliases the
+// grade and deadline types, so callers test either spelling with errors.Is and
+// errors.As.
 
 // ErrGradeTooLow is what every grade refusal unwraps to: the best route on
 // offer grades below the floor of the request's operation class, or the
@@ -77,6 +79,46 @@ func (e *RouteDeadlineError) Error() string {
 }
 
 func (e *RouteDeadlineError) Unwrap() error { return ErrRouteDeadline }
+
+// ErrAnswerersDisagree is what every AnswerersDisagreeError unwraps to: the nodes
+// advertising an operation do not name one requirement for it, so no caller can
+// know what it would be judged by. pkg/rpc re-exports it, and the HTTP bridge
+// (pkg/rpc/http classifyMeshError) answers it with a 503 it marks not retryable.
+var ErrAnswerersDisagree = errors.New("the nodes advertising this operation name different requirements")
+
+// AnswerersDisagreeError is the typed refusal HWPCaller and node's forwarder give
+// before sending when ports.JudgeHandlerAdverts finds the adverts of Handler in
+// disagreement, or when a call names one node whose advert names no requirement
+// beside adverts that do. Requirements holds one "<requirement>: <node>,<node>"
+// entry per group, for the log and the response; nothing parses it.
+type AnswerersDisagreeError struct {
+	Handler      string
+	Requirements []string
+}
+
+func (e *AnswerersDisagreeError) Error() string {
+	return fmt.Sprintf("%s: %v: %s", e.Handler, ErrAnswerersDisagree, strings.Join(e.Requirements, "; "))
+}
+
+func (e *AnswerersDisagreeError) Unwrap() error { return ErrAnswerersDisagree }
+
+// AnswererChecker is the optional SessionFinder method HWPCaller asks before it
+// reads the result cache, chooses a route or opens a stream. node's
+// ConnectionManager implements it from the requirements the holders' peer records
+// advertise. nodeID names the one node a targeted call must reach, and is "" for a
+// routed call. A finder that does not implement it holds no adverts to compare.
+type AnswererChecker interface {
+	CheckAnswerers(role, handler, nodeID string) error
+}
+
+// checkAnswerers returns the finder's refusal of a call to handler, when the
+// finder judges adverts at all.
+func (c *HWPCaller) checkAnswerers(role, handler, nodeID string) error {
+	if ac, ok := c.finder.(AnswererChecker); ok {
+		return ac.CheckAnswerers(role, handler, nodeID)
+	}
+	return nil
+}
 
 // classFloor returns the lowest route grade a request for handler may leave
 // on, from the "opClass" hint WithOpClass set; a request that names no class
@@ -153,7 +195,8 @@ func routeGrade(r aether.ProbeRoute) grade.Grade {
 // isRouteRefusal reports whether err is one of the typed route refusals, which
 // Call returns wrapped so the caller can still test them with errors.Is.
 func isRouteRefusal(err error) bool {
-	return errors.Is(err, ErrGradeTooLow) || errors.Is(err, ErrRouteDeadline)
+	return errors.Is(err, ErrGradeTooLow) || errors.Is(err, ErrRouteDeadline) ||
+		errors.Is(err, ErrAnswerersDisagree)
 }
 
 // A refusal made by a later hop reaches the origin as a failed RPCResponse.
@@ -167,13 +210,15 @@ const (
 	refusalKindGrade     = "grade"
 	refusalKindDeadline  = "deadline"
 	refusalKindAmbiguous = "ambiguous"
+	refusalKindAdverts   = "adverts"
 
-	refusalClassKey     = "refusal.class"
-	refusalUnknownKey   = "refusal.unknown-class"
-	refusalCurrentKey   = "refusal.current-grade"
-	refusalRequiredKey  = "refusal.required-grade"
-	refusalRemainingKey = "refusal.remaining-ns"
-	refusalNeedKey      = "refusal.need-ns"
+	refusalClassKey        = "refusal.class"
+	refusalUnknownKey      = "refusal.unknown-class"
+	refusalCurrentKey      = "refusal.current-grade"
+	refusalRequiredKey     = "refusal.required-grade"
+	refusalRemainingKey    = "refusal.remaining-ns"
+	refusalNeedKey         = "refusal.need-ns"
+	refusalRequirementsKey = "refusal.requirements"
 )
 
 // StampRefusal records err on resp when err is a typed route refusal or an
@@ -189,6 +234,7 @@ func StampRefusal(resp *pb.RPCResponse, err error) {
 	}
 	var gte *GradeTooLowError
 	var rde *RouteDeadlineError
+	var ade *AnswerersDisagreeError
 	switch {
 	case errors.Is(err, ErrAmbiguousEffect):
 		resp.Metadata = map[string]string{refusalKindKey: refusalKindAmbiguous}
@@ -205,6 +251,11 @@ func StampRefusal(resp *pb.RPCResponse, err error) {
 			refusalKindKey:      refusalKindDeadline,
 			refusalRemainingKey: strconv.FormatInt(int64(rde.Remaining), 10),
 			refusalNeedKey:      strconv.FormatInt(int64(rde.Need), 10),
+		}
+	case errors.As(err, &ade):
+		resp.Metadata = map[string]string{
+			refusalKindKey:         refusalKindAdverts,
+			refusalRequirementsKey: strings.Join(ade.Requirements, "; "),
 		}
 	}
 }
@@ -249,6 +300,11 @@ func responseError(handler string, resp *pb.RPCResponse) error {
 			Handler:   handler,
 			Remaining: time.Duration(remaining),
 			Need:      time.Duration(need),
+		}
+	case refusalKindAdverts:
+		refusal = &AnswerersDisagreeError{
+			Handler:      handler,
+			Requirements: strings.Split(resp.Metadata[refusalRequirementsKey], "; "),
 		}
 	default:
 		return NewHandlerError(resp.Error)

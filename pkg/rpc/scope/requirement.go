@@ -43,6 +43,32 @@ func Capability(cap string) Requirement { return Requirement{Kind: ArmCapability
 // handler owning authorization through its nexus-graph resolution.
 func Nexus() Requirement { return Requirement{Kind: ArmNexus} }
 
+// AdvertisedRequirement renders what an operation asks of a caller in the form its
+// peer record carries, from the two fields rpc.EnforceScope judges it by: req when
+// set, the tag otherwise. An Open requirement and ScopeNone both admit every caller
+// with no policy consulted, the one case loom decides itself, so both read "open".
+// Every other tag reads as declared, because a consumer's PresencePolicy decides
+// what each admits. node's PeerPublisher writes it per operation and
+// ports.JudgeHandlerAdverts compares it across the nodes advertising the operation.
+func AdvertisedRequirement(req *Requirement, tag ScopeTag) string {
+	if req != nil {
+		switch req.Kind {
+		case ArmOpen:
+			return "open"
+		case ArmCapability:
+			return "capability:" + req.Cap
+		case ArmNexus:
+			return "nexus"
+		default:
+			return "unset"
+		}
+	}
+	if tag == ScopeNone {
+		return "open"
+	}
+	return "scope:" + string(tag)
+}
+
 // Authorizer is the capability-arm seam: reports whether the sealed principal holds
 // capability cap. It receives the AuthenticatedPrincipal — the identity coupled with
 // its granted scope strings (principal.Scopes()) — because caps are resolved over the

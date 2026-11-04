@@ -553,6 +553,14 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 		return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, err)
 	}
 
+	// The adverts of method must agree on what it requires before any holder is
+	// reached, and a cached answer is one a holder gave: it is held to the same
+	// check as a fresh one.
+	if err := c.checkAnswerers(role, method, ""); err != nil {
+		c.metrics.RecordCall(role, time.Since(start), false)
+		return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, err)
+	}
+
 	// Caller-side cache check for configured idempotent reads. Hot
 	// callees (declared in dispatch.cacheableHandlers config) bypass
 	// the mesh entirely when a fresh entry exists.
@@ -923,6 +931,11 @@ func (c *HWPCaller) CallCacheable(ctx context.Context, role, method string, payl
 		c.metrics.RecordCall(role, 0, false)
 		return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, err)
 	}
+	// Refused here for the same reason: a hit returns without reaching Call.
+	if err := c.checkAnswerers(role, method, ""); err != nil {
+		c.metrics.RecordCall(role, 0, false)
+		return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, err)
+	}
 	fqn := role + "/" + method
 	if cached := c.LookupCachedResult(fqn, payload); cached != nil {
 		c.metrics.RecordCall(role, 0, true)
@@ -1201,6 +1214,11 @@ func (c *HWPCaller) CallNode(ctx context.Context, nodeID, role, method string, p
 	// floor itself is the finder's to hold, in CallViaBidi, because only it
 	// knows which session the named node is reached on.
 	if _, err := classFloor(method, opClassFromContext(ctx)); err != nil {
+		return nil, fmt.Errorf("dispatch %s/%s to node %s: %w", role, method, nodeID, err)
+	}
+	// Naming the node does not change what it must hold: the placement that chose
+	// it read the same adverts.
+	if err := c.checkAnswerers(role, method, nodeID); err != nil {
 		return nil, fmt.Errorf("dispatch %s/%s to node %s: %w", role, method, nodeID, err)
 	}
 

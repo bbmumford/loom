@@ -51,6 +51,37 @@ type LADDirectory struct {
 	mu        sync.Mutex
 	overrides map[ports.NodeID]*time.Timer
 	closed    bool
+	adverts   HandlerAdvertSource
+}
+
+// HandlerAdvertSource holds the handler adverts of the unpartitioned bucket, which
+// LAD's role records do not carry. node.RoleTable implements it from the fleet.peer
+// records it indexes for routing.
+type HandlerAdvertSource interface {
+	// HandlerAdverts returns the nodes advertising name, ordered by NodeID.
+	HandlerAdverts(name string) []ports.HandlerAdvert
+	// HandlerNames returns every advertised name.
+	HandlerNames() []string
+}
+
+// SetHandlerAdverts points HandlersByName and HandlerFQNs at src for the
+// unpartitioned bucket, the one role adverts sit in. node's InitSwarm sets it, so
+// the port answers from the table routing reads: a role record that carried these
+// instead would gossip them in every full G1 exchange.
+func (d *LADDirectory) SetHandlerAdverts(src HandlerAdvertSource) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	d.adverts = src
+}
+
+// handlerAdvertSource returns the source that answers for partition, nil when none.
+func (d *LADDirectory) handlerAdvertSource(partition ports.Partition) HandlerAdvertSource {
+	if partition != "" {
+		return nil
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.adverts
 }
 
 // LAD record-model keys: one node's three typed LAD records share the loom
@@ -276,24 +307,38 @@ func (d *LADDirectory) Latency(_ context.Context, from, to ports.NodeID) (ports.
 	return ports.LatencySample{}, false, nil
 }
 
-// HandlersByName answers which nodes advertise an RPC handler FQN. LAD stores
-// handler metadata on RoleRecord (and on MemberRecord for nodes that publish
-// it there), so both are consulted.
+// HandlersByName answers which nodes advertise an RPC handler FQN, with what each
+// advert requires of a caller: from the HandlerAdvertSource when one is set for
+// partition, and from any RoleRecord holding handlers, with the source's advert
+// standing for a node both name. A handler listed only on a MemberRecord is
+// enumerated by HandlerFQNs and has no advert here, because RoleQuery filters role
+// records alone.
 func (d *LADDirectory) HandlersByName(ctx context.Context, partition ports.Partition, name string) ([]ports.HandlerAdvert, error) {
 	rs, err := d.cache.Roles(ctx, string(partition), ladcache.RoleQuery{Handler: name})
 	if err != nil {
 		return nil, fmt.Errorf("directory: LAD handler roles: %w", err)
 	}
 	var out []ports.HandlerAdvert
+	seen := map[ports.NodeID]bool{}
+	if src := d.handlerAdvertSource(partition); src != nil {
+		for _, a := range src.HandlerAdverts(name) {
+			seen[a.NodeID] = true
+			out = append(out, a)
+		}
+	}
 	for _, r := range rs {
+		if seen[ports.NodeID(r.NodeID)] {
+			continue
+		}
 		for _, h := range r.Handlers {
 			if h.Name != name {
 				continue
 			}
 			out = append(out, ports.HandlerAdvert{
-				Name:   name,
-				NodeID: ports.NodeID(r.NodeID),
-				Roles:  append([]string(nil), r.Roles...),
+				Name:           name,
+				NodeID:         ports.NodeID(r.NodeID),
+				Roles:          append([]string(nil), r.Roles...),
+				RequiredScopes: append([]string(nil), h.RequiredScopes...),
 			})
 			break
 		}
@@ -310,6 +355,11 @@ func (d *LADDirectory) HandlerFQNs(ctx context.Context, partition ports.Partitio
 		return nil, fmt.Errorf("directory: LAD handler enumeration: %w", err)
 	}
 	set := map[string]bool{}
+	if src := d.handlerAdvertSource(partition); src != nil {
+		for _, name := range src.HandlerNames() {
+			set[name] = true
+		}
+	}
 	for _, r := range rs {
 		for _, h := range r.Handlers {
 			if h.Name != "" {

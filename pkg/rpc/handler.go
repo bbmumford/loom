@@ -43,6 +43,12 @@ var ErrRouteDeadline = sharedDispatch.ErrRouteDeadline
 // retryable. It is dispatch's sentinel under this package's name.
 var ErrAmbiguousEffect = sharedDispatch.ErrAmbiguousEffect
 
+// ErrAnswerersDisagree is returned when the nodes advertising an operation do
+// not name one requirement for it, before anything is sent: such a call would be
+// judged by whichever node took it. The HTTP bridge answers it with a 503 it marks
+// not retryable. It is dispatch's sentinel under this package's name.
+var ErrAnswerersDisagree = sharedDispatch.ErrAnswerersDisagree
+
 // Effect is the effect class a Handler declares in its Effect field: package
 // effect's Class under this package's name, so a declaration names the type and
 // its values without a second import.
