@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/ORBTR/aether"
 	"github.com/bbmumford/loom/core/streams"
@@ -20,9 +22,9 @@ import (
 // (gossip, RPC, keepalive, control, reconcile) and BidiRPC; at the ceiling
 // and above is aether's application band, where core/streams binds one
 // stream per peer pair (StreamSwarm, StreamMeshDB) and the peer claims it by
-// ID: an RPC opened on one of those IDs lands on that consumer's stream,
-// because aether's createStream hands a duplicate OPEN the stream already
-// open under that ID.
+// ID: an RPC opened on one of those IDs would be refused while that consumer's
+// stream is open (aether.ErrDuplicateStreamID) and would take its place on the
+// peer's claim when it is not.
 const (
 	dynamicStreamIDFloor   = streams.DynamicRPCBase
 	dynamicStreamIDCeiling = streams.ApplicationBand
@@ -39,10 +41,33 @@ var errDynamicStreamIDsExhausted = errors.New("dispatch: every dynamic stream ID
 // in flight. next is the offset from the floor at which the next search
 // starts, so a freed ID is reused only after every other ID has been tried
 // and a late frame of a reset stream is unlikely to meet its successor.
+// backoffUntil and backoffCause hold the session's stream backoff (armBackoff),
+// here because every allocator on the session reads this table.
 type sessionStreamIDs struct {
 	mu   sync.Mutex
 	next uint64
 	held map[uint64]aether.Stream
+
+	backoffUntil atomic.Int64 // UnixNano, read without mu by every open
+	backoffCause atomic.Pointer[error]
+}
+
+// armBackoff makes this session's dynamic-stream opens answer cause for
+// streamBackoff (stream_pool.go).
+func (t *sessionStreamIDs) armBackoff(cause error) {
+	t.backoffCause.Store(&cause)
+	t.backoffUntil.Store(time.Now().Add(streamBackoff).UnixNano())
+}
+
+// backoffErr returns the error that armed the backoff while it runs, nil otherwise.
+func (t *sessionStreamIDs) backoffErr() error {
+	if time.Now().UnixNano() >= t.backoffUntil.Load() {
+		return nil
+	}
+	if cause := t.backoffCause.Load(); cause != nil {
+		return *cause
+	}
+	return nil
 }
 
 // sessionStreamTables is keyed by aether.Session. Every allocator on a
@@ -101,9 +126,14 @@ func (t *sessionStreamIDs) release(st aether.Stream) {
 
 // openDynamicStreamOn opens a stream with cfg on the next free dynamic ID of
 // sess; cfg.StreamID is ignored. Callers hand the stream to
-// releaseDynamicStream once its request and response are done.
+// releaseDynamicStream once its request and response are done. Inside the
+// session's backoff it opens nothing and answers the error that armed it; an open
+// refused with backpressure arms it.
 func openDynamicStreamOn(ctx context.Context, sess aether.Session, cfg aether.StreamConfig) (aether.Stream, error) {
 	t := streamIDsFor(sess)
+	if err := t.backoffErr(); err != nil {
+		return nil, err
+	}
 	id, err := t.reserve()
 	if err != nil {
 		return nil, err
@@ -112,6 +142,7 @@ func openDynamicStreamOn(ctx context.Context, sess aether.Session, cfg aether.St
 	st, err := sess.OpenStream(ctx, cfg)
 	if err != nil {
 		t.bind(id, nil)
+		noteStreamEnd(sess, err)
 		return nil, err
 	}
 	t.bind(id, st)
@@ -132,6 +163,36 @@ func releaseDynamicStream(sess aether.Session, st aether.Stream) {
 	if sess != nil {
 		streamIDsFor(sess).release(st)
 	}
+}
+
+// noteStreamEnd arms the session's stream backoff when err from one of its
+// streams says the session or its peer is out of room (isStreamBackpressure). It
+// is how a RESET that reached a Send or a Receive slows the next open: OpenStream
+// itself had already succeeded.
+func noteStreamEnd(sess aether.Session, err error) {
+	if sess != nil && isStreamBackpressure(err) {
+		streamIDsFor(sess).armBackoff(err)
+	}
+}
+
+// OpenDynamicStream opens a stream with cfg on the next free dynamic ID of sess,
+// from the table every allocator on the session shares, so a caller outside this
+// package never takes an ID a stream here holds or an ID in the application band.
+// node's forwarder calls it. The caller hands the stream to ReleaseDynamicStream.
+func OpenDynamicStream(ctx context.Context, sess aether.Session, cfg aether.StreamConfig) (aether.Stream, error) {
+	return openDynamicStreamOn(ctx, sess, cfg)
+}
+
+// ReleaseDynamicStream resets a stream OpenDynamicStream opened and frees its ID;
+// see releaseDynamicStream.
+func ReleaseDynamicStream(sess aether.Session, st aether.Stream) {
+	releaseDynamicStream(sess, st)
+}
+
+// NoteStreamEnd arms the session's stream backoff when err, from a stream
+// OpenDynamicStream opened, says the session or its peer is out of room.
+func NoteStreamEnd(sess aether.Session, err error) {
+	noteStreamEnd(sess, err)
 }
 
 // forgetSession discards the session's ID table. Safe to call more than

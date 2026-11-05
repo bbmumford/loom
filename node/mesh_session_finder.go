@@ -109,6 +109,10 @@ func (m *ConnectionManager) MeshSessionForNode(nodeID string) (aether.Session, b
 // stale entry is evicted, and the next call goes straight to the
 // dynamic-stream path until a fresh bidi is registered.
 //
+// A bidi reopening its stream after a typed reset is alive and stays registered;
+// its Call answers an Unsent error, which the caller's own branch takes to the
+// dynamic stream.
+//
 // A bidi that dies DURING the call is evicted the same way, but the request
 // may already have reached the peer. Unless the call's error says it never
 // left (dispatch.Unsent), the answer is (nil, true, err) with err unwrapping to

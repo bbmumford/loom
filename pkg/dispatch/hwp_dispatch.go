@@ -744,11 +744,13 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 			}
 			defer releaseDynamicStream(r.Session, stream)
 			if err := stream.Send(probeCtx, reqData); err != nil {
+				noteStreamEnd(r.Session, err)
 				unanswered(err)
 				return
 			}
 			respData, err := stream.Receive(probeCtx)
 			if err != nil {
+				noteStreamEnd(r.Session, err)
 				unanswered(err)
 				return
 			}
@@ -903,10 +905,20 @@ func (c *HWPCaller) sendOnRoute(ctx, probeCtx context.Context, method string, ba
 	}
 	defer releaseDynamicStream(r.Session, stream)
 	if err := stream.Send(probeCtx, reqData); err != nil {
+		noteStreamEnd(r.Session, err)
+		if SendNeverLeft(err) {
+			settleUnanswered(ctx, probeCtx, cb)
+			return nil, NotSent(fmt.Errorf("send: %w", err))
+		}
 		return nil, ambiguous(fmt.Errorf("send: %w", err))
 	}
 	respData, err := stream.Receive(probeCtx)
 	if err != nil {
+		noteStreamEnd(r.Session, err)
+		if errors.Is(err, aether.ErrStreamRefused) {
+			settleUnanswered(ctx, probeCtx, cb)
+			return nil, NotSent(fmt.Errorf("receive: %w", err))
+		}
 		return nil, ambiguous(fmt.Errorf("receive: %w", err))
 	}
 	dynResp, err := pb.UnmarshalResponse(respData)
@@ -1108,8 +1120,12 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 	defer cancel()
 
 	// unanswered is the error for a dynamic-stream send that left and got no
-	// usable answer: ambiguous for an operation that is not Repeatable.
+	// usable answer: ambiguous for an operation that is not Repeatable. A stream
+	// the peer refused reached no handler, so it is not sent whatever the class.
 	unanswered := func(err error) error {
+		if errors.Is(err, aether.ErrStreamRefused) {
+			return NotSent(err)
+		}
 		if !class.Repeatable() {
 			return &AmbiguousEffectError{Handler: method, Cause: err}
 		}
@@ -1118,17 +1134,22 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 
 	// Send request
 	if err := stream.Send(rpcCtx, reqData); err != nil {
+		noteStreamEnd(session, err)
 		if cs != nil {
 			cs.recordTimeout()
 		}
 		c.metrics.RecordTimeout(role)
 		settleUnanswered(ctx, ctx, cb)
+		if SendNeverLeft(err) {
+			return nil, NotSent(fmt.Errorf("send: %w", err))
+		}
 		return nil, unanswered(fmt.Errorf("send: %w", err))
 	}
 
 	// Receive response
 	respData, err := stream.Receive(rpcCtx)
 	if err != nil {
+		noteStreamEnd(session, err)
 		if cs != nil {
 			cs.recordTimeout()
 		}

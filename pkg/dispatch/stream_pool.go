@@ -15,14 +15,26 @@ import (
 	"github.com/ORBTR/aether"
 )
 
-// capExhaustedBackoff is the cooldown applied to Fill() / Get() after
-// the underlying session's MaxConcurrentStreams cap is hit (detected
-// via aether.ErrStreamCapExhausted from OpenStream). Without it, Get()
-// on an empty pool would re-enter OpenStream immediately, the cap
-// would refuse, and the busy-loop would burn CPU + inflate the
-// session's streamRefused counter. The cooldown gives existing
-// streams time to drain before the next refill attempt.
-const capExhaustedBackoff = 250 * time.Millisecond
+// streamBackoff is how long a session's dynamic-stream opens wait after the
+// session or its peer answered one with backpressure (isStreamBackpressure).
+// Without it, Get on an empty pool would re-enter OpenStream at once, be refused
+// again, and burn CPU and inflate the session's streamRefused counter. The
+// cooldown gives existing streams time to drain before the next open. Every
+// allocator on the session reads it through streamIDsFor (openDynamicStreamOn).
+const streamBackoff = 250 * time.Millisecond
+
+// isStreamBackpressure reports whether err says the session or its peer has no room
+// for another stream or more bytes, with the session still up. OpenStream
+// returns aether.ErrStreamCapExhausted and aether.ErrStreamCreditRefused; Send and
+// Receive return aether.ErrStreamRefused and aether.ErrStreamOverrun, on Noise and
+// on byte-stream sessions alike, because the peer answers an admitted OPEN or a full
+// queue with a RESET that arrives after OpenStream has returned.
+func isStreamBackpressure(err error) bool {
+	return errors.Is(err, aether.ErrStreamCapExhausted) ||
+		errors.Is(err, aether.ErrStreamCreditRefused) ||
+		errors.Is(err, aether.ErrStreamRefused) ||
+		errors.Is(err, aether.ErrStreamOverrun)
+}
 
 // pooledStream pairs a pre-opened stream with metadata so Get can
 // reject stale streams (peer-FIN, age beyond reap window) without an
@@ -67,12 +79,6 @@ type StreamPool struct {
 	streams  []pooledStream
 	capacity int
 
-	// capExhaustedUntil is set when an OpenStream call returned
-	// aether.ErrStreamCapExhausted. Subsequent Fill() / Get() calls
-	// short-circuit until time advances past it, avoiding the busy-loop
-	// that would otherwise rapidly redial → refuse → redial. atomic.Int64
-	// holds UnixNano so reads are lock-free.
-	capExhaustedUntil atomic.Int64
 	// capExhaustedHits counts how many times the pool observed a
 	// cap-exhausted error. Surfaced for monitoring so operators can spot
 	// a leaking caller without grepping logs.
@@ -130,14 +136,12 @@ func sessionScope(parent context.Context, sess aether.Session) (context.Context,
 // closes. Fill holds the pool mutex across OpenStream, so an unbounded open
 // would also stall every Get on this pool.
 //
-// Cap-exhausted backoff: if a prior OpenStream returned
-// aether.ErrStreamCapExhausted, Fill short-circuits until
-// capExhaustedBackoff has elapsed. A session whose caller is leaking
-// streams otherwise produces a steady cap-hit cycle — each Fill
-// burning one OpenStream attempt every refill loop — and floods the
-// session's streamRefused counter.
+// Backoff: while the session is inside streamBackoff (isStreamBackpressure),
+// Fill opens nothing. A session whose caller is leaking streams, or whose peer is
+// refusing them, otherwise produces a steady cycle of one refused open every
+// refill loop and floods the session's streamRefused counter.
 func (p *StreamPool) Fill(ctx context.Context, sess aether.Session) {
-	if p.inCapBackoff() {
+	if streamIDsFor(sess).backoffErr() != nil {
 		return
 	}
 	ctx, cancel := sessionScope(ctx, sess)
@@ -153,10 +157,9 @@ func (p *StreamPool) Fill(ctx context.Context, sess aether.Session) {
 			Priority:    128,
 		})
 		if err != nil {
-			if errors.Is(err, aether.ErrStreamCapExhausted) {
-				p.armCapBackoff()
-				log.Printf("[dispatch.pool] OpenStream refused: stream cap exhausted; backing off %v (caller may be leaking streams)",
-					capExhaustedBackoff)
+			if isStreamBackpressure(err) {
+				p.noteCapExhausted(err)
+				log.Printf("[dispatch.pool] OpenStream refused: %v; backing off %v", err, streamBackoff)
 			}
 			return
 		}
@@ -164,21 +167,11 @@ func (p *StreamPool) Fill(ctx context.Context, sess aether.Session) {
 	}
 }
 
-// inCapBackoff returns true if the pool is currently in cap-exhausted
-// backoff and should skip OpenStream attempts. Lock-free.
-func (p *StreamPool) inCapBackoff() bool {
-	until := p.capExhaustedUntil.Load()
-	if until == 0 {
-		return false
+// noteCapExhausted counts an open the session's stream cap refused.
+func (p *StreamPool) noteCapExhausted(err error) {
+	if errors.Is(err, aether.ErrStreamCapExhausted) {
+		p.capExhaustedHits.Add(1)
 	}
-	return time.Now().UnixNano() < until
-}
-
-// armCapBackoff records that an OpenStream call returned
-// ErrStreamCapExhausted and sets the cooldown deadline.
-func (p *StreamPool) armCapBackoff() {
-	p.capExhaustedUntil.Store(time.Now().Add(capExhaustedBackoff).UnixNano())
-	p.capExhaustedHits.Add(1)
 }
 
 // CapExhaustedHits returns the cumulative count of cap-exhausted
@@ -219,22 +212,18 @@ func (p *StreamPool) Get(ctx context.Context, sess aether.Session) (aether.Strea
 	}
 	p.mu.Unlock()
 
-	// Pool empty — open a fresh stream. If we're inside the cap-
-	// exhausted backoff window, return the typed error immediately
-	// instead of redialing into a guaranteed refusal. Avoids the
-	// busy-loop Get → empty → OpenStream → refused → caller retries
-	// → Get → empty → ... that would otherwise flood streamRefused
-	// while no real progress is possible.
-	if p.inCapBackoff() {
-		return nil, aether.ErrStreamCapExhausted
+	// Pool empty: open a fresh stream. Inside the session's backoff window Get
+	// answers the typed error that armed it, so a caller retrying does not redial
+	// into a refusal and flood streamRefused while no progress is possible, and
+	// capExhaustedHits counts refusals rather than retries.
+	if err := streamIDsFor(sess).backoffErr(); err != nil {
+		return nil, err
 	}
 	stream, err := openDynamicStreamOn(ctx, sess, aether.StreamConfig{
 		Reliability: aether.ReliableOrdered,
 		Priority:    128,
 	})
-	if err != nil && errors.Is(err, aether.ErrStreamCapExhausted) {
-		p.armCapBackoff()
-	}
+	p.noteCapExhausted(err)
 	return stream, err
 }
 

@@ -8,6 +8,9 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/ORBTR/aether"
+	"github.com/ORBTR/aether/adapter"
+	"github.com/ORBTR/aether/flow"
 	"github.com/bbmumford/loom/pkg/rpc/effect"
 )
 
@@ -21,10 +24,25 @@ import (
 const LogicalIDKey = "logicalId"
 
 // ErrNotSent is what an attempt's error unwraps to when the request provably
-// never left this node: it failed to marshal, no stream opened for it, or no
-// channel took it. Only such an attempt may be followed by another for an
-// operation that is not effect.Class.Repeatable.
+// reached no handler: it failed to marshal, no stream opened for it, no channel
+// took it, or the peer refused its stream at admission (aether.ErrStreamRefused,
+// RESET(ResetRefused) from a peer that kept no state and reached no acceptor).
+// Only such an attempt may be followed by another for an operation that is not
+// effect.Class.Repeatable.
 var ErrNotSent = errors.New("the request was not sent")
+
+// SendNeverLeft reports whether err from a stream's Send says the message reached
+// no consumer: the stream had already ended with a typed reset (aether.ErrStreamRefused,
+// aether.ErrStreamOverrun), the stream's room stayed taken past the session's limit
+// (flow.ErrCreditExhausted), or the session cannot carry a message that long
+// (adapter.ErrPayloadTooLarge). Each answers before the message's last byte is
+// handed on, and a message incomplete at the peer is never delivered. HWPCaller's
+// dynamic paths, BidiRPC.Call and node's forwarder read it, to report the attempt as
+// NotSent.
+func SendNeverLeft(err error) bool {
+	return errors.Is(err, aether.ErrStreamRefused) || errors.Is(err, aether.ErrStreamOverrun) ||
+		errors.Is(err, flow.ErrCreditExhausted) || errors.Is(err, adapter.ErrPayloadTooLarge)
+}
 
 // notSentError keeps the cause's text and type while also unwrapping to
 // ErrNotSent.

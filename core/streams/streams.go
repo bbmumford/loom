@@ -148,9 +148,9 @@ const (
 // inclusive band [First, Last]. Latency is the class DefaultLatencyClass
 // answers for every ID in it, which an opener overrides for one stream by
 // setting aether.StreamConfig.LatencyClass. OpenedBy names the side that
-// opens the stream, because aether's createStream hands a duplicate OPEN the
-// stream already open under that ID: a second opener lands on the first
-// one's stream instead of its own.
+// opens the stream, because a session holds one stream per ID: a second opener's
+// OpenStream answers aether.ErrDuplicateStreamID, and a peer's OPEN for an ID in
+// use is ignored.
 type Entry struct {
 	Name     string
 	First    uint64

@@ -14,6 +14,7 @@ import (
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/bbmumford/loom/node/handlers"
+	"github.com/bbmumford/loom/pkg/dispatch"
 	"github.com/bbmumford/loom/pkg/trace"
 )
 
@@ -132,7 +133,8 @@ func (m *meshMessageStream) Recv() ([]byte, error) {
 // Context is the stream's serving context, ended when the session goes.
 func (m *meshMessageStream) Context() context.Context { return m.ctx }
 
-// Close ends the stream from this side.
-func (m *meshMessageStream) Close() error { return m.stream.Close() }
+// Close ends the stream from this side. The handler has finished reading, so what
+// the opener still sends is read off here (dispatch.CloseAbandoned).
+func (m *meshMessageStream) Close() error { return dispatch.CloseAbandoned(m.stream) }
 
 var _ handlers.MessageStream = (*meshMessageStream)(nil)
