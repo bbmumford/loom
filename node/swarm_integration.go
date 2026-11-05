@@ -442,6 +442,8 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	// accept one.
 	rtCtx := rt.Context()
 
+	tport.onStreamReopened(func(peerID swarm.NodeID) { node.ProbePeer(peerID) })
+
 	if rt.connMgr != nil {
 		log.Printf("[SWARM] InitSwarm: installing SessionHook on ConnectionManager")
 		// AddSessionHook, not the single SetSessionHook slot, so another

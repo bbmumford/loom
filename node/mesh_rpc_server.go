@@ -72,6 +72,9 @@ func (s *RPCServer) ServeMeshStream(ctx context.Context, stream aether.Stream, r
 		// Send response on Aether stream
 		if err := stream.Send(ctx, respBytes); err != nil {
 			s.logger.Printf("[RPC-AETHER] Send response error on stream %d: %v", stream.StreamID(), err)
+			// Nothing reads this stream after the return, and its unread messages
+			// would hold the opener's connection credit until aether's idle sweep.
+			_ = stream.Reset(aether.ResetCancel)
 			return
 		}
 	}
@@ -80,21 +83,24 @@ func (s *RPCServer) ServeMeshStream(ctx context.Context, stream aether.Stream, r
 // serveUnclaimedStream serves a stream that reached the session's dynamic
 // accept loop, which receives every stream no consumer claimed by ID.
 //
-// Only IDs below streams.ApplicationBand carry RPC: pkg/dispatch opens
-// dynamic RPC streams there. An application-band stream (StreamSwarm,
-// StreamMeshDB and the like) lands here when its consumer does not run on
-// this node or had not armed AcceptStreamByID within aether's backlog grace;
-// served as RPC, its first frame would be parsed as a request. It is reset
-// instead, so the opener's consumer fails at once and can open again. The
-// handler-stream band is the one application band served here
+// Only IDs from streams.DynamicRPCBase up to streams.ApplicationBand carry RPC:
+// pkg/dispatch opens dynamic RPC streams there. An application-band stream
+// (StreamSwarm, StreamMeshDB and the like) lands here when its consumer does not run
+// on this node or had not armed AcceptStreamByID within aether's backlog grace. A
+// setup stream lands here when the peer reopens it after a typed reset
+// (streamReopener) while this node's consumer is still reading what the old
+// generation's queue holds. Served as RPC, the first frame of either would be parsed
+// as a request. A reset answers it, so the opener's consumer fails at once and
+// opens again. The handler-stream band is the one application band served here
 // (serveHandlerStream).
 func (s *RPCServer) serveUnclaimedStream(ctx context.Context, stream aether.Stream, remoteID aether.NodeID) {
-	if id := stream.StreamID(); id >= streams.StreamHandlerBase && id <= streams.StreamHandlerLast {
+	id := stream.StreamID()
+	if id >= streams.StreamHandlerBase && id <= streams.StreamHandlerLast {
 		s.serveHandlerStream(ctx, stream, remoteID)
 		return
 	}
-	if id := stream.StreamID(); id >= streams.ApplicationBand {
-		log.Printf("[RPC-AETHER] refused unclaimed application stream %d from %s", id, remoteID.Short())
+	if id >= streams.ApplicationBand || id < streams.DynamicRPCBase {
+		log.Printf("[RPC-AETHER] refused unclaimed stream %d from %s", id, remoteID.Short())
 		_ = stream.Reset(aether.ResetRefused)
 		return
 	}

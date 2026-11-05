@@ -49,7 +49,14 @@ const bidiServerSendTimeout = 5 * time.Second
 // - type=0x10: payload is RPCRequest (binary TLV)
 // - type=0x20: payload is RPCResponse (binary TLV)
 type BidiRPC struct {
-	stream   aether.Stream
+	// stream is the current generation of Stream 1, nil while reopen is
+	// establishing the next one (reopenStream), when Call answers NotSent so the
+	// dispatch layer takes its dynamic-stream path. Guarded by mu.
+	stream aether.Stream
+	// reopen establishes Stream 1 again after a typed reset; readLoop is its one
+	// caller. Nil means this bidi ends with its stream, as it does for a bidi built
+	// without a session (NewBidiRPC, NewPartitionedBidiRPC).
+	reopen   func() (aether.Stream, error)
 	remoteID aether.NodeID
 	server   *RPCServer
 
@@ -144,8 +151,18 @@ func NewBidiRPC(stream aether.Stream, remoteID aether.NodeID, server *RPCServer,
 // that partition, so the principal it carries is judged by the consumer's
 // admitter against the transport it arrived on, exactly as a request on an
 // accepted RPC session is. AcceptMeshConnection builds every session's bidi
-// through it.
+// through newReopeningBidiRPC, which is this constructor with a reopen.
 func NewPartitionedBidiRPC(stream aether.Stream, remoteID aether.NodeID, server *RPCServer, transport, scope, partition string) *BidiRPC {
+	return newReopeningBidiRPC(stream, remoteID, server, transport, scope, partition, nil)
+}
+
+// newReopeningBidiRPC is NewPartitionedBidiRPC for a bidi that outlives a typed
+// reset of its stream: reopen returns the stream's next generation, or an error
+// when there will be none. A full delivery queue on either end resets Stream 1 and
+// leaves the session up (aether.ErrStreamOverrun), so without a reopen every later
+// call on the session would take a dynamic stream and the peer's calls to this node
+// would have no channel. AcceptMeshConnection passes its streamReopener.
+func newReopeningBidiRPC(stream aether.Stream, remoteID aether.NodeID, server *RPCServer, transport, scope, partition string, reopen func() (aether.Stream, error)) *BidiRPC {
 	ctx, cancel := context.WithCancel(context.Background())
 	// 5 random bytes → a per-instance wire-ID namespace so ids never
 	// collide across bidis/peers in the responder's shared dedup cache.
@@ -153,6 +170,7 @@ func NewPartitionedBidiRPC(stream aether.Stream, remoteID aether.NodeID, server 
 	_, _ = rand.Read(pfx[:])
 	b := &BidiRPC{
 		stream:       stream,
+		reopen:       reopen,
 		remoteID:     remoteID,
 		server:       server,
 		transport:    transport,
@@ -170,8 +188,9 @@ func NewPartitionedBidiRPC(stream aether.Stream, remoteID aether.NodeID, server 
 }
 
 // IsAlive reports whether the read loop is still running. Returns false
-// once the underlying stream has errored out and readLoop has closed
-// b.done. Callers that can fall back to a different transport (dynamic
+// once the stream has ended in a way readLoop does not reopen and it has closed
+// b.done; a bidi reopening its stream stays alive and Call answers NotSent
+// meanwhile. Callers that can fall back to a different transport (dynamic
 // stream, alternate route) should consult IsAlive before issuing a Call
 // — a dead bidi otherwise returns "bidi stream closed" from Call, and
 // the dispatch layer treats that as a routing failure rather than
@@ -191,6 +210,14 @@ func (b *BidiRPC) IsAlive() bool {
 // surface in MeshMetrics. Atomic load — safe to call from any goroutine.
 func (b *BidiRPC) InflightCalls() int64 {
 	return b.inflightCalls.Load()
+}
+
+// currentStream returns the stream's current generation, nil while it is being
+// reopened or after the read loop gave up on a reopen.
+func (b *BidiRPC) currentStream() aether.Stream {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.stream
 }
 
 // nextWireID allocates a bidi-unique wire-side ID. Always used to stamp
@@ -290,8 +317,18 @@ func (b *BidiRPC) Call(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse
 	marshalDur := time.Since(marshalStart)
 
 	sendStart := time.Now()
-	if err := b.stream.Send(ctx, msg); err != nil {
+	stream := b.currentStream()
+	if stream == nil {
 		req.Id = originalID
+		return nil, dispatch.NotSent(errBidiReopening)
+	}
+	if err := stream.Send(ctx, msg); err != nil {
+		req.Id = originalID
+		// Nothing the peer will run left on this stream, so this request's first
+		// send can still be the dynamic stream.
+		if dispatch.SendNeverLeft(err) {
+			return nil, dispatch.NotSent(fmt.Errorf("bidi send request: %w", err))
+		}
 		return nil, fmt.Errorf("bidi send request: %w", err)
 	}
 	sendDur := time.Since(sendStart)
@@ -333,9 +370,61 @@ func (b *BidiRPC) Call(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse
 	}
 }
 
-// readLoop runs for the lifetime of the stream, demuxing incoming messages.
-// On exit it drains every pending caller with a synthetic "stream closed"
-// response so no Call survives only because of stream.Send's error path.
+// errBidiReopening is what Call answers, marked NotSent, while Stream 1's next
+// generation is being established.
+var errBidiReopening = errors.New("bidi stream reopening")
+
+// failPending answers every pending caller with a synthetic "stream closed"
+// response, so no Call waits for a stream that has ended until its own ctx fires.
+//
+// Each drained response is stamped ambiguous (dispatch.StampRefusal): its request
+// was handed to the peer, which may have run it, so HWPCaller must read it as an
+// unknown outcome and never as a handler's rejection.
+func (b *BidiRPC) failPending() {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	for id, ch := range b.pending {
+		closed := &pb.RPCResponse{Id: id, Success: false, Error: "bidi stream closed"}
+		dispatch.StampRefusal(closed, &dispatch.AmbiguousEffectError{Cause: dispatch.ErrChannelClosed})
+		// Non-blocking send; receivers drain via select with b.done.
+		select {
+		case ch <- closed:
+		default:
+		}
+	}
+}
+
+// reopenStream replaces ended, which a typed reset has taken off both ends, with
+// the stream's next generation, and reports whether it did. Pending calls fail
+// first: the peer's answers to them went with the old stream. A request already
+// running keeps its goroutine, and its answer leaves on whatever generation is
+// current; the peer drops an answer whose call has gone (handleIncomingResponse).
+func (b *BidiRPC) reopenStream(ended aether.Stream) bool {
+	b.mu.Lock()
+	b.stream = nil
+	b.mu.Unlock()
+	b.failPending()
+	// The stream has left, so this writes nothing and returns any credit its queue
+	// still holds.
+	_ = ended.Reset(aether.ResetCancel)
+	fresh, err := b.reopen()
+	if err != nil {
+		log.Printf("[BIDI-RPC] %s: stream %d reopen ended: %v",
+			b.remoteID.Short(), ended.StreamID(), err)
+		return false
+	}
+	b.mu.Lock()
+	b.stream = fresh
+	b.mu.Unlock()
+	log.Printf("[BIDI-RPC] %s: stream %d reopened", b.remoteID.Short(), fresh.StreamID())
+	return true
+}
+
+// readLoop runs for the lifetime of the bidi, demuxing incoming messages. A typed
+// reset of the stream (typedStreamEnd) reopens it when the bidi has a reopen; any
+// other end stops the loop. On exit it drains every pending caller with a synthetic
+// "stream closed" response so no Call survives only because of stream.Send's error
+// path.
 func (b *BidiRPC) readLoop() {
 	defer func() {
 		// Cancel the bidi-scoped ctx so any in-flight server handlers
@@ -345,24 +434,10 @@ func (b *BidiRPC) readLoop() {
 		// hanging until their own ctx fires.
 		b.ctxCancel()
 		close(b.done)
-		//
-		// Each drained response is stamped ambiguous (dispatch.StampRefusal):
-		// its request was handed to the peer, which may have run it, so
-		// HWPCaller must read it as an unknown outcome and never as a handler's
-		// rejection.
-		b.mu.Lock()
-		for id, ch := range b.pending {
-			closed := &pb.RPCResponse{Id: id, Success: false, Error: "bidi stream closed"}
-			dispatch.StampRefusal(closed, &dispatch.AmbiguousEffectError{Cause: dispatch.ErrChannelClosed})
-			// Non-blocking send; receivers drain via select with b.done.
-			select {
-			case ch <- closed:
-			default:
-			}
-		}
-		b.mu.Unlock()
+		b.failPending()
 	}()
 
+	stream := b.currentStream()
 	for {
 		// This framing relies on aether's Stream.Receive being
 		// message-oriented — exactly one Send unit per Receive, boundaries
@@ -372,11 +447,15 @@ func (b *BidiRPC) readLoop() {
 		// splits/coalesces stream payloads would make data[0] an unreliable
 		// type tag, so adding one requires switching this loop to a
 		// length-prefixed reassembly framing.
-		data, err := b.stream.Receive(b.ctx)
+		data, err := stream.Receive(b.ctx)
 		if err != nil {
 			log.Printf("[BIDI-RPC] %s: stream %d read loop exit: %v",
-				b.remoteID.Short(), b.stream.StreamID(), err)
-			return
+				b.remoteID.Short(), stream.StreamID(), err)
+			if b.reopen == nil || !typedStreamEnd(err) || !b.reopenStream(stream) {
+				return
+			}
+			stream = b.currentStream()
+			continue
 		}
 
 		if len(data) < 2 {
@@ -429,7 +508,7 @@ func (b *BidiRPC) readLoop() {
 			b.handleIncomingResponse(payload)
 		default:
 			log.Printf("[BIDI-RPC] %s: unknown message type 0x%02x on stream %d",
-				b.remoteID.Short(), msgType, b.stream.StreamID())
+				b.remoteID.Short(), msgType, stream.StreamID())
 		}
 	}
 }
@@ -533,7 +612,13 @@ func (b *BidiRPC) handleIncomingRequest(payload []byte) {
 	// fires, which on a healthy peer is "indefinitely".
 	sendCtx, sendCancel := context.WithTimeout(b.ctx, bidiServerSendTimeout)
 	defer sendCancel()
-	if err := b.stream.Send(sendCtx, msg); err != nil {
+	stream := b.currentStream()
+	if stream == nil {
+		log.Printf("[BIDI-RPC] %s: no stream for the response to %s id=%s: %v",
+			b.remoteID.Short(), req.Handler, req.Id, errBidiReopening)
+		return
+	}
+	if err := stream.Send(sendCtx, msg); err != nil {
 		log.Printf("[BIDI-RPC] %s: send response error for %s id=%s: %v",
 			b.remoteID.Short(), req.Handler, req.Id, err)
 		return

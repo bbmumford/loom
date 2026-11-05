@@ -6,6 +6,7 @@ package gossip
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"time"
 
@@ -59,8 +60,8 @@ func RunGossipLoopWithPeer(ctx context.Context, stream aether.Stream, reconcileS
 
 	// Use the unified StreamConn adapter — single net.Conn implementation
 	// with per-exchange deadline support and parent context propagation.
-	streamConn := adapter.NewStreamConn(stream, ctx)
-	reconcileConn := adapter.NewStreamConn(reconcileStream, ctx)
+	streamConn := newGossipConn(stream, ctx)
+	reconcileConn := newGossipConn(reconcileStream, ctx)
 
 	// Delta sync needs the peer's identity to key its watermark (it cuts an
 	// exchange from ~100KB to ~1KB).
@@ -98,8 +99,8 @@ func RunGossipResponder(ctx context.Context, stream aether.Stream, reconcileStre
 	dbgGossipStream.Printf("Responder started: streamID=%d, reconcileID=%d, peer=%s",
 		stream.StreamID(), reconcileStream.StreamID(), peerNodeID)
 
-	streamConn := adapter.NewStreamConn(stream, ctx)
-	reconcileConn := adapter.NewStreamConn(reconcileStream, ctx)
+	streamConn := newGossipConn(stream, ctx)
+	reconcileConn := newGossipConn(reconcileStream, ctx)
 
 	if peerNodeID == "" {
 		dt = nil
@@ -109,10 +110,67 @@ func RunGossipResponder(ctx context.Context, stream aether.Stream, reconcileStre
 	dbgGossipStream.Printf("Responder exited: streamID=%d, ctxErr=%v", stream.StreamID(), ctx.Err())
 }
 
-// isFatalGossipError returns true for errors that mean the connection is dead.
+// gossipChunkSize bounds one Send of a gossip conn. Whisper and GossipOverConn write
+// a frame's body with one Write, and a Write on a StreamConn is one Send, while a
+// session limits one message below the frame caps here: a byte-stream session to the
+// 1 MiB its delivery queue holds per stream, less the queue's 64 B entry cost, and a
+// Noise session to its fragment count at the path's MSS. Readers use io.ReadFull, so where a body is split does not
+// reach them.
+const gossipChunkSize = 64 * 1024
+
+// gossipConn is the net.Conn every gossip and reconcile engine runs on. A Write
+// splits into Sends of at most gossipChunkSize. Close resets the stream as well as
+// closing it, because the conn's reader is what Close stops: nothing would read the
+// stream's queue again, and the session's gossip loop reopens an ended stream
+// (node's gossipStreams), which a half-closed one would never become.
+type gossipConn struct {
+	*adapter.StreamConn
+	stream aether.Stream
+}
+
+func newGossipConn(stream aether.Stream, ctx context.Context) *gossipConn {
+	return &gossipConn{StreamConn: adapter.NewStreamConn(stream, ctx), stream: stream}
+}
+
+// Write implements net.Conn. It returns the bytes of the Sends that succeeded.
+func (c *gossipConn) Write(p []byte) (int, error) {
+	written := 0
+	for written < len(p) {
+		end := min(written+gossipChunkSize, len(p))
+		n, err := c.StreamConn.Write(p[written:end])
+		written += n
+		if err != nil {
+			return written, err
+		}
+	}
+	return written, nil
+}
+
+// Close implements net.Conn.
+func (c *gossipConn) Close() error {
+	err := c.StreamConn.Close()
+	_ = c.stream.Reset(aether.ResetCancel)
+	return err
+}
+
+// streamEnded reports whether the stream under this conn has ended, which
+// runGossipLoopInternal reads to leave a reconcile stream no G4 round can use.
+func (c *gossipConn) streamEnded() bool { return !c.stream.IsOpen() }
+
+// isFatalGossipError returns true for errors that mean the connection or its stream
+// is dead. A stream ended with a typed reset (aether.ErrStreamOverrun,
+// aether.ErrStreamRefused) returns its end from every further read at once, so read
+// as transient it would spin whisper's RunResponder and fail every initiator
+// exchange for the session's life; read as fatal it ends the loop and the session's
+// gossip loop reopens the stream. aether.ErrSessionWriteFailed is the session's end.
 func isFatalGossipError(err error) bool {
 	if err == nil {
 		return false
+	}
+	if errors.Is(err, aether.ErrStreamOverrun) || errors.Is(err, aether.ErrStreamRefused) ||
+		errors.Is(err, aether.ErrSessionWriteFailed) || errors.Is(err, aether.ErrSessionClosed) ||
+		errors.Is(err, errGossipDesynchronised) {
+		return true
 	}
 	s := err.Error()
 	return strings.Contains(s, "EOF") ||

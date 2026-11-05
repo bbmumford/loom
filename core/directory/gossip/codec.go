@@ -119,6 +119,10 @@ func checkEnvelopeVersions(p Profile, data []byte) error {
 	return nil
 }
 
+// gossipEnvelopeRecordsField is GossipEnvelope's records field number in
+// gossip.proto, which marshalEnvelope's size reckoning needs.
+const gossipEnvelopeRecordsField protowire.Number = 2
+
 // marshalEnvelope serialises a gossip envelope to protobuf, stamped with the
 // codec_version and schema_version p's codec writes.
 func marshalEnvelope(p Profile, meta *ExchangeMeta, records []lad.Record) ([]byte, error) {
@@ -131,12 +135,28 @@ func marshalEnvelope(p Profile, meta *ExchangeMeta, records []lad.Record) ([]byt
 
 	// Each record is individually proto-marshalled as opaque bytes.
 	// This keeps the envelope payload-agnostic (Whisper extraction requirement).
+	//
+	// The body stays inside maxGossipPayload, which the reader refuses past: the
+	// records that do not fit wait for a later exchange, where the cache fingerprints
+	// the two ends compare still disagree and drive the bucket digest round and G4.
+	// Both directions pass here: GossipOverConn and the responder's G1 codec.
+	size := proto.Size(env)
+	skipped := 0
 	for _, rec := range records {
 		recBytes, err := proto.Marshal(recordToProto(rec))
 		if err != nil {
 			return nil, err
 		}
+		cost := protowire.SizeBytes(len(recBytes)) + protowire.SizeTag(gossipEnvelopeRecordsField)
+		if size+cost > maxGossipPayload {
+			skipped++
+			continue
+		}
+		size += cost
 		env.Records = append(env.Records, recBytes)
+	}
+	if skipped > 0 {
+		log.Printf("[GOSSIP] exchange holds %d of %d records inside the %d B frame bound", len(env.Records), len(records), maxGossipPayload)
 	}
 
 	return proto.Marshal(env)

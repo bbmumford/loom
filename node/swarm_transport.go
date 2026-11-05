@@ -17,8 +17,16 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/bbmumford/loom/core/streams"
+	"github.com/bbmumford/loom/pkg/dispatch"
 	"github.com/bbmumford/swarm"
 )
+
+// swarmSendTimeout bounds one frame's Send. A session's Send waits for room when
+// its peer or transport has stalled, and the swarm engine fans out with repeated
+// Send, so one stalled peer would hold every other peer's frame for as long as the
+// session's own limit. A frame given up on here is repaired by the engine's
+// anti-entropy, which reads the returned error as an undelivered frame.
+const swarmSendTimeout = 5 * time.Second
 
 // ErrPeerNotRegistered is returned by Send when the destination peer has no
 // swarm stream on this transport — it was never attached, or was unregistered.
@@ -49,6 +57,7 @@ type MeshSwarmTransport struct {
 	receiver func(from swarm.NodeID, frame []byte)
 	onJoin   func(id swarm.NodeID)
 	onLeave  func(id swarm.NodeID)
+	onReopen func(id swarm.NodeID)
 
 	// stopped is set by Stop under mu. attachPeer refuses once it is set:
 	// spawning a read loop after Stop has begun would both leak the
@@ -66,6 +75,8 @@ type MeshSwarmTransport struct {
 
 // meshSwarmPeer is per-peer state inside MeshSwarmTransport. Each peer has
 // exactly one dedicated swarm stream; reads happen on a per-peer goroutine.
+// stream is guarded by the transport's mu and is nil while readLoop reopens it
+// (reopenPeer), when Send answers ErrPeerNotRegistered and Peers leaves the peer out.
 type meshSwarmPeer struct {
 	id      swarm.NodeID
 	session aether.Session
@@ -107,7 +118,7 @@ func (t *MeshSwarmTransport) Stop() {
 			p.cancel()
 		}
 		if p.stream != nil {
-			_ = p.stream.Close()
+			_ = dispatch.CloseAbandoned(p.stream)
 		}
 	}
 	t.peers = make(map[swarm.NodeID]*meshSwarmPeer)
@@ -130,15 +141,20 @@ func (t *MeshSwarmTransport) LocalID() swarm.NodeID { return t.localID }
 // delivered frame.
 func (t *MeshSwarmTransport) Send(to swarm.NodeID, frame []byte) error {
 	t.mu.RLock()
-	p, ok := t.peers[to]
-	known := ok
-	streamOk := ok && p.stream != nil
+	p, known := t.peers[to]
+	var stream aether.Stream
+	if known {
+		stream = p.stream
+	}
 	t.mu.RUnlock()
+	streamOk := stream != nil
 	if !known || !streamOk {
 		log.Printf("[SWARM] Send: SKIP peer=%s known=%v streamOk=%v bytes=%d", truncID(string(to)), known, streamOk, len(frame))
 		return fmt.Errorf("%w: peer=%s known=%v streamOk=%v", ErrPeerNotRegistered, truncID(string(to)), known, streamOk)
 	}
-	err := sendFramed(t.ctx, p.stream, frame)
+	ctx, cancel := context.WithTimeout(t.ctx, swarmSendTimeout)
+	defer cancel()
+	err := sendFramed(ctx, stream, frame)
 	if err != nil {
 		log.Printf("[SWARM] Send: FAILED peer=%s bytes=%d err=%v", truncID(string(to)), len(frame), err)
 	} else {
@@ -158,21 +174,28 @@ func (t *MeshSwarmTransport) Send(to swarm.NodeID, frame []byte) error {
 // so that whoever wires it first does not inherit a method that returns nil
 // unconditionally while discarding every error.
 func (t *MeshSwarmTransport) Broadcast(frame []byte) error {
+	type target struct {
+		id     swarm.NodeID
+		stream aether.Stream
+	}
 	t.mu.RLock()
-	peers := make([]*meshSwarmPeer, 0, len(t.peers))
+	targets := make([]target, 0, len(t.peers))
 	for _, p := range t.peers {
-		peers = append(peers, p)
+		targets = append(targets, target{id: p.id, stream: p.stream})
 	}
 	t.mu.RUnlock()
-	log.Printf("[SWARM] Broadcast: bytes=%d targets=%d", len(frame), len(peers))
+	log.Printf("[SWARM] Broadcast: bytes=%d targets=%d", len(frame), len(targets))
 
 	var errs []error
-	for _, p := range peers {
+	for _, p := range targets {
 		if p.stream == nil {
 			errs = append(errs, fmt.Errorf("%w: peer=%s", ErrPeerNotRegistered, truncID(string(p.id))))
 			continue
 		}
-		if err := sendFramed(t.ctx, p.stream, frame); err != nil {
+		ctx, cancel := context.WithTimeout(t.ctx, swarmSendTimeout)
+		err := sendFramed(ctx, p.stream, frame)
+		cancel()
+		if err != nil {
 			errs = append(errs, fmt.Errorf("peer=%s: %w", truncID(string(p.id)), err))
 		}
 	}
@@ -184,8 +207,10 @@ func (t *MeshSwarmTransport) Peers() []swarm.NodeID {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	out := make([]swarm.NodeID, 0, len(t.peers))
-	for id := range t.peers {
-		out = append(out, id)
+	for id, p := range t.peers {
+		if p.stream != nil {
+			out = append(out, id)
+		}
 	}
 	return out
 }
@@ -212,6 +237,16 @@ func (t *MeshSwarmTransport) OnPeerLeave(fn func(id swarm.NodeID)) {
 	t.mu.Unlock()
 }
 
+// onStreamReopened registers a callback invoked after a peer's stream has been
+// reopened on its live session (reopenPeer). InitSwarm kicks an anti-entropy probe
+// there: the frames the typed reset ended were lost with the stream, and onJoin
+// alone only restores the peer in the engine's table. Not part of swarm.Transport.
+func (t *MeshSwarmTransport) onStreamReopened(fn func(id swarm.NodeID)) {
+	t.mu.Lock()
+	t.onReopen = fn
+	t.mu.Unlock()
+}
+
 // RegisterPeer attaches an aether session for a peer and binds the
 // dedicated swarm stream (streams.StreamSwarm). Both sides of the
 // session call RegisterPeer; deterministic role assignment by NodeID
@@ -226,8 +261,9 @@ func (t *MeshSwarmTransport) OnPeerLeave(fn func(id swarm.NodeID)) {
 // RPCRequest and produces "invalid UTF-8" errors plus silent
 // loss of every swarm frame on that peer.
 //
-// Idempotent — registering the same peer twice replaces the previous
-// stream/goroutine via attachPeer.
+// Registering a peer already attached on this same session is a no-op: the stream
+// it holds stays. Another session replaces the previous stream and goroutine via
+// attachPeer.
 func (t *MeshSwarmTransport) RegisterPeer(ctx context.Context, peerID swarm.NodeID, session aether.Session) error {
 	log.Printf("[SWARM] RegisterPeer: entry peer=%s session=%v", truncID(string(peerID)), session != nil)
 	if session == nil {
@@ -238,14 +274,22 @@ func (t *MeshSwarmTransport) RegisterPeer(ctx context.Context, peerID swarm.Node
 	selfID := string(t.localID)
 	peerIDStr := string(peerID)
 
+	t.mu.RLock()
+	p, attached := t.peers[peerID]
+	attached = attached && p.session == session
+	t.mu.RUnlock()
+	if attached {
+		log.Printf("[SWARM] RegisterPeer: peer=%s already attached on this session", truncID(peerIDStr))
+		return nil
+	}
+
 	// Deterministic tie-break: the lower NodeID is the initiator and
 	// calls OpenStream, which is what pushes the OPEN frame on
 	// the wire. The higher NodeID is the responder and arms
 	// AcceptStreamByID(streams.StreamSwarm) so the OPEN is claimed by the
 	// StreamID-specific waiter rather than the FIFO dynamic-stream
-	// handler. If both sides ever opened, aether's duplicate-OPEN
-	// handling collapses to a single stream object and attachPeer is
-	// idempotent.
+	// handler. A second OpenStream of the ID while the first stream lives
+	// answers aether.ErrDuplicateStreamID and opens nothing.
 	if selfID < peerIDStr {
 		// Initiator: OpenStream is fast (it just pushes the OPEN frame),
 		// so keep it synchronous.
@@ -307,7 +351,7 @@ func (t *MeshSwarmTransport) UnregisterPeer(peerID swarm.NodeID) {
 		p.cancel()
 	}
 	if p.stream != nil {
-		_ = p.stream.Close()
+		_ = dispatch.CloseAbandoned(p.stream)
 	}
 	if onLeave != nil {
 		onLeave(peerID)
@@ -351,7 +395,7 @@ func (t *MeshSwarmTransport) unregisterPeerInstance(p *meshSwarmPeer) {
 		p.cancel()
 	}
 	if p.stream != nil {
-		_ = p.stream.Close()
+		_ = dispatch.CloseAbandoned(p.stream)
 	}
 	if onLeave != nil {
 		onLeave(p.id)
@@ -368,7 +412,7 @@ func (t *MeshSwarmTransport) attachPeer(peerID swarm.NodeID, session aether.Sess
 		// we were handed rather than silently retaining it.
 		t.mu.Unlock()
 		if stream != nil {
-			_ = stream.Close()
+			_ = dispatch.CloseAbandoned(stream)
 		}
 		log.Printf("[SWARM] attachPeer: REFUSED peer=%s — transport stopped", truncID(string(peerID)))
 		return
@@ -378,7 +422,7 @@ func (t *MeshSwarmTransport) attachPeer(peerID swarm.NodeID, session aether.Sess
 			existing.cancel()
 		}
 		if existing.stream != nil {
-			_ = existing.stream.Close()
+			_ = dispatch.CloseAbandoned(existing.stream)
 		}
 	}
 	pctx, pcancel := context.WithCancel(t.ctx)
@@ -401,7 +445,56 @@ func (t *MeshSwarmTransport) attachPeer(peerID swarm.NodeID, session aether.Sess
 		onJoin(peerID)
 		log.Printf("[SWARM] attachPeer: onJoin callback fired peer=%s", truncID(string(peerID)))
 	}
-	go t.readLoop(pctx, p)
+	go t.readLoop(pctx, p, stream)
+}
+
+// reopenPeer replaces ended, which a typed reset has taken off both ends of the
+// session, with the stream's next generation and returns it, or nil when there is
+// none. While it runs the peer is out of the engine (onLeave) and Send answers
+// ErrPeerNotRegistered, so the engine does not count on frames no stream can carry;
+// the entry stays in t.peers, because UnregisterPeer, attachPeer of a newer session
+// and Stop find it there and end this wait by cancelling ctx. The lower NodeID opens
+// and the higher claims by ID, as RegisterPeer does; a peer with no consumer claiming
+// answers the OPEN with RESET(ResetRefused), the same typed end, at the opener's
+// growing wait. onJoin and onReopen fire once the new stream is in place.
+func (t *MeshSwarmTransport) reopenPeer(ctx context.Context, p *meshSwarmPeer, ended aether.Stream, r *streamReopener) aether.Stream {
+	t.mu.Lock()
+	if cur, ok := t.peers[p.id]; !ok || cur != p {
+		t.mu.Unlock()
+		return nil
+	}
+	p.stream = nil
+	onLeave := t.onLeave
+	t.mu.Unlock()
+	if onLeave != nil {
+		onLeave(p.id)
+	}
+	// The stream has left, so this writes nothing and returns any credit its queue
+	// still holds.
+	_ = ended.Reset(aether.ResetCancel)
+
+	fresh, err := r.reopen(ctx)
+	if err != nil {
+		log.Printf("[SWARM] reopen ended peer=%s: %v", truncID(string(p.id)), err)
+		return nil
+	}
+	t.mu.Lock()
+	if cur, ok := t.peers[p.id]; t.stopped || !ok || cur != p {
+		t.mu.Unlock()
+		_ = fresh.Reset(aether.ResetCancel)
+		return nil
+	}
+	p.stream = fresh
+	onJoin, onReopen := t.onJoin, t.onReopen
+	t.mu.Unlock()
+	log.Printf("[SWARM] readLoop: stream reopened peer=%s streamID=%d", truncID(string(p.id)), fresh.StreamID())
+	if onJoin != nil {
+		onJoin(p.id)
+	}
+	if onReopen != nil {
+		onReopen(p.id)
+	}
+	return fresh
 }
 
 // readLoop is the per-peer reader. Receives whole frames from the
@@ -410,19 +503,35 @@ func (t *MeshSwarmTransport) attachPeer(peerID swarm.NodeID, session aether.Sess
 // aether.Stream.Receive delivers payload-sized chunks already, so no
 // length prefixing is needed at this layer — each Receive call yields
 // one logical swarm frame.
-func (t *MeshSwarmTransport) readLoop(ctx context.Context, p *meshSwarmPeer) {
+//
+// stream is this goroutine's reference to p.stream, which only this goroutine
+// replaces (reopenPeer), so the blocking Receive holds no lock. A typed reset
+// (typedStreamEnd) reopens the stream on the live session; any other end tears the
+// peer down.
+func (t *MeshSwarmTransport) readLoop(ctx context.Context, p *meshSwarmPeer, stream aether.Stream) {
 	// Deferred FIRST so it runs LAST: Stop's join must not be released until
 	// the peer teardown below has also finished.
 	defer t.wg.Done()
 	defer t.unregisterPeerInstance(p)
-	log.Printf("[SWARM] readLoop: entry peer=%s streamID=%d", truncID(string(p.id)), p.stream.StreamID())
+	log.Printf("[SWARM] readLoop: entry peer=%s streamID=%d", truncID(string(p.id)), stream.StreamID())
 
+	var reopener *streamReopener
+	if p.session != nil {
+		reopener = &streamReopener{session: p.session, opens: string(t.localID) < string(p.id), cfg: swarmStreamConfig()}
+	}
 	firstFrame := true
 	for {
-		frame, err := p.stream.Receive(ctx)
+		frame, err := stream.Receive(ctx)
 		if err != nil {
 			log.Printf("[SWARM] readLoop: Receive exit peer=%s: %v", truncID(string(p.id)), err)
-			return
+			if reopener == nil || !typedStreamEnd(err) {
+				return
+			}
+			if stream = t.reopenPeer(ctx, p, stream, reopener); stream == nil {
+				return
+			}
+			firstFrame = true
+			continue
 		}
 		if firstFrame {
 			log.Printf("[SWARM] readLoop: FIRST frame received peer=%s bytes=%d", truncID(string(p.id)), len(frame))

@@ -2074,9 +2074,10 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 		// is the bottleneck" signature. Sourced from each session's
 		// CongestionThrottle.TotalHits() — lock-free atomic load, safe to
 		// sample outside any session lock. Throttle() is exposed only on
-		// the concrete adapter session types (*NoiseSession, *TCPSession),
-		// not the aether.Session interface, so we type-assert per session
-		// to the structural interface that both satisfy.
+		// *NoiseSession, the one adapter whose peer sends CONGESTION: on the
+		// byte-stream and QUIC sessions congestion belongs to the transport.
+		// It is not on the aether.Session interface, so we type-assert per
+		// session to the structural interface it satisfies.
 		"aether_congestion_throttle_hits": 0,
 		// noise send-cipher rekey telemetry summed across all
 		// active sessions. aether_rekey_total = lifetime count of
@@ -2113,10 +2114,9 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 		// per-session receive-path delivery counters summed across
 		// all active adapter sessions that expose DeliveryStats(). Sourced
 		// from each session's DeliveryStats accessor (aether adapter,
-		// *NoiseSession + *TCPSession). QUIC / gRPC / TLS adapters route
-		// data via their transport's own framing and don't go through
-		// DeliverToRecvChWithSignals, so the type-assertion miss correctly
-		// skips them — these counters reflect only the noise/TCP
+		// *NoiseSession + *TCPSession, whose delivery queues count what they
+		// deliver). A QUIC session has no DeliveryStats, so the type-assertion
+		// miss correctly skips it — these counters reflect only the noise/TCP
 		// receive-side delivery hot path.
 		//
 		// Pair with aether_recv_window_drops + aether_inbox_drops to
@@ -2249,12 +2249,11 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 			out["aether_health_srtt_us_sum"] += mm.HealthSRTTUs
 			out["aether_health_srtt_samples"]++
 		}
-		// CongestionThrottle.TotalHits — only the concrete adapter sessions
-		// (*NoiseSession, *TCPSession) carry a throttle; QUIC / gRPC / TLS
-		// adapters don't drive CONGESTION frames so they're correctly skipped
-		// by the type-assertion miss. The returned pointer is nil-safe to
-		// guard against future adapters that satisfy the method but don't
-		// instantiate the throttle.
+		// CongestionThrottle.TotalHits — only *NoiseSession carries a throttle;
+		// every other adapter leaves congestion to its transport and is
+		// correctly skipped by the type-assertion miss. The returned pointer
+		// is nil-safe to guard against an adapter that satisfies the method
+		// but doesn't instantiate the throttle.
 		if t, ok := s.(interface {
 			Throttle() *aether.CongestionThrottle
 		}); ok {
@@ -2273,9 +2272,9 @@ func (m *ConnectionManager) AggregateAetherStats() map[string]uint64 {
 		// DeliveryStats accessor. Same shape as the Throttle() probe —
 		// the aether.Session interface doesn't expose DeliveryStats; we
 		// type-assert to a structural interface that both NoiseSession
-		// and TCPSession satisfy. QUIC/gRPC/TLS adapters miss the
-		// assertion and contribute zero, which is the correct behaviour
-		// (they don't route data through DeliverToRecvChWithSignals).
+		// and TCPSession satisfy. A QUIC session misses the assertion and
+		// contributes zero, which is the correct behaviour (its streams
+		// have no delivery queue of aether's to count).
 		// Lock-free atomic loads — safe to sample outside any session
 		// lock concurrently with the readLoop's increments.
 		if d, ok := s.(interface {

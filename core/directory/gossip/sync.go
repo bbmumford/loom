@@ -12,7 +12,6 @@ import (
 	"io"
 	"log"
 	"net"
-	"strings"
 	"sync"
 	"time"
 
@@ -24,10 +23,14 @@ import (
 // GossipResult, ExchangeMeta, and other gossip types are defined in
 // github.com/bbmumford/whisper and re-exported via whisper_types.go.
 
-// maxGossipPayload caps the size of a single gossip message (1 MB).
-// With 11 nodes, typical exchanges are 15-50KB. 1MB provides generous headroom
-// while catching corrupted length headers (a 16MB cap lets garbage through).
-const maxGossipPayload = 1 << 20
+// maxGossipPayload caps the size of a single gossip frame's body (960 KiB). With 11
+// nodes, typical exchanges are 15-50KB, and the cap catches corrupted length headers
+// (a 16MB cap lets garbage through). It sits below the 1 MiB a byte-stream session's
+// delivery queue holds per stream, so that a whole frame fits that queue before its
+// consumer has read any of it: the body in 15 Sends of gossipChunkSize and
+// the 6 B header in another, each with the queue's 64 B entry cost, come to 984070 B.
+// Past that queue's bound the stream ends with a typed reset.
+const maxGossipPayload = 15 * gossipChunkSize
 
 // deltaSyncClockSkewSlack widens the delta-sync watermark to tolerate a lagging
 // author clock — see the RecordWatermark call site.
@@ -49,7 +52,10 @@ const gossipBufPoolMaxCap = 128 * 1024
 // creditFullSyncFloor is the minimum stream credit available before a full
 // sync is attempted. A full-state gossip payload is observed at 80-150 KB
 // (and can spike higher on large fleets), so 256 KB gives us a 2x safety
-// margin plus room for a subsequent delta before the next WINDOW_UPDATE.
+// margin plus room for a subsequent delta before the peer's next grant, which a
+// Noise session's WINDOW_UPDATE carries. A stream with no aether credit answers
+// AvailableCredit with -1 and is never held to this floor: every session but
+// Noise leaves flow control to its transport.
 // Below this threshold, deltaExchange forces a delta-only cycle even when
 // the delta tracker would otherwise pick a full sync — prevents the
 // guaranteed ConsumeTimeout stall that drains goroutines and starves the
@@ -57,7 +63,8 @@ const gossipBufPoolMaxCap = 128 * 1024
 const creditFullSyncFloor int64 = 256 * 1024
 
 // creditDeltaFloor is the minimum stream credit available before ANY gossip
-// exchange (delta or full) is attempted. Observed delta payloads on the live
+// exchange (delta or full) is attempted, on a stream that has credit (see
+// creditFullSyncFloor). Observed delta payloads on the live
 // fleet run 1-40 KB; we picked 64 KB so a single peer-WINDOW_UPDATE round
 // trip is enough to recover, while still aborting the exchange if the credit
 // genuinely cannot fit the payload. Without this, a delta exchange entered
@@ -65,6 +72,12 @@ const creditFullSyncFloor int64 = 256 * 1024
 // won't arrive in time, then fails the gossip stream. Returning early lets the next tick attempt the
 // exchange when grants have actually flowed.
 const creditDeltaFloor int64 = 64 * 1024
+
+// errGossipDesynchronised is what GossipOverConn's reader returns for a frame that
+// does not start with the frame magic: the stream is mid-frame, typically behind a
+// reply whose read timed out. The loop treats it as the stream's end
+// (isFatalGossipError, conn.Close), so the session's gossip loop opens a new one.
+var errGossipDesynchronised = errors.New("gossip: frame out of alignment")
 
 // errInsufficientCredit is returned by deltaExchange when stream credit is
 // below creditDeltaFloor. The outer loop matches on this sentinel to schedule
@@ -139,8 +152,9 @@ func GossipOverConn(ctx context.Context, conn net.Conn, c *cache.DirectoryCache,
 	binary.BigEndian.PutUint32(hdr[2:6], uint32(len(payload)))
 
 	// Sequential write-then-read: no goroutines, no leaked goroutines.
-	// Aether stream.Send() enqueues to the scheduler and returns immediately
-	// (non-blocking). The writeLoop flushes within 1ms. The responder reads
+	// Aether stream.Send() enqueues to the scheduler once its stream has room, which
+	// a transport that has stalled can hold up to the session's own limit and the
+	// deadline above, and the writeLoop flushes it. The responder reads
 	// first then writes — so there's no deadlock.
 	//
 	// No reader goroutine is started here: one left blocked on a timed-out read
@@ -164,7 +178,7 @@ func GossipOverConn(ctx context.Context, conn net.Conn, c *cache.DirectoryCache,
 		// Validate magic bytes
 		magic := binary.BigEndian.Uint16(peerHdr[0:2])
 		if magic != gossipMagic {
-			return result, fmt.Errorf("gossip: invalid magic 0x%04X (expected 0x%04X, frame corrupted)", magic, gossipMagic)
+			return result, fmt.Errorf("%w: invalid magic 0x%04X (expected 0x%04X, frame corrupted)", errGossipDesynchronised, magic, gossipMagic)
 		}
 
 		peerLen := binary.BigEndian.Uint32(peerHdr[2:6])
@@ -246,8 +260,8 @@ func GossipOverConn(ctx context.Context, conn net.Conn, c *cache.DirectoryCache,
 // would desync the scoped follow-up.
 //
 // The round is a single write-then-read — the same deadlock-safe shape as
-// GossipOverConn: Aether's stream.Send enqueues non-blocking and the writeLoop
-// flushes within ~1ms, so writing before reading cannot self-deadlock. It reuses
+// GossipOverConn: the responder reads its request before it writes, so writing
+// before reading cannot self-deadlock. It reuses
 // the deadline GossipOverConn set moments earlier and does NOT call SetDeadline
 // mid-round, which on an Aether StreamConn would flush the read buffer.
 func escalateBucketDigest(conn net.Conn, c *cache.DirectoryCache, rp ReconcileProfile) error {
@@ -418,8 +432,9 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 		//      ConsumeTimeout, so we'd just burn a goroutine for 10 s.
 		// Without (2), delta exchanges entered with 1-22 KB of credit
 		// produce cascaded `insufficient stream credit after 10s` failures,
-		// several per peer per minute. Skipping the tick lets WINDOW_UPDATE
-		// flow naturally.
+		// several per peer per minute. Skipping the tick lets the peer's grants
+		// (WINDOW_UPDATE on a Noise session) flow naturally. A stream with no
+		// aether credit answers -1 and neither tier applies.
 		if ca, ok := conn.(interface{ AvailableCredit() int64 }); ok {
 			avail := ca.AvailableCredit()
 			// Treat ONLY -1 as the "no flow control / unbounded" sentinel.
@@ -468,9 +483,9 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 				// promises. escalateBucketDigest may have written its request but
 				// timed out on the reply, leaving that reply buffered on conn; the
 				// next cycle's G1 io.ReadFull would then decode those leftover
-				// bytes as a bad magic ("invalid magic") — which is NOT in the
-				// fatal classifier — and retry forever on the same conn. Closing
-				// conn forces the session to be genuinely rebuilt with clean state.
+				// bytes as a bad magic. Closing conn ends the stream, and the next
+				// Write's net.ErrClosed ends this loop, so the session's gossip loop
+				// opens a new stream with clean state.
 				_ = conn.Close()
 				return res, fmt.Errorf("gossip: G2B escalation to %s: %w", peerNodeID, escErr)
 			}
@@ -534,7 +549,7 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 
 	// No gossip-level keepalive: a zero-length frame on stream 0 would interleave
 	// with exchange reads on a muxed connection and be consumed as an exchange
-	// header, orphaning the exchange data in the 256-slot buffer. Liveness comes
+	// header, orphaning the exchange data in the stream's receive queue. Liveness comes
 	// from the mux-level keepalive on stream 2 (15s interval, 3 missed → close);
 	// RTT is measured from exchange header timing.
 
@@ -544,6 +559,13 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 			dbgGossip.Printf("Gossip loop exiting: ctx.Done (peerNodeID=%s, err=%v)", peerNodeID, ctx.Err())
 			return
 		case <-timer.C:
+			// A reconcile stream that has ended fails every G4 round, which would
+			// leave this loop on G1 alone for the session's life. This loop leaves,
+			// and the session's gossip loop opens the stream again.
+			if e, ok := reconcileConn.(interface{ streamEnded() bool }); ok && e.streamEnded() {
+				log.Printf("[GOSSIP] Reconcile stream ended, exiting loop (peerNodeID=%s)", peerNodeID)
+				return
+			}
 			// Skip this exchange entirely if the peer is currently
 			// signalling backpressure and we're inside its backoff window.
 			if peerBackoff != nil && peerBackoff.ShouldSkip() {
@@ -566,18 +588,16 @@ func runGossipLoopInternal(ctx context.Context, conn net.Conn, reconcileConn net
 					continue
 				}
 				log.Printf("[GOSSIP] Exchange failed (%T): %v", conn, err)
-				errStr := err.Error()
-				if strings.Contains(errStr, "EOF") || strings.Contains(errStr, "connection reset") ||
-					strings.Contains(errStr, "broken pipe") || strings.Contains(errStr, "use of closed") ||
-					strings.Contains(errStr, "session closed") {
+				if isFatalGossipError(err) {
 					log.Printf("[GOSSIP] Fatal connection error, exiting loop: %v", err)
+					// A stream out of alignment reads garbage until it ends, so it ends
+					// here. The others have ended already and this changes nothing.
+					_ = conn.Close()
 					return
 				}
 				// Gossip timeouts are transient — BidiRPC on Stream 1 and keepalive
-				// on Stream 2 work independently. Don't exit the loop on timeouts;
-				// exiting tears down the entire Aether session (cleanup: label),
-				// killing BidiRPC mid-flight and causing payload corruption on
-				// connections routing through this session.
+				// on Stream 2 work independently, and the stream can carry the next
+				// exchange. Don't exit the loop on timeouts.
 				timer.Reset(adaptive.Current())
 				continue
 			}
@@ -684,28 +704,42 @@ func runGossipResponderLoop(ctx context.Context, conn net.Conn, reconcileConn ne
 		rcOpts = append(rcOpts, whisper.WithSnapshot(sd))
 	}
 	reconcileEngine := whisper.NewEngine(rcOpts...)
+
+	// Each engine ending ends the other, so this function returns and the session's
+	// gossip loop can reopen whichever stream ended. A read blocked on a conn ends
+	// with that conn's parent context or a deadline, not with the engine's ctx, so the
+	// past read deadline is what wakes it, and the cancelled ctx is what stops the
+	// engine reading again.
+	engineCtx, engineCancel := context.WithCancel(ctx)
+	defer engineCancel()
+	stop := func(other net.Conn) {
+		engineCancel()
+		_ = other.SetReadDeadline(time.Now())
+	}
+
 	var reconcileWG sync.WaitGroup
 	reconcileWG.Add(1)
 	go func() {
 		defer reconcileWG.Done()
 		dbgGossip.Printf("Reconcile responder started: peerNodeID=%s", peerNodeID)
-		if err := reconcileEngine.RunResponder(ctx, reconcileConn, peerNodeID); err != nil {
-			if ctx.Err() == nil && !isFatalGossipError(err) {
+		if err := reconcileEngine.RunResponder(engineCtx, reconcileConn, peerNodeID); err != nil {
+			if engineCtx.Err() == nil && !isFatalGossipError(err) {
 				log.Printf("[GOSSIP] Reconcile responder: %v", err)
 			}
 		}
+		stop(conn)
 		dbgGossip.Printf("Reconcile responder exited (peerNodeID=%s)", peerNodeID)
 	}()
 
-	if err := gossipEngine.RunResponder(ctx, conn, peerNodeID); err != nil {
-		if ctx.Err() == nil && !isFatalGossipError(err) {
+	if err := gossipEngine.RunResponder(engineCtx, conn, peerNodeID); err != nil {
+		if engineCtx.Err() == nil && !isFatalGossipError(err) {
 			log.Printf("[GOSSIP] Responder: %v", err)
 		}
 	}
+	stop(reconcileConn)
 	// Wait for reconcile responder to exit before returning so the
 	// caller's lifecycle reasoning (close streams, recycle session)
-	// stays linear. Cancellation of ctx will cause the reconcile
-	// loop's RunResponder to return, so this won't deadlock.
+	// stays linear.
 	reconcileWG.Wait()
 	dbgGossip.Printf("Gossip responder exiting (peerNodeID=%s)", peerNodeID)
 }

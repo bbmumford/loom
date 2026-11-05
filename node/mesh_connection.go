@@ -370,40 +370,21 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 		// Initiator: open streams in order.
 		//
 		// InitialCredit is set per stream class so each stream gets a
-		// window sized for its traffic profile. Gossip needs a big
-		// window to absorb startup full-sync storms; RPC/keepalive/control
-		// carry small messages and don't need the default 1 MB. Smaller
-		// windows for the chatty-but-tiny streams cut per-peer memory
-		// footprint without reducing throughput on the streams that matter.
-		gossipStream, err = opts.Session.OpenStream(connCtx, aether.StreamConfig{
-			StreamID: streams.StreamGossip, Reliability: aether.BestEffort, Priority: 64,
-			// 1 MB initial, 2 MB ceiling. The receiver's grant debouncer
-			// (5 ms coalesce, 10% immediate floor) emits grants long
-			// before the sender can exhaust the window on a convergence
-			// burst. MaxCredit caps auto-tuner growth so per-peer memory
-			// stays bounded — at 2 MB × ~20 peers that's 40 MB of receive
-			// buffers per node instead of the 80-160 MB the earlier
-			// 4 MB/8 MB setting produced.
-			InitialCredit: 1 * 1024 * 1024,
-			MaxCredit:     2 * 1024 * 1024,
-		})
+		// window sized for its traffic profile on a Noise session. RPC,
+		// keepalive and control carry small messages and don't need the
+		// default 1 MB. Smaller windows cut per-peer memory footprint
+		// without reducing throughput on the streams that matter.
+		gossipStream, err = opts.Session.OpenStream(connCtx, gossipStreamConfig())
 		if err != nil {
 			log.Printf("[AETHER] %s: failed to open gossip stream: %v", truncID(nodeID), err)
 			goto cleanup
 		}
-		rpcStream, err = opts.Session.OpenStream(connCtx, aether.StreamConfig{
-			StreamID: streams.StreamRPC, Reliability: aether.ReliableOrdered, Priority: 128,
-			InitialCredit: 256 * 1024, // 256 KB — RPC payloads are typically <10 KB but can batch
-		})
+		rpcStream, err = opts.Session.OpenStream(connCtx, rpcStreamConfig())
 		if err != nil {
 			log.Printf("[AETHER] %s: failed to open RPC stream: %v", truncID(nodeID), err)
 			goto cleanup
 		}
-		keepaliveStream, err = opts.Session.OpenStream(connCtx, aether.StreamConfig{
-			StreamID: streams.StreamKeepalive, Reliability: aether.UnreliableSequenced, Priority: 255,
-			LatencyClass: aether.ClassREALTIME, FECLevel: 1, // FECBasicXOR — recovers 1 dropped keepalive per group
-			InitialCredit: 16 * 1024, // 16 KB — pings are <50 bytes
-		})
+		keepaliveStream, err = opts.Session.OpenStream(connCtx, keepaliveStreamConfig())
 		if err != nil {
 			log.Printf("[AETHER] %s: failed to open keepalive stream: %v", truncID(nodeID), err)
 			goto cleanup
@@ -417,18 +398,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			log.Printf("[AETHER] %s: failed to open control stream: %v", truncID(nodeID), err)
 			goto cleanup
 		}
-		// Reconcile stream — carries G4 set-difference cells + G6 snapshot frames.
-		// Same priority class as gossip (lower than RPC/keepalive/control)
-		// because reconcile is bulk-ish convergence traffic. Initial
-		// credit smaller than gossip's because typical G4 rounds are
-		// O(|Δ|) which is far smaller than gossip's full-sync storms;
-		// a 256 KB starting window covers >99 % of observed rounds and
-		// the auto-tuner can grow if needed.
-		reconcileStream, err = opts.Session.OpenStream(connCtx, aether.StreamConfig{
-			StreamID: streams.StreamReconcile, Reliability: aether.BestEffort, Priority: 64,
-			InitialCredit: 256 * 1024,
-			MaxCredit:     1 * 1024 * 1024,
-		})
+		reconcileStream, err = opts.Session.OpenStream(connCtx, reconcileStreamConfig())
 		if err != nil {
 			log.Printf("[AETHER] %s: failed to open reconcile stream: %v", truncID(nodeID), err)
 			goto cleanup
@@ -534,7 +504,9 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			bidiTransport = "ws"
 		}
 		bidiScope := bidiScopeLabel(peer, m.rt.cfg.Platform.Region())
-		bidiRPC := NewPartitionedBidiRPC(rpcStream, aether.NodeID(nodeID), m.rt.rpcServer, bidiTransport, bidiScope, opts.Partition)
+		rpcReopener := streamReopener{session: opts.Session, opens: opts.IsInitiator, cfg: rpcStreamConfig()}
+		bidiRPC := newReopeningBidiRPC(rpcStream, aether.NodeID(nodeID), m.rt.rpcServer, bidiTransport, bidiScope, opts.Partition,
+			func() (aether.Stream, error) { return rpcReopener.reopen(connCtx) })
 		m.registerBidiRPC(opts.Session, bidiRPC)
 
 		// Dynamic stream handler — accepts every stream no consumer claimed
@@ -865,6 +837,16 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 		// the peer's initiator depends on it to reply. Only the initiator role
 		// is deduplicated: one initiator per peer avoids redundant outbound
 		// exchanges.
+		//
+		// Both roles run on gossipPair, whose reopenEnded restores a stream a typed
+		// reset ended. The side that opened the session's setup streams opens them
+		// again.
+		gossipPair := gossipStreams{
+			gossip:            gossipStream,
+			reconcile:         reconcileStream,
+			gossipReopener:    streamReopener{session: opts.Session, opens: opts.IsInitiator, cfg: gossipStreamConfig()},
+			reconcileReopener: streamReopener{session: opts.Session, opens: opts.IsInitiator, cfg: reconcileStreamConfig()},
+		}
 
 		if opts.IsInitiator {
 			// Grade-aware gossip-initiator dedup with preemption. The
@@ -918,8 +900,10 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 
 					dbgAether.Printf("%s: gossip initiator starting (grade=%s, interval=%v)",
 						truncID(nodeID), ourGrade, m.rt.cfg.GossipInterval)
-					gossip.RunGossipLoopWithPeer(gossipCtx, gossipStream, reconcileStream, m.rt.cache, gossipProfile, m.rt.cfg.GossipInterval, nodeID,
-						m.rt.deltaTracker, gossipCallback)
+					if gossipPair.reopenEnded(gossipCtx, nodeID) {
+						gossip.RunGossipLoopWithPeer(gossipCtx, gossipPair.gossip, gossipPair.reconcile, m.rt.cache, gossipProfile, m.rt.cfg.GossipInterval, nodeID,
+							m.rt.deltaTracker, gossipCallback)
+					}
 					gossipCancel()
 
 					// Clear the slot only if we still own it. A
@@ -960,15 +944,23 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			// Restart on exit so the peer's retrying initiator has a responder.
 			for connCtx.Err() == nil {
 				dbgAether.Printf("%s: gossip responder starting", truncID(nodeID))
-				gossip.RunGossipResponder(connCtx, gossipStream, reconcileStream, m.rt.cache, gossipProfile, nodeID,
+				if !gossipPair.reopenEnded(connCtx, nodeID) {
+					break
+				}
+				gossip.RunGossipResponder(connCtx, gossipPair.gossip, gossipPair.reconcile, m.rt.cache, gossipProfile, nodeID,
 					m.rt.deltaTracker, gossipCallback)
 				if connCtx.Err() != nil {
 					break
 				}
-				dbgAether.Printf("%s: responder exited, restarting in 5s", truncID(nodeID))
-				select {
-				case <-connCtx.Done():
-				case <-time.After(5 * time.Second):
+				// A stream that ended is claimed again at once on the next pass, so the
+				// peer's reopen meets a waiter; a responder that exited on a live stream
+				// waits before it reads there again.
+				if gossipPair.gossip.IsOpen() && gossipPair.reconcile.IsOpen() {
+					dbgAether.Printf("%s: responder exited, restarting in 5s", truncID(nodeID))
+					select {
+					case <-connCtx.Done():
+					case <-time.After(5 * time.Second):
+					}
 				}
 			}
 		}

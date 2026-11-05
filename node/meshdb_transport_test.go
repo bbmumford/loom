@@ -292,12 +292,17 @@ func TestMeshDBTransportDetectsAStalledPeer(t *testing.T) {
 	waitMeshDB(t, 5*time.Second, "the channel", func() bool {
 		return channelUp(p.low, meshDBTestHigh) && channelUp(p.high, meshDBTestLow)
 	})
+	// current reads the channel under its peer's lock, which serve writes it under.
 	p.high.mu.Lock()
-	stalled := p.high.peers[meshDBTestLow].ch
+	highPeer := p.high.peers[meshDBTestLow]
 	p.high.mu.Unlock()
 	p.low.mu.Lock()
-	watched := p.low.peers[meshDBTestHigh].ch
+	lowPeer := p.low.peers[meshDBTestHigh]
 	p.low.mu.Unlock()
+	stalled, watched := highPeer.current(), lowPeer.current()
+	if stalled == nil || watched == nil {
+		t.Fatal("a channel went down before the stall")
+	}
 
 	start := time.Now()
 	stalled.conn.stall()

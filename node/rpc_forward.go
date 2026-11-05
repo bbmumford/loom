@@ -6,6 +6,7 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -20,10 +21,6 @@ import (
 	"github.com/bbmumford/route"
 	"google.golang.org/protobuf/proto"
 )
-
-// forwardStreamCounter allocates dynamic stream IDs (10+) for forwarded RPCs.
-// Matches the dispatch package's convention: IDs 0-3 are well-known, 10+ are dynamic.
-var forwardStreamCounter uint64
 
 // runtimeForwarder implements RPCForwarder using the runtime's dispatch and
 // active sessions. When an RPC arrives for a handler this node doesn't own,
@@ -523,36 +520,48 @@ func (f *runtimeForwarder) callOverMeshSession(ctx context.Context, session aeth
 
 	if f.rt.connMgr != nil {
 		if bidi, ok := f.rt.connMgr.GetBidiRPC(remoteID); ok {
-			return bidi.Call(ctx, req)
+			resp, err := bidi.Call(ctx, req)
+			// A bidi reopening Stream 1 took nothing, so the dynamic stream below is
+			// this request's first send.
+			if !dispatch.Unsent(err) {
+				return resp, err
+			}
 		}
 	}
 
-	// Fallback: open a dynamic stream (ID 10+) for this RPC.
+	// Fallback: a dynamic stream from the session's one ID table (pkg/dispatch), the
+	// table HWPCaller's calls draw from, so this forward cannot take an ID one of them
+	// holds or walk out of the dynamic band.
 	reqBytes, err := pb.MarshalRequest(req)
 	if err != nil {
 		return nil, dispatch.NotSent(fmt.Errorf("marshal forward request: %w", err))
 	}
-	id := atomic.AddUint64(&forwardStreamCounter, 1) + 9
-	rpcStream, err := session.OpenStream(ctx, aether.StreamConfig{
-		StreamID:    id,
+	rpcStream, err := dispatch.OpenDynamicStream(ctx, session, aether.StreamConfig{
 		Reliability: aether.ReliableOrdered,
 		Priority:    128,
 	})
 	if err != nil {
 		return nil, dispatch.NotSent(fmt.Errorf("open RPC stream: %w", err))
 	}
-	// Close the dynamic stream when we're done. Returning without
-	// closing leaked one client-side stream per fallback forward, and left the
-	// responder's per-stream `go ServeMeshStream` goroutine blocked forever on
-	// its next Receive (the client never sent FIN) — a paired stream+goroutine
-	// leak that grew for the session lifetime.
-	defer rpcStream.Close()
+	// Reset the stream when done: the responder's per-stream ServeMeshStream goroutine
+	// blocks on its next Receive until this side's end reaches it, and it never closes
+	// the stream itself, so a FIN would leave the stream half-closed in both sessions'
+	// tables until aether's idle GC.
+	defer dispatch.ReleaseDynamicStream(session, rpcStream)
 
 	if err := rpcStream.Send(ctx, reqBytes); err != nil {
+		dispatch.NoteStreamEnd(session, err)
+		if dispatch.SendNeverLeft(err) {
+			return nil, dispatch.NotSent(fmt.Errorf("forward RPC via aether: %w", err))
+		}
 		return nil, fmt.Errorf("forward RPC via aether: %w", err)
 	}
 	respBytes, err := rpcStream.Receive(ctx)
 	if err != nil {
+		dispatch.NoteStreamEnd(session, err)
+		if errors.Is(err, aether.ErrStreamRefused) {
+			return nil, dispatch.NotSent(fmt.Errorf("receive forwarded response: %w", err))
+		}
 		return nil, fmt.Errorf("receive forwarded response: %w", err)
 	}
 

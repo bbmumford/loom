@@ -16,7 +16,7 @@ import (
 // endedStream is a bidi stream whose peer has gone: every Receive fails.
 type endedStream struct{ hopStream }
 
-func (endedStream) Receive(context.Context) ([]byte, error) {
+func (*endedStream) Receive(context.Context) ([]byte, error) {
 	return nil, errors.New("read: connection reset")
 }
 
