@@ -14,6 +14,7 @@ import (
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/bbmumford/loom/grade"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
 // The typed route refusals live here because every dispatcher returns them:
@@ -203,14 +204,17 @@ func isRouteRefusal(err error) bool {
 // Its Error text alone would arrive as a handler rejection, so the refusing
 // node also writes the refusal's kind and fields into the response's Metadata
 // (StampRefusal) and HWPCaller rebuilds the typed error from them
-// (responseError). RPCServer.executeLocal builds its response without
-// Metadata, so no handler can set these keys.
+// (responseError). RPCServer.executeLocal writes one kind only, the denied
+// kind, through StampDenial, from the refusal of the caller's authority its
+// registry reports (handlers.RPCResponse.Denied); a handler chooses that kind
+// by returning an error wrapping scope.ErrDenied, and can set no other key.
 const (
 	refusalKindKey       = "refusal"
 	refusalKindGrade     = "grade"
 	refusalKindDeadline  = "deadline"
 	refusalKindAmbiguous = "ambiguous"
 	refusalKindAdverts   = "adverts"
+	refusalKindDenied    = "denied"
 
 	refusalClassKey        = "refusal.class"
 	refusalUnknownKey      = "refusal.unknown-class"
@@ -260,6 +264,32 @@ func StampRefusal(resp *pb.RPCResponse, err error) {
 	}
 }
 
+// StampDenial records err on resp when err refuses the caller's authority (it
+// wraps scope.ErrDenied), so the origin's HWPCaller returns an error that
+// errors.Is matches to scope.ErrDenied (responseError) and the HTTP bridge
+// proxying the call (pkg/rpc/http classifyMeshError) answers 403, as it
+// answers the same refusal made in its own process. Any other error leaves
+// resp as it is. RPCServer.executeLocal calls it on every response its
+// registry gives; StampRefusal never stamps this kind, so a forwarder's error
+// that happens to wrap a denial is still read as the forward's outcome.
+func StampDenial(resp *pb.RPCResponse, err error) {
+	if resp == nil || resp.Success || !errors.Is(err, rpcscope.ErrDenied) {
+		return
+	}
+	resp.Metadata = map[string]string{refusalKindKey: refusalKindDenied}
+}
+
+// deniedAnswer is a refusal of the caller's authority a handler on another node
+// answered with. Its text is that node's. It unwraps to scope.ErrDenied, which
+// the HTTP bridge answers 403, and to ErrHandlerError because it is the
+// handler's answer: when every probe of HWPCaller.Call fails, its last error is
+// returned wrapped only if it is an ErrHandlerError or a route refusal, and is
+// flattened to text otherwise, which would drop scope.ErrDenied.
+type deniedAnswer struct{ text string }
+
+func (e *deniedAnswer) Error() string   { return e.text }
+func (e *deniedAnswer) Unwrap() []error { return []error{rpcscope.ErrDenied, ErrHandlerError} }
+
 // hopRefusal is a route refusal another node made. Its text is that node's
 // own, which names the hop, and it unwraps to the typed refusal rebuilt from
 // the response, so errors.Is and errors.As see what the refusing node saw.
@@ -272,9 +302,10 @@ func (e *hopRefusal) Error() string { return e.text }
 func (e *hopRefusal) Unwrap() error { return e.refusal }
 
 // responseError is the error for a response whose Success is false: the typed
-// refusal StampRefusal recorded on it, or else a handler rejection. Every
-// place HWPCaller reads a failed response goes through it, so a refusal is
-// never reported as ErrHandlerError, which the HTTP bridge answers as a
+// refusal StampRefusal recorded on it, the handler's refusal of its caller
+// StampDenial recorded (a *deniedAnswer), or else a handler rejection. Every
+// place HWPCaller reads a failed response goes through it, so a route refusal
+// is never reported as ErrHandlerError, which the HTTP bridge answers as a
 // caller's mistake. A field that does not parse reads as zero; the kind alone
 // decides the type.
 func responseError(handler string, resp *pb.RPCResponse) error {
@@ -306,6 +337,12 @@ func responseError(handler string, resp *pb.RPCResponse) error {
 			Handler:      handler,
 			Requirements: strings.Split(resp.Metadata[refusalRequirementsKey], "; "),
 		}
+	case refusalKindDenied:
+		text := resp.Error
+		if text == "" {
+			text = rpcscope.ErrDenied.Error()
+		}
+		return &deniedAnswer{text: text}
 	default:
 		return NewHandlerError(resp.Error)
 	}

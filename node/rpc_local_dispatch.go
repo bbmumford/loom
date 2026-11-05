@@ -70,7 +70,13 @@ func (a *localDispatcherAdapter) DispatchBytes(ctx context.Context, name string,
 	}
 	if !resp.Success {
 		// Mirror the wire-format semantics: a handler that returned
-		// Success=false should bubble up as an error to the caller.
+		// Success=false should bubble up as an error to the caller. A refusal
+		// of the caller's authority is returned as the error itself, so the
+		// HTTP bridge proxying an operation this process hosts answers it 403
+		// (pkg/rpc/http classifyMeshError), as it does one from another node.
+		if resp.Denied != nil {
+			return nil, resp.Denied
+		}
 		return nil, fmt.Errorf("%s", resp.Error)
 	}
 	return resp.Payload, nil

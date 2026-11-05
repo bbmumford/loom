@@ -15,6 +15,7 @@ import (
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/bbmumford/loom/grade"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -171,6 +172,52 @@ func TestOnlyAStampedFailureIsReadAsARefusal(t *testing.T) {
 			out, err := path.call(served)
 			if err != nil || string(out) != "ran" {
 				t.Fatalf("returned (%q, %v); a successful response is the handler's answer", out, err)
+			}
+		})
+	}
+}
+
+// A refusal of the caller's authority stamped on a failed response comes back
+// from every response path as scope.ErrDenied, under the refusing node's own
+// text, and stays the handler's answer and no route refusal. StampDenial stamps
+// nothing for another error or on a successful response, and StampRefusal
+// never stamps the denied kind.
+func TestADenialStampedOnAResponseReachesTheCallerAsScopeDenied(t *testing.T) {
+	denial := fmt.Errorf("%w: host: the caller holds no grant", rpcscope.ErrDenied)
+	denied := &pb.RPCResponse{Id: "req-1", Success: false, Error: denial.Error()}
+	StampDenial(denied, fmt.Errorf("scope denied: %w", denial))
+	for _, path := range responsePaths {
+		t.Run("denied/"+path.name, func(t *testing.T) {
+			out, err := path.call(denied)
+			if err == nil || out != nil {
+				t.Fatalf("returned (%q, %v) for a refused response", out, err)
+			}
+			if !errors.Is(err, rpcscope.ErrDenied) || !errors.Is(err, ErrHandlerError) || isRouteRefusal(err) {
+				t.Fatalf("returned %v; want the handler's refusal, matching scope.ErrDenied and "+
+					"ErrHandlerError and no route refusal", err)
+			}
+			if !strings.Contains(err.Error(), "holds no grant") {
+				t.Errorf("the error text %q lost the refusing node's own words", err)
+			}
+		})
+	}
+
+	for _, tc := range []struct {
+		name  string
+		resp  *pb.RPCResponse
+		stamp func(*pb.RPCResponse)
+	}{
+		{"another error", &pb.RPCResponse{Id: "req-1", Error: "not found"},
+			func(r *pb.RPCResponse) { StampDenial(r, errors.New("not found")) }},
+		{"a successful response", &pb.RPCResponse{Id: "req-1", Success: true},
+			func(r *pb.RPCResponse) { StampDenial(r, denial) }},
+		{"StampRefusal", &pb.RPCResponse{Id: "req-1", Error: denial.Error()},
+			func(r *pb.RPCResponse) { StampRefusal(r, denial) }},
+	} {
+		t.Run("unstamped/"+tc.name, func(t *testing.T) {
+			tc.stamp(tc.resp)
+			if tc.resp.Metadata != nil {
+				t.Fatalf("stamped %v on the response", tc.resp.Metadata)
 			}
 		})
 	}
