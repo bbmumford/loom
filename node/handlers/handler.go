@@ -6,6 +6,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -185,6 +186,26 @@ type RPCResponse struct {
 	Error    string                 `json:"error"`    // Error message if failed
 	Latency  time.Duration          `json:"latency"`  // Execution time
 	Metadata map[string]interface{} `json:"metadata"` // Extra context
+
+	// Denied is the refusal of the caller's authority behind a failed response,
+	// an error wrapping scope.ErrDenied whose text is Error, and nil for every
+	// other outcome (see Denial). dispatchRPC sets it for its scope gate and a
+	// middleware's refusal, and pkg/rpc's registryShim for a Func's. Error alone
+	// would reach every reader as a plain string, so the readers that hand a
+	// failed response on as an error return Denied instead: RPCServer.executeLocal
+	// stamps it on the wire response (dispatch.StampDenial), and node's local
+	// dispatcher and dispatch.LocalCaller wrap it. An HTTP bridge then answers
+	// the refusal 403 whichever of them carried it.
+	Denied error `json:"-"`
+}
+
+// Denial returns err when it is a refusal of the caller's authority (it wraps
+// scope.ErrDenied), and nil otherwise: the value RPCResponse.Denied holds.
+func Denial(err error) error {
+	if errors.Is(err, scope.ErrDenied) {
+		return err
+	}
+	return nil
 }
 
 // Task represents an async task execution
@@ -1085,9 +1106,11 @@ func (h ResolvedHandler) dispatchRPC(
 	// Partition scope enforcement: validateScope judges the declared
 	// Requirement or presence tier against the authenticated identity.
 	if err := h.registry.validateScope(ctx, h.meta); err != nil {
+		denied := fmt.Errorf("scope denied: %w", err)
 		return &RPCResponse{
 			Success: false,
-			Error:   fmt.Sprintf("scope denied: %v", err),
+			Error:   denied.Error(),
+			Denied:  Denial(denied),
 		}, nil
 	}
 
@@ -1101,7 +1124,7 @@ func (h ResolvedHandler) dispatchRPC(
 			// order) for the middlewares whose Before already completed so any
 			// resource they acquired in Before (span, semaphore, tx, counter) is
 			// released; returning straight away would leak them.
-			rejection := &RPCResponse{Success: false, Error: err.Error()}
+			rejection := &RPCResponse{Success: false, Error: err.Error(), Denied: Denial(err)}
 			rr, re := rejection, err
 			for i := idx - 1; i >= 0; i-- {
 				rr, re = middleware[i].After(ctx, h.meta.Name(), rr, re)

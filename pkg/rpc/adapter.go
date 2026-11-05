@@ -123,6 +123,11 @@ var _ handlers.StreamHandler = (*registryShim)(nil)
 // A handler that declares WebhookSignature is refused after decoding and
 // before Func, through verifyWebhookSignature as in Registry.Dispatch, on a
 // missing secret or a signature that does not verify.
+//
+// A Func error becomes a failed response with the error's text, and with the
+// error itself as Denied when it refuses the caller's authority, so the node
+// serving the call over the mesh (RPCServer.executeLocal) answers it as a
+// refusal and not as a handler failure.
 func (s *registryShim) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	fn, sig := s.handler.Func, s.handler.WebhookSignature
 	if fn == nil {
@@ -157,6 +162,7 @@ func (s *registryShim) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest)
 			Success: false,
 			Error:   err.Error(),
 			Latency: time.Since(start),
+			Denied:  handlers.Denial(err),
 		}, nil
 	}
 

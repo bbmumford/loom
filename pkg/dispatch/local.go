@@ -55,7 +55,12 @@ func (c *LocalCaller) Call(ctx context.Context, role, method string, payload []b
 		return nil, fmt.Errorf("local dispatch %s: %w", method, err)
 	}
 
+	// A refusal of the caller's authority stays one (errors.Is matches
+	// scope.ErrDenied), as HWPCaller returns it for a handler on another node.
 	if !resp.Success {
+		if resp.Denied != nil {
+			return nil, fmt.Errorf("local dispatch %s: %w", method, resp.Denied)
+		}
 		return nil, fmt.Errorf("local dispatch %s: %s", method, resp.Error)
 	}
 

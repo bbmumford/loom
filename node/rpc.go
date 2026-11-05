@@ -912,6 +912,12 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 }
 
 // executeLocal dispatches an RPC to the local HandlerRegistry with active handler tracking.
+//
+// A refusal of the caller's authority, an error Dispatch returns or the Denied
+// of the response it gives, is stamped on the failed response
+// (dispatch.StampDenial): the Error text alone reaches dispatch.HWPCaller at
+// the origin as a handler failure, which the HTTP bridge proxying the call
+// would answer 400 where it answers the same refusal in its own process 403.
 func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startTime time.Time) *pb.RPCResponse {
 	atomic.AddInt32(&s.activeHandlers, 1)
 	defer atomic.AddInt32(&s.activeHandlers, -1)
@@ -942,12 +948,14 @@ func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startT
 	resp, err := s.registry.Dispatch(ctx, handlerReq)
 	s.dispatchLatency.Record(req.Handler, time.Since(t0), err == nil && resp != nil && resp.Success)
 	if err != nil {
-		return &pb.RPCResponse{
+		failed := &pb.RPCResponse{
 			Id:        req.Id,
 			Success:   false,
 			Error:     err.Error(),
 			LatencyNs: int64(time.Since(startTime)),
 		}
+		dispatch.StampDenial(failed, err)
+		return failed
 	}
 	// Dispatch can return (nil, nil) — e.g. a custom RPCHandler or an
 	// After middleware that returns no response and no error. The raw
@@ -961,13 +969,15 @@ func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startT
 			LatencyNs: int64(time.Since(startTime)),
 		}
 	}
-	return &pb.RPCResponse{
+	out := &pb.RPCResponse{
 		Id:        req.Id,
 		Success:   resp.Success,
 		Payload:   resp.Payload,
 		Error:     resp.Error,
 		LatencyNs: int64(resp.Latency),
 	}
+	dispatch.StampDenial(out, resp.Denied)
+	return out
 }
 
 // forwardOnward sends req on through the forwarder, as a relay hop or for a

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/bbmumford/loom/pkg/dispatch"
+	"github.com/bbmumford/loom/pkg/rpc"
 )
 
 // classifyMeshError maps a mesh-dispatch error to an HTTP status code plus
@@ -19,6 +20,11 @@ import (
 //   - dispatch.ErrAnswerersDisagree → 503, NOT retried: the adverts of the
 //     operation disagree on what it requires, nothing left this node, and no
 //     resend changes that until the fleet's adverts do
+//   - rpc.ErrScopeDenied           → 403, NOT retried: the handler, or its
+//     registry's scope gate, refused the caller's authority, on another node
+//     (dispatch.StampDenial) or in this process (the node's local
+//     dispatcher), as executeLocal answers the refusal made here
+//   - dispatch.ErrHandlerError     → 400: the handler answered with a failure
 //   - "session closed before send" → 502 + retry-eligible (the call never
 //     reached the remote handler — Send hadn't started; safe to redo)
 //   - "all N probes failed"       → 502, NOT retried. Probes can have lost
@@ -54,6 +60,11 @@ func classifyMeshError(err error) (status int, retryAfter string, retryEligible 
 	}
 	if errors.Is(err, dispatch.ErrAnswerersDisagree) {
 		return 503, "", false
+	}
+	// A refusal of the caller's authority is checked before HandlerError,
+	// because the one a handler on another node made is a HandlerError too.
+	if errors.Is(err, rpc.ErrScopeDenied) {
+		return 403, "", false
 	}
 	// HandlerError: the remote handler responded but reported an
 	// application-level failure (validation, not-found, conflict). The
