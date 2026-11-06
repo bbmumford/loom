@@ -58,6 +58,7 @@ type MeshSwarmTransport struct {
 	onJoin   func(id swarm.NodeID)
 	onLeave  func(id swarm.NodeID)
 	onReopen func(id swarm.NodeID)
+	onAttach func(id swarm.NodeID)
 
 	// stopped is set by Stop under mu. attachPeer refuses once it is set:
 	// spawning a read loop after Stop has begun would both leak the
@@ -247,6 +248,20 @@ func (t *MeshSwarmTransport) onStreamReopened(fn func(id swarm.NodeID)) {
 	t.mu.Unlock()
 }
 
+// onStreamAttached registers a callback invoked once a peer's swarm stream is in
+// place (attachPeer), after onJoin, on the end that opens it and on the end that
+// claims it. InitSwarm sends the join's anti-entropy probe and republishes this
+// node's own record there: the claiming end's stream binds after RegisterPeer has
+// returned, so a frame sent from the session hook finds no stream at that end
+// (Send answers ErrPeerNotRegistered) and the record then reaches the peer only
+// through the peer's repair pull, which the swarm engine applies without passing
+// it on. Not part of swarm.Transport.
+func (t *MeshSwarmTransport) onStreamAttached(fn func(id swarm.NodeID)) {
+	t.mu.Lock()
+	t.onAttach = fn
+	t.mu.Unlock()
+}
+
 // RegisterPeer attaches an aether session for a peer and binds the
 // dedicated swarm stream (streams.StreamSwarm). Both sides of the
 // session call RegisterPeer; deterministic role assignment by NodeID
@@ -433,7 +448,7 @@ func (t *MeshSwarmTransport) attachPeer(peerID swarm.NodeID, session aether.Sess
 		cancel:  pcancel,
 	}
 	t.peers[peerID] = p
-	onJoin := t.onJoin
+	onJoin, onAttach := t.onJoin, t.onAttach
 	peerCount := len(t.peers)
 	// Counted while still holding mu, so it cannot race the wg.Wait that a
 	// concurrent Stop performs after releasing the lock.
@@ -446,6 +461,11 @@ func (t *MeshSwarmTransport) attachPeer(peerID swarm.NodeID, session aether.Sess
 		log.Printf("[SWARM] attachPeer: onJoin callback fired peer=%s", truncID(string(peerID)))
 	}
 	go t.readLoop(pctx, p, stream)
+	// After the read loop starts, so the answers to what the callback sends are
+	// read as they arrive.
+	if onAttach != nil {
+		onAttach(peerID)
+	}
 }
 
 // reopenPeer replaces ended, which a typed reset has taken off both ends of the

@@ -444,6 +444,21 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 
 	tport.onStreamReopened(func(peerID swarm.NodeID) { node.ProbePeer(peerID) })
 
+	// Event-driven convergence once a peer's swarm stream is in place, on both
+	// ends of the session: a full-topic Merkle anti-entropy probe at the peer, so
+	// the two catch up in one round-trip per topic instead of waiting for the
+	// engine's periodic pick (60 s by default), and a fresh publish of this node's
+	// own record, which the engine pushes eagerly to the peer. The publish is what
+	// carries this node's record past the peer: a record the peer takes eagerly it
+	// passes on to its other peers, and one it pulls by repair it applies without
+	// passing on. The stream, not the session hook, starts both, because the end
+	// claiming the stream (the higher NodeID, RegisterPeer) binds it after the hook
+	// has returned, and a frame sent before then finds no stream.
+	tport.onStreamAttached(func(peerID swarm.NodeID) {
+		node.ProbePeer(peerID)
+		publisher.PublishNow()
+	})
+
 	if rt.connMgr != nil {
 		log.Printf("[SWARM] InitSwarm: installing SessionHook on ConnectionManager")
 		// AddSessionHook, not the single SetSessionHook slot, so another
@@ -460,18 +475,9 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 					return
 				}
 				log.Printf("[SWARM] SessionHook: RegisterPeer ok peer=%s", truncID(nodeID))
-				// Event-driven convergence: kick a full-topic Merkle
-				// anti-entropy probe at the new peer so they catch up
-				// in one round-trip per topic instead of waiting for
-				// the engine's periodic random pick. Pair it with a
-				// fresh own-record publish so a peer that needs us
-				// eagerly doesn't sit on a stale PeerRecord either.
-				// Without this pairing, two fresh peers converge on
-				// the random-probe cadence (default 60s) AND the
-				// publisher's TTL refresh (5m) — minutes-of-quiet on
-				// boot vs. seconds with the hook.
-				node.ProbePeer(peerID)
-				publisher.PublishNow()
+				// The join's probe and republish start once the swarm stream
+				// is in place (onStreamAttached above).
+				//
 				// Direct-path route advertisement. Without this, the route
 				// engine subscribes to fleet.route advertisements but
 				// never receives any — every peer sits in AddressTable +
@@ -481,7 +487,7 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 				if ri := rt.route.Load(); ri != nil && ri.Router != nil {
 					ri.Router.Advertise(route.NodeID(nodeID), nil, "")
 				}
-				log.Printf("[SWARM] SessionHook: triggered ProbePeer + PublishNow + RouteAdvertise peer=%s", truncID(nodeID))
+				log.Printf("[SWARM] SessionHook: RouteAdvertise ok peer=%s", truncID(nodeID))
 				return
 			}
 			tport.UnregisterPeer(peerID)
