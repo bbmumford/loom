@@ -384,7 +384,9 @@ type Runtime struct {
 	cache              *ladcache.DirectoryCache
 	// liveDir is the ports.LiveDirectory over the LAD cache. Mesh directory
 	// reads route through it instead of
-	// touching the cache directly. Nil when the cache is (VL1 disabled).
+	// touching the cache directly. Nil when the cache is nil, which is when
+	// Initialize enables neither VL1 nor LAD storage, and when
+	// directory.NewLADDirectory refuses the cache.
 	liveDir    ports.LiveDirectory
 	liveDirRaw *directory.LADDirectory
 
@@ -1689,9 +1691,10 @@ func (rt *Runtime) Directory() *ladcache.DirectoryCache {
 	return rt.cache
 }
 
-// LiveDirectory returns the typed read surface over the LAD cache, nil when the
-// cache is (VL1 disabled). The endpoint spine's fleet audit reads handler adverts
-// and role claims through it.
+// LiveDirectory returns the typed read surface over the LAD cache: nil when the
+// cache is nil, which is when Initialize enables neither VL1 nor LAD storage,
+// and when directory.NewLADDirectory refuses the cache. The endpoint spine's
+// fleet audit reads handler adverts and role claims through it.
 func (rt *Runtime) LiveDirectory() ports.LiveDirectory {
 	return rt.liveDir
 }
