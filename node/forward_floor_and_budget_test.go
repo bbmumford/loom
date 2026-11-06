@@ -219,7 +219,7 @@ func TestTheNextHopNeverReceivesMoreTimeThanTheCallerHasLeft(t *testing.T) {
 			}
 
 			if _, err := f.Forward(ctx, req); err != nil {
-				t.Fatalf("Forward failed with %v; 8 s covers the hop's 5 s need", err)
+				t.Fatalf("Forward failed with %v; 8 s covers the hop's need, %v", err, hopNeed(hop, req.Hops))
 			}
 			if n := hop.sends(); n != 1 {
 				t.Fatalf("the next hop received %d request(s), want 1", n)

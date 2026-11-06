@@ -64,24 +64,42 @@ type runtimeForwarder struct {
 type GradeTooLowError = dispatch.GradeTooLowError
 
 // RouteDeadlineError is Forward's refusal when the caller's remaining deadline
-// is shorter than every graded candidate's need, adaptiveRPCTimeout of its
-// session, or when the request's absolute deadline has already passed, and
-// RPCServer's refusal of a request that arrives after that deadline. It
-// unwraps to rpc.ErrRouteDeadline. Need is the smallest need among the
-// candidates, so Remaining < Need always holds; an expired request has no
+// is shorter than every graded candidate's need (hopNeed of its session at the
+// request's hop count), or when the request's absolute deadline has already
+// passed, and RPCServer's refusal of a request that arrives after that
+// deadline. It unwraps to rpc.ErrRouteDeadline. Need is the smallest need among
+// the candidates, so Remaining < Need always holds; an expired request has no
 // candidates yet, so Need is zero and Remaining negative. Like
 // GradeTooLowError it is dispatch's type under node's name.
 type RouteDeadlineError = dispatch.RouteDeadlineError
 
+// hopNeed is the time Forward requires a caller to have left before it sends a
+// request over session at hop count hops (the count RPCServer has already
+// advanced for this forward): the session's default call deadline,
+// adaptiveRPCTimeout, divided across the most hops a request can take (the
+// origin's send and pb.MaxRPCHops forwards), times the hops this forward and
+// every later one may still take. A caller that gave the default deadline
+// therefore has each hop's need left as the request travels, where requiring
+// the whole default at every hop refused it at the first forward, because the
+// origin's send had already spent part of it; and a caller with less than
+// the share of the hops left is still refused before the send.
+func hopNeed(session aether.Session, hops int32) time.Duration {
+	left := int64(pb.MaxRPCHops) - int64(hops) + 1
+	if left < 1 {
+		left = 1
+	}
+	return adaptiveRPCTimeout(session) * time.Duration(left) / time.Duration(pb.MaxRPCHops+1)
+}
+
 // hopFits reports whether ctx's remaining deadline covers a forward over
-// session, whose need is adaptiveRPCTimeout(session). A context without a
+// session at hop count hops, whose need is hopNeed. A context without a
 // deadline always fits, because there is no budget to exceed.
-func hopFits(ctx context.Context, session aether.Session) bool {
+func hopFits(ctx context.Context, session aether.Session, hops int32) bool {
 	dl, ok := ctx.Deadline()
 	if !ok {
 		return true
 	}
-	return time.Until(dl) >= adaptiveRPCTimeout(session)
+	return time.Until(dl) >= hopNeed(session, hops)
 }
 
 // keepCallerBudget sets a forwarded request's TimeoutNs and Deadline to no more
@@ -157,9 +175,9 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 		case SessionGrade(session) < minGrade:
 			log.Printf("[RPC] Forward %s: routed hop %s grades %s, below the %s floor of operation class %s; re-routing via LAD",
 				req.Handler, aether.NodeID(nextHop).Short(), SessionGrade(session), minGrade, class)
-		case !hopFits(ctx, session):
+		case !hopFits(ctx, session, req.Hops):
 			log.Printf("[RPC] Forward %s: routed hop %s needs %v, more than the caller has left; re-routing via LAD",
-				req.Handler, aether.NodeID(nextHop).Short(), adaptiveRPCTimeout(session))
+				req.Handler, aether.NodeID(nextHop).Short(), hopNeed(session, req.Hops))
 		default:
 			dbgForward.Printf("Forward %s (hop %d) → %s (routed)", req.Handler, req.Hops, aether.NodeID(nextHop).Short())
 
@@ -374,16 +392,16 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 	}
 	paths = graded
 
-	// The remaining budget: a path whose need exceeds what the caller has left
-	// is not tried. The forward runs on the caller's context and never gains
-	// time, so with no path that fits the request is refused here, before
+	// The remaining budget: a path whose need (hopNeed) exceeds what the caller
+	// has left is not tried. The forward runs on the caller's context and never
+	// gains time, so with no path that fits the request is refused here, before
 	// anything is sent, instead of being handed to a hop that cannot finish it.
 	if dl, ok := ctx.Deadline(); ok {
 		left := time.Until(dl)
 		var need time.Duration
 		fit := paths[:0]
 		for _, p := range paths {
-			n := adaptiveRPCTimeout(p.session)
+			n := hopNeed(p.session, req.Hops)
 			if need == 0 || n < need {
 				need = n
 			}
