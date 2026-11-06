@@ -3361,8 +3361,11 @@ func (m *ConnectionManager) dialWithProtocol(ctx context.Context, peer *peerConn
 		if err != nil {
 			return nil, fmt.Errorf("TLS bootstrap dial to %s: %w", host, err)
 		}
-		// Create a session-like wrapper from the raw conn
-		return aether.NewConnection(m.rt.identity.NodeID, aether.NodeID(result.nodeID), result.rawConn), nil
+		// Wrap the joined stream, not the raw TLS conn: it reads through the
+		// 101 answer's body, which may hold bytes the HTTP client's reader took
+		// past the answer, and it names the partition the join proved, which
+		// DialAndAcceptMesh registers the session under (transportPartitionOf).
+		return aether.NewConnection(m.rt.identity.NodeID, aether.NodeID(result.nodeID), result.conn), nil
 	default:
 		return nil, fmt.Errorf("unknown protocol: %d: %w", proto, errLocalDialState)
 	}
