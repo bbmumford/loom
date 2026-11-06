@@ -732,17 +732,26 @@ func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.R
 	if transportPartition != "" {
 		ctx = s.authValidator.WithPartitionID(ctx, transportPartition)
 	}
+	// Every error bindAuthenticatedPrincipal returns refuses the principal the
+	// caller sent, so the failed response is stamped as a refusal of the
+	// caller's authority (dispatch.StampDenial) with an error that wraps
+	// scope.ErrDenied, which the binding's own errors and the consumer
+	// admitter's do not: the Error text alone reaches dispatch.HWPCaller at the
+	// origin as a handler failure, which the HTTP bridge proxying the call
+	// answers 400 where it answers the far registry's refusal of the caller 403.
 	typedPrincipal := false
 	if req.Principal != nil {
 		var err error
 		ctx, err = s.bindAuthenticatedPrincipal(ctx, req, transportPartition)
 		if err != nil {
-			return &pb.RPCResponse{
+			refused := &pb.RPCResponse{
 				Id:        req.Id,
 				Success:   false,
 				Error:     fmt.Sprintf("authenticated principal denied: %v", err),
 				LatencyNs: int64(time.Since(startTime)),
 			}
+			dispatch.StampDenial(refused, fmt.Errorf("%w: %w", rpcscope.ErrDenied, err))
+			return refused
 		}
 		typedPrincipal = true
 		atomic.AddInt64(&s.sealedPrincipalBinds, 1)

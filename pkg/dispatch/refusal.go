@@ -208,10 +208,12 @@ func isRouteRefusal(err error) bool {
 // Its Error text alone would arrive as a handler rejection, so the refusing
 // node also writes the refusal's kind and fields into the response's Metadata
 // (StampRefusal) and HWPCaller rebuilds the typed error from them
-// (responseError). RPCServer.executeLocal writes one kind only, the denied
-// kind, through StampDenial, from the refusal of the caller's authority its
-// registry reports (handlers.RPCResponse.Denied); a handler chooses that kind
-// by returning an error wrapping scope.ErrDenied, and can set no other key.
+// (responseError). The denied kind is written through StampDenial alone, for a
+// refusal of the caller's authority: by RPCServer.executeLocal from the refusal
+// its registry reports (handlers.RPCResponse.Denied), and by
+// RPCServer.handleRequest from its refusal of the principal the caller sent; a
+// handler chooses that kind by returning an error wrapping scope.ErrDenied, and
+// can set no other key.
 const (
 	refusalKindKey       = "refusal"
 	refusalKindGrade     = "grade"
@@ -274,7 +276,8 @@ func StampRefusal(resp *pb.RPCResponse, err error) {
 // proxying the call (pkg/rpc/http classifyMeshError) answers 403, as it
 // answers the same refusal made in its own process. Any other error leaves
 // resp as it is. RPCServer.executeLocal calls it on every response its
-// registry gives; StampRefusal never stamps this kind, so a forwarder's error
+// registry gives, and RPCServer.handleRequest on its refusal of the caller's
+// principal; StampRefusal never stamps this kind, so a forwarder's error
 // that happens to wrap a denial is still read as the forward's outcome.
 func StampDenial(resp *pb.RPCResponse, err error) {
 	if resp == nil || resp.Success || !errors.Is(err, rpcscope.ErrDenied) {

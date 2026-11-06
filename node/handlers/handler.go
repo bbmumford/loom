@@ -189,8 +189,9 @@ type RPCResponse struct {
 
 	// Denied is the refusal of the caller's authority behind a failed response,
 	// an error wrapping scope.ErrDenied whose text is Error, and nil for every
-	// other outcome (see Denial). dispatchRPC sets it for its scope gate and a
-	// middleware's refusal, and pkg/rpc's registryShim for a Func's. Error alone
+	// other outcome (see Denial). dispatchRPC sets it for its execution auth's
+	// refusal (executionAuthRefusal), its scope gate and a middleware's refusal,
+	// and pkg/rpc's registryShim for a Func's. Error alone
 	// would reach every reader as a plain string, so the readers that hand a
 	// failed response on as an error return Denied instead: RPCServer.executeLocal
 	// stamps it on the wire response (dispatch.StampDenial), and node's local
@@ -207,6 +208,28 @@ func Denial(err error) error {
 	}
 	return nil
 }
+
+// executionAuthRefusal is the AuthValidator's refusal of a call's execution auth
+// as dispatchRPC reports it: its text is the failed response's Error, and it
+// unwraps to scope.ErrDenied and to the validator's own error.
+//
+// It consumes the error ValidateExecutionAuth returns on the authenticated
+// pipeline (DispatchRPCWithAuth). That pipeline's caller in this module, node's
+// Runtime.composeInvoke, reads the response's Error alone; Denied is what a
+// reader that hands the failed response on as an error returns, as
+// RPCResponse.Denied states.
+//
+// It is a type of its own because the validators answer a refusal of the
+// caller with a plain error: loom's securityctx default and the consumer's
+// validator the runtime injects (RPCServer.SetAuthValidator) wrap no
+// scope.ErrDenied, so Denial would drop the refusal and the response would
+// read as a handler failure, which an HTTP bridge answers 400 where it answers
+// the scope gate's refusal 403.
+type executionAuthRefusal struct{ cause error }
+
+func (e *executionAuthRefusal) Error() string { return "authorization failed: " + e.cause.Error() }
+
+func (e *executionAuthRefusal) Unwrap() []error { return []error{scope.ErrDenied, e.cause} }
 
 // Task represents an async task execution
 type Task struct {
@@ -1096,9 +1119,11 @@ func (h ResolvedHandler) dispatchRPC(
 			auth = securityctx.Default()
 		}
 		if err := auth.ValidateExecutionAuth(ctx, h.meta); err != nil {
+			refused := &executionAuthRefusal{cause: err}
 			return &RPCResponse{
 				Success: false,
-				Error:   fmt.Sprintf("authorization failed: %v", err),
+				Error:   refused.Error(),
+				Denied:  refused,
 			}, nil
 		}
 	}
