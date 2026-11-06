@@ -91,7 +91,11 @@ var ErrAnswerersDisagree = errors.New("the nodes advertising this operation name
 // before sending when ports.JudgeHandlerAdverts finds the adverts of Handler in
 // disagreement, or when a call names one node whose advert names no requirement
 // beside adverts that do. Requirements holds one "<requirement>: <node>,<node>"
-// entry per group, for the log and the response; nothing parses it.
+// entry per group, for the log and the response. StampRefusal joins the entries
+// with "; " into the failed response a later hop returns, and responseError
+// splits that field back into them at the origin, so the origin's refusal names
+// the groups the refusing node named; no caller reads an entry to decide
+// anything.
 type AnswerersDisagreeError struct {
 	Handler      string
 	Requirements []string
