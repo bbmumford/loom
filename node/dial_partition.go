@@ -20,11 +20,13 @@ import (
 const dialPartitionMetaKey = "dial_partition"
 
 // transportPartitionOf returns the partition a transport connection's handshake
-// bound it to: the ScopeID a noise connection carries from its preamble, set on
-// the dialling and on the accepting side alike. AcceptIncomingMeshSession and
+// bound it to: the ScopeID a noise connection carries from its preamble, or the
+// partition a seed join's proofs were made under (seedJoinBoundConn), set on the
+// dialling and on the accepting side alike. AcceptIncomingMeshSession and
 // DialAndAcceptMesh pass it to AcceptMeshConnection, which records it on the
 // peer. It is "" for a connection that names no partition: a dedicated or
-// unpartitioned noise transport, WebSocket, QUIC and TLS.
+// unpartitioned noise transport, WebSocket, QUIC, and a seed join under the
+// unpartitioned keys.
 func transportPartitionOf(conn net.Conn) string {
 	if scoped, ok := conn.(aether.PartitionAwareSession); ok {
 		return scoped.ScopeID()
@@ -54,8 +56,9 @@ func (rt *Runtime) advertisedDialPartition() (string, bool) {
 // to dial target under when the caller named none, or "" when nothing about the
 // target names one. Its sources, in order:
 //
-//  1. the session: the partition target's most recent noise-UDP session was
-//     bound to (peerConn.partition), which a handshake with target proved;
+//  1. the session: the partition target's most recent partition-bound session
+//     (noise UDP, or a seed join) was bound to (peerConn.partition), which a
+//     handshake or join proof with target proved;
 //  2. the target's record: the partition its fleet.peer record names
 //     (PeerInfo.DialPartition).
 //
@@ -90,9 +93,10 @@ func (rt *Runtime) dialPartitionFor(target aether.NodeID) string {
 	return ""
 }
 
-// sessionPartition returns the partition nodeID's most recent noise-UDP session
-// was bound to, or "" when no such session has registered. dialPartitionFor
-// reads it; AcceptMeshConnection writes it under m.mu.
+// sessionPartition returns the partition nodeID's most recent partition-bound
+// session (noise UDP, or a seed join) was bound to, or "" when no such session
+// has registered. dialPartitionFor reads it; AcceptMeshConnection writes it
+// under m.mu.
 func (m *ConnectionManager) sessionPartition(nodeID string) string {
 	m.mu.Lock()
 	defer m.mu.Unlock()

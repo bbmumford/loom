@@ -10,6 +10,7 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
+	"crypto/x509"
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
@@ -76,16 +77,39 @@ func (c *upgradedConn) SetWriteDeadline(t time.Time) error { return c.writer.Set
 
 // bootstrapDialResult holds the outcome of a successful bootstrap host dial.
 type bootstrapDialResult struct {
-	conn    *upgradedConn // bidirectional conn (reads from resp.Body, writes to TLS)
-	nodeID  string        // remote node ID from X-VL1-Node-ID header
+	// conn is the upgraded stream (reads through resp.Body, writes to the TLS
+	// conn) after both join proofs passed, bound to the proven partition
+	// (seedJoinBoundConn).
+	conn    net.Conn
+	nodeID  string // the seed's node ID from X-VL1-Node-ID, proven by its join proof
 	resp    *http.Response
 	rawConn net.Conn // underlying TLS connection
 }
 
 // dialBootstrapHost dials a bootstrap host via HTTPS + VL1 upgrade and returns
-// a bidirectional connection suitable for gossip. Transport-agnostic — produces
-// a net.Conn; the caller doesn't care about the underlying TLS implementation.
+// a bidirectional connection suitable for gossip, verifying the seed's
+// certificate against the system roots. Transport-agnostic — produces a
+// net.Conn; the caller doesn't care about the underlying TLS implementation.
 func (rt *Runtime) dialBootstrapHost(ctx context.Context, host string) (*bootstrapDialResult, error) {
+	return rt.dialSeed(ctx, host, nil)
+}
+
+// dialSeed is dialBootstrapHost with the roots the seed's certificate is
+// verified against (nil: the system roots), and JoinSeed's dial. It sends the
+// join proof's headers (seed_join.go) and completes the proof after the 101
+// answer, so a seed holding no network key this node accepts for the
+// partition, or refusing this node's proof, is no seed session.
+func (rt *Runtime) dialSeed(ctx context.Context, host string, roots *x509.CertPool) (*bootstrapDialResult, error) {
+	partition := rt.seedJoinPartition()
+	joinKeys := rt.seedJoinKeys(partition)
+	if len(joinKeys) == 0 {
+		return nil, fmt.Errorf("%w: this node holds no network key for partition %q", ErrSeedJoinRefused, partition)
+	}
+	joinNonce, err := seedJoinNonce()
+	if err != nil {
+		return nil, fmt.Errorf("join nonce: %w", err)
+	}
+
 	httpsURL := fmt.Sprintf("https://%s/mesh/vl1", host)
 	req, err := http.NewRequestWithContext(ctx, "POST", httpsURL, nil)
 	if err != nil {
@@ -96,6 +120,8 @@ func (rt *Runtime) dialBootstrapHost(ctx context.Context, host string) (*bootstr
 	req.Header.Set("Upgrade", "vl1")
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("X-VL1-Node-ID", string(rt.identity.NodeID))
+	req.Header.Set(seedJoinPartitionHeader, partition)
+	req.Header.Set(seedJoinNonceHeader, seedJoinB64(joinNonce))
 	req.Header.Set("X-VL1-UDP-Port", fmt.Sprintf("%d", rt.cfg.VL1.UDPPort))
 	if rt.cfg.VL1.FailoverPort > 0 {
 		req.Header.Set("X-VL1-Failover-Port", fmt.Sprintf("%d", rt.cfg.VL1.FailoverPort))
@@ -132,7 +158,7 @@ func (rt *Runtime) dialBootstrapHost(ctx context.Context, host string) (*bootstr
 			if h, _, err := net.SplitHostPort(addr); err == nil {
 				tlsHost = h
 			}
-			tlsConn := tls.Client(rawConn, &tls.Config{ServerName: tlsHost})
+			tlsConn := tls.Client(rawConn, &tls.Config{ServerName: tlsHost, RootCAs: roots})
 			if err := tlsConn.HandshakeContext(ctx); err != nil {
 				rawConn.Close()
 				return nil, err
@@ -165,6 +191,18 @@ func (rt *Runtime) dialBootstrapHost(ctx context.Context, host string) (*bootstr
 		return nil, fmt.Errorf("%s did not provide node ID", host)
 	}
 
+	// The join proof runs before anything the 101 answer states is used: a
+	// seed whose proof fails holds no network key this node accepts, or is not
+	// the node it names, so its observed IP, reach record and liveness are not
+	// taken.
+	upgraded := &upgradedConn{reader: resp.Body, writer: capturedConn}
+	conn, err := rt.finishSeedJoin(upgraded, resp, remoteNodeID, partition, joinKeys, joinNonce)
+	if err != nil {
+		_ = upgraded.Close()
+		rt.recordVL1DialFailure()
+		return nil, fmt.Errorf("%s: %w", host, err)
+	}
+
 	// Correct public IP if bootstrap observed a different one
 	observedIP := resp.Header.Get("X-VL1-Observed-IP")
 	if cur := rt.getPublicIP(); observedIP != "" && observedIP != "0.0.0.0" && observedIP != "127.0.0.1" && observedIP != cur {
@@ -193,7 +231,6 @@ func (rt *Runtime) dialBootstrapHost(ctx context.Context, host string) (*bootstr
 		rt.cache.RecordGossipSeen(string(rt.identity.NodeID))
 	}
 
-	conn := &upgradedConn{reader: resp.Body, writer: capturedConn}
 	return &bootstrapDialResult{
 		conn:    conn,
 		nodeID:  remoteNodeID,
@@ -3941,6 +3978,17 @@ func (rt *Runtime) handleVL1Upgrade(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[NODE] Bootstrap: VL1 upgrade request from %s (UDP ports: %s primary, %s failover)",
 		r.RemoteAddr, clientUDPPort, clientFailoverPort)
 
+	// The join proof (seed_join.go) is checked whatever the anchor verifier
+	// below answers: a request that names no node or nonce, or a partition this
+	// node holds no network key for, is refused here, and the joiner's own proof
+	// is checked after the 101 answer, before anything about it is recorded.
+	join, status, err := rt.openSeedJoin(r, clientNodeID)
+	if err != nil {
+		log.Printf("[NODE] Bootstrap: join refused for %s: %v", r.RemoteAddr, err)
+		http.Error(w, err.Error(), status)
+		return
+	}
+
 	// Auth: anchor-capable nodes validate locally, thin apps delegate to
 	// the injected verifier (anchor.Client calls loom.anchor.VerifyBootstrap
 	// on an anchor-capable node; nil = allow all).
@@ -3958,8 +4006,8 @@ func (rt *Runtime) handleVL1Upgrade(w http.ResponseWriter, r *http.Request) {
 			PublicIP:    clientPublicIP,
 		})
 		if err != nil {
-			// Verifier unreachable — allow connection (graceful fallback).
-			// Transport-level auth (Noise handshake) is the real security boundary.
+			// Verifier unreachable: the join proceeds to the join proof, which
+			// the joiner must still pass under this node's network key.
 			log.Printf("[NODE] Bootstrap: bootstrap verifier unavailable, allowing connection: %v", err)
 		} else if !allowed {
 			log.Printf("[NODE] Bootstrap: join denied: %s", reason)
@@ -3997,6 +4045,7 @@ func (rt *Runtime) handleVL1Upgrade(w http.ResponseWriter, r *http.Request) {
 	_, _ = rw.WriteString("Upgrade: vl1\r\n")
 	_, _ = rw.WriteString("Connection: Upgrade\r\n")
 	_, _ = rw.WriteString(fmt.Sprintf("X-VL1-Node-ID: %s\r\n", string(rt.identity.NodeID)))
+	join.writeHeaders(rw)
 	_, _ = rw.WriteString(fmt.Sprintf("X-VL1-UDP-Port: %d\r\n", rt.cfg.VL1.UDPPort))
 	if rt.cfg.VL1.FailoverPort > 0 {
 		_, _ = rw.WriteString(fmt.Sprintf("X-VL1-Failover-Port: %d\r\n", rt.cfg.VL1.FailoverPort))
@@ -4028,6 +4077,17 @@ func (rt *Runtime) handleVL1Upgrade(w http.ResponseWriter, r *http.Request) {
 		_ = conn.Close()
 		return
 	}
+
+	// From here conn is the stream the joiner proved itself on, bound to the
+	// proven partition, read through rw.Reader so no byte the server's reader
+	// already took is lost.
+	bound, err := rt.acceptJoiner(join, conn, rw.Reader)
+	if err != nil {
+		log.Printf("[NODE] Bootstrap: join refused for %s (%s): %v", truncID(clientNodeID), r.RemoteAddr, err)
+		_ = conn.Close()
+		return
+	}
+	conn = bound
 
 	// Store connection so we can manage/close it later (server-side counterpart
 	// to client bootstrap sessions). Include RemoteAddr in the key so a
