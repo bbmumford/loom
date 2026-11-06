@@ -21,7 +21,8 @@ import (
 //     operation disagree on what it requires, nothing left this node, and no
 //     resend changes that until the fleet's adverts do
 //   - rpc.ErrScopeDenied           → 403, NOT retried: the handler, or its
-//     registry's scope gate, refused the caller's authority, on another node
+//     registry's scope gate, refused the caller's authority, or the serving
+//     node refused the principal the caller sent, on another node
 //     (dispatch.StampDenial) or in this process (the node's local
 //     dispatcher), as executeLocal answers the refusal made here
 //   - dispatch.ErrHandlerError     → 400: the handler answered with a failure
