@@ -140,6 +140,19 @@ func (s *signingLedger) Stream(ctx context.Context, from lad.CausalWatermark, to
 	return s.inner.Stream(ctx, from, topics)
 }
 
+// StreamWithEnd forwards to the inner ledger's, so gossip.Synchronizer.Sync,
+// which is handed this wrapper, learns why its stream ended and restarts
+// after an overflow instead of stopping. An inner ledger that does not
+// report its ends gives a StreamEnd that is never set; Sync then restarts
+// on every end it cannot tell from a close.
+func (s *signingLedger) StreamWithEnd(ctx context.Context, from lad.CausalWatermark, topics []lad.Topic) (<-chan lad.Record, *lad.StreamEnd, error) {
+	if er, ok := s.inner.(lad.EndReportingLedger); ok {
+		return er.StreamWithEnd(ctx, from, topics)
+	}
+	out, err := s.inner.Stream(ctx, from, topics)
+	return out, &lad.StreamEnd{}, err
+}
+
 func (s *signingLedger) Snapshot(ctx context.Context) (io.ReadCloser, error) {
 	return s.inner.Snapshot(ctx)
 }

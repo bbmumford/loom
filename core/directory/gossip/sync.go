@@ -755,21 +755,92 @@ func NewSynchronizer(ledger lad.Ledger, cache *cache.DirectoryCache) *Synchroniz
 	return &Synchronizer{ledger: ledger, cache: cache}
 }
 
-// Sync consumes records from the ledger stream until the context ends.
+// syncRestartMin and syncRestartMax bound the wait before Sync streams
+// again after its stream ended: the wait starts at the minimum, doubles on
+// each end that follows a stream shorter than the maximum, and returns to
+// the minimum after one that lasted longer. A ledger whose streams keep
+// ending (a history read that keeps failing, a consumer that keeps
+// overflowing its queue) is retried at most every syncRestartMax, and one
+// that ended once after running well is retried at once.
+const (
+	syncRestartMin = 100 * time.Millisecond
+	syncRestartMax = 10 * time.Second
+)
+
+// Sync applies the ledger's records past from to the cache until ctx ends
+// or the ledger closes, and returns ctx's error or nil.
+//
+// Every other end of the stream starts it again from from after the
+// restart wait: a stream whose live queue overflowed
+// (lad.ErrStreamOverflow), one whose history read failed, and one from a
+// ledger that does not report why it ended. Restarting from from, not from
+// the highest sequence applied, is what makes the restart lose nothing: the
+// history comes in timestamp order and live records in the order concurrent
+// Appends broadcast them, so a record below the highest sequence seen can
+// be the one the overflow dropped. The cache applies the records it already
+// holds again harmlessly, which the ledger's stream also relies on when a
+// record arrives through both its history read and its live queue.
+//
+// The node runtime's continuous-sync goroutine (node/runtime.go) starts
+// Sync once for the node's lifetime, so a Sync that returned on the first
+// end would stop the cache's view of the ledger for good.
 func (s *Synchronizer) Sync(ctx context.Context, from lad.CausalWatermark, topics []lad.Topic) error {
-	stream, err := s.ledger.Stream(ctx, from, topics)
+	wait := syncRestartMin
+	for {
+		started := time.Now()
+		why, err := s.syncOnce(ctx, from, topics)
+		switch {
+		case ctx.Err() != nil:
+			return ctx.Err()
+		case errors.Is(err, lad.ErrLedgerClosed), errors.Is(why, lad.ErrLedgerClosed):
+			return nil
+		case err != nil:
+			return err
+		}
+		if time.Since(started) > syncRestartMax {
+			wait = syncRestartMin
+		}
+		dbgGossip.Printf("LAD sync stream ended (%v); streaming again in %v", why, wait)
+		t := time.NewTimer(wait)
+		select {
+		case <-ctx.Done():
+			t.Stop()
+			return ctx.Err()
+		case <-t.C:
+		}
+		if wait *= 2; wait > syncRestartMax {
+			wait = syncRestartMax
+		}
+	}
+}
+
+// syncOnce streams once, applying each record, and returns why the stream
+// ended (nil when the ledger does not report it) or the error that refused
+// it. A ledger that implements lad.EndReportingLedger reports the end; any
+// other ledger's stream ends with no reason.
+func (s *Synchronizer) syncOnce(ctx context.Context, from lad.CausalWatermark, topics []lad.Topic) (why, err error) {
+	var stream <-chan lad.Record
+	var end *lad.StreamEnd
+	if er, ok := s.ledger.(lad.EndReportingLedger); ok {
+		stream, end, err = er.StreamWithEnd(ctx, from, topics)
+	} else {
+		stream, err = s.ledger.Stream(ctx, from, topics)
+	}
 	if err != nil {
-		return err
+		return nil, err
 	}
 	for {
 		select {
 		case rec, ok := <-stream:
 			if !ok {
-				return nil
+				if end != nil {
+					return end.Err(), nil
+				}
+				return nil, nil
 			}
 			_ = s.cache.Apply(rec)
 		case <-ctx.Done():
-			return ctx.Err()
+			return ctx.Err(), nil
 		}
 	}
 }

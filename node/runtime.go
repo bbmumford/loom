@@ -1158,7 +1158,9 @@ func Initialize(cfg Config) (*Runtime, error) {
 			if ladEnabled {
 				// Goroutine 1: Continuous ledger→cache sync.
 				// Streams ALL records from the ledger (starting from empty watermark)
-				// and applies them to the cache as they arrive. Blocks until context canceled.
+				// and applies them to the cache as they arrive. Blocks until the
+				// context is cancelled or the ledger closes: Sync streams again
+				// from the empty watermark after any other end of its stream.
 				rt.Go("lad.continuous_sync", func() {
 					emptyWatermark := make(lad.CausalWatermark)
 					log.Printf("[NODE] LAD continuous sync started (ledger→cache)")
