@@ -83,10 +83,10 @@ func (g Grade) Weight() float64 {
 //     distance rather than transport tier keeps a healthy cross-region
 //     noise-udp path from being permanently demoted just for having
 //     >30 ms RTT.
-//   - node.adaptiveKeepaliveInterval(session) for ping cadence:
-//     clamp(2 × SRTT, 5s, 30s). Reads the session's own measured RTT.
-//   - node.adaptiveKeepaliveTimeout(session, rto) for the per-ping wait:
-//     clamp(4 × RTO, 1s, 5s).
+//   - aether.KeepalivePlanFor(session), which node's keepalive loop reads,
+//     for ping cadence, clamp(2 × SRTT, 5s, 30s), and the per-ping wait,
+//     clamp(4 × RTO, 1s, 15s) with a 5s floor until the estimator has 8
+//     samples. Reads the session's own measured RTT.
 //   - node.adaptiveRPCTimeout(session) for the default RPC
 //     deadline: clamp(20 × SRTT, 5s, 30s).
 

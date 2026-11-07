@@ -797,11 +797,14 @@ func TestBidiOnANoiseSessionReopensAsOpener(t *testing.T) {
 	}
 }
 
-// The claimer's bidi claims the opener's next OPEN.
+// The claimer's bidi claims the opener's next OPEN. The opener reopens through its
+// own streamReopener, as BidiRPC's readLoop does: the side that sent the RESET has
+// the ID refused (aether.ErrDuplicateStreamID) until the peer acknowledges the RESET
+// and the quiet time after it ends, and reopen waits that out.
 func TestBidiOnANoiseSessionReopensAsClaimer(t *testing.T) {
 	sa, sb := noisePair(t)
 	st, peer := reopenStreams(t, sa, sb, rpcStreamConfig())
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 	r := &streamReopener{session: sb, opens: false, cfg: rpcStreamConfig()}
 	b := newReopeningBidiRPC(peer, "vl1_aaa", NewRPCServer(nil), "noise-udp", "s", "", func() (aether.Stream, error) { return r.reopen(ctx) })
@@ -809,7 +812,8 @@ func TestBidiOnANoiseSessionReopensAsClaimer(t *testing.T) {
 		t.Fatal(err)
 	}
 	reopenWaitFor(t, "the claimer did not see the reset", func() bool { return b.currentStream() == nil })
-	fresh, err := sa.OpenStream(ctx, rpcStreamConfig())
+	opener := &streamReopener{session: sa, opens: true, cfg: rpcStreamConfig()}
+	fresh, err := opener.reopen(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}

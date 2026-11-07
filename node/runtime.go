@@ -3994,7 +3994,8 @@ func (rt *Runtime) handleVL1Upgrade(w http.ResponseWriter, r *http.Request) {
 
 	// Auth: anchor-capable nodes validate locally, thin apps delegate to
 	// the injected verifier (anchor.Client calls loom.anchor.VerifyBootstrap
-	// on an anchor-capable node; nil = allow all).
+	// on an anchor-capable node). With no verifier, or one that cannot be
+	// reached, the join proof alone decides.
 	if !rt.isAnchorCapable() && rt.cfg.VerifyBootstrap != nil {
 		var clientRolesList []string
 		if clientRoles != "" {
@@ -4008,20 +4009,18 @@ func (rt *Runtime) handleVL1Upgrade(w http.ResponseWriter, r *http.Request) {
 			PrivateIP:   clientPrivateIP,
 			PublicIP:    clientPublicIP,
 		})
-		if err != nil {
+		switch {
+		case err != nil:
 			// Verifier unreachable: the join proceeds to the join proof, which
 			// the joiner must still pass under this node's network key.
-			log.Printf("[NODE] Bootstrap: bootstrap verifier unavailable, allowing connection: %v", err)
-		} else if !allowed {
+			log.Printf("[NODE] Bootstrap: bootstrap verifier unavailable, the join proof decides: %v", err)
+		case !allowed:
 			log.Printf("[NODE] Bootstrap: join denied: %s", reason)
 			http.Error(w, reason, http.StatusForbidden)
 			return
+		default:
+			log.Printf("[NODE] Bootstrap: join approved for %s via injected verifier", truncID(clientNodeID))
 		}
-		truncLen := len(clientNodeID)
-		if truncLen > 12 {
-			truncLen = 12
-		}
-		log.Printf("[NODE] Bootstrap: join approved for %s via injected verifier", clientNodeID[:truncLen])
 	}
 
 	// Hijack the connection to take control of the underlying TCP socket.

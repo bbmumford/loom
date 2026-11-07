@@ -3361,14 +3361,32 @@ func (m *ConnectionManager) dialWithProtocol(ctx context.Context, peer *peerConn
 		if err != nil {
 			return nil, fmt.Errorf("TLS bootstrap dial to %s: %w", host, err)
 		}
-		// Wrap the joined stream, not the raw TLS conn: it reads through the
-		// 101 answer's body, which may hold bytes the HTTP client's reader took
-		// past the answer, and it names the partition the join proved, which
-		// DialAndAcceptMesh registers the session under (transportPartitionOf).
-		return aether.NewConnection(m.rt.identity.NodeID, aether.NodeID(result.nodeID), result.conn), nil
+		return m.rt.provedTLSDial(peer.nodeID, host, result)
 	default:
 		return nil, fmt.Errorf("unknown protocol: %d: %w", proto, errLocalDialState)
 	}
+}
+
+// provedTLSDial is the connection a TLS dial to peerNodeID returns, or its refusal.
+// result.nodeID is the node the seed's join proof proved (finishSeedJoin). The
+// callers of dialWithProtocol take the connection as one to the node they dialled:
+// connectPeer, dialAdditionalPath and probeUpgrade build its session under that ID
+// (DialAndAcceptMesh, which dialedPeerID builds as proved) and TopologyRouter.dialDirect
+// returns it for that node. So a seed proving a different node is refused here and
+// its conn closed: a host serving another node would otherwise have its session filed
+// under the dialled node's ID.
+//
+// It wraps the joined stream, not the raw TLS conn: that stream reads through the
+// 101 answer's body, which may hold bytes the HTTP client's reader took past the
+// answer, and it names the partition the join proved, which DialAndAcceptMesh
+// registers the session under (transportPartitionOf).
+func (rt *Runtime) provedTLSDial(peerNodeID, host string, result *bootstrapDialResult) (aether.Connection, error) {
+	if aether.NormalizeNodeID(result.nodeID) != aether.NormalizeNodeID(peerNodeID) {
+		_ = result.conn.Close()
+		return nil, fmt.Errorf("TLS bootstrap dial to %s: the seed proved node %s, not the dialled %s",
+			host, truncID(result.nodeID), truncID(peerNodeID))
+	}
+	return aether.NewConnection(rt.identity.NodeID, aether.NodeID(result.nodeID), result.conn), nil
 }
 
 // AcceptMeshConnection owns the full gossip lifecycle.

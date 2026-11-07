@@ -53,9 +53,11 @@ type streamReopener struct {
 
 // reopen returns the stream's next generation. It ends with an error when ctx ends,
 // the session closes, or OpenStream answers anything but a refusal that clears:
-// aether.ErrDuplicateStreamID for an ID in its quiet time after both CLOSEs,
-// aether.ErrStreamCapExhausted and aether.ErrStreamCreditRefused while other streams
-// hold the session's room.
+// aether.ErrDuplicateStreamID for an ID in its quiet time after both CLOSEs, or
+// one this side reset whose RESET the peer has not yet acknowledged (Noise and
+// byte-stream sessions alike hold the ID until the acknowledgment and the quiet time
+// after it), aether.ErrStreamCapExhausted and aether.ErrStreamCreditRefused while
+// other streams hold the session's room.
 func (r *streamReopener) reopen(ctx context.Context) (aether.Stream, error) {
 	if !r.opens {
 		return r.session.AcceptStreamByID(ctx, r.cfg.StreamID)
