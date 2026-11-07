@@ -48,6 +48,7 @@ func TestStreamIDsAreFixedWireValues(t *testing.T) {
 		{"StreamPlatformConversation", StreamPlatformConversation, 700},
 		{"StreamPlatformCoordination", StreamPlatformCoordination, 701},
 		{"StreamPlatformDispatch", StreamPlatformDispatch, 702},
+		{"StreamPlatformCall", StreamPlatformCall, 703},
 		{"StreamHandlerBase", StreamHandlerBase, 1000},
 		{"StreamHandlerLast", StreamHandlerLast, 1999},
 	} {
@@ -153,6 +154,7 @@ func TestEveryDeclaredConstantIsInTheRegistry(t *testing.T) {
 		"StreamPlatformConversation": StreamPlatformConversation,
 		"StreamPlatformCoordination": StreamPlatformCoordination,
 		"StreamPlatformDispatch":     StreamPlatformDispatch,
+		"StreamPlatformCall":         StreamPlatformCall,
 	}
 	for name, id := range declared {
 		covered := false
@@ -215,8 +217,8 @@ func TestDefaultLatencyClassKeepsPeerStreamsInteractive(t *testing.T) {
 // peer reading another do not agree on what arrives on an ID. It is pinned to its
 // number, so an assignment added to Registry and this pin move in one change.
 func TestRegistryVersionIsDeclared(t *testing.T) {
-	if RegistryVersion != 2 {
-		t.Errorf("RegistryVersion = %d, want 2", RegistryVersion)
+	if RegistryVersion != 3 {
+		t.Errorf("RegistryVersion = %d, want 3", RegistryVersion)
 	}
 }
 
@@ -235,6 +237,25 @@ func TestTheWorkerOpensItsDispatchArm(t *testing.T) {
 		return
 	}
 	t.Fatalf("no registry entry starts at %d", StreamPlatformDispatch)
+}
+
+// The worker opens its call channel on the session that carries its three arms, and
+// the edge answers each call on the same stream, so the entry names the worker as the
+// one opener and one ID only: a band would let the edge read a second worker stream as
+// a call, and a second opener's OPEN would land on the worker's stream. Its class is
+// the class of the arms beside it, so a call is not queued behind the screen and file
+// traffic DefaultLatencyClass ranks below it.
+func TestTheWorkerOpensItsCallChannel(t *testing.T) {
+	for _, e := range Registry() {
+		if e.First != StreamPlatformCall {
+			continue
+		}
+		if e.Last != e.First || e.OpenedBy != "the worker" || e.Latency != aether.ClassINTERACTIVE {
+			t.Errorf("the call channel's entry is %+v, want one ID opened by the worker at the interactive class", e)
+		}
+		return
+	}
+	t.Fatalf("no registry entry starts at %d", StreamPlatformCall)
 }
 
 // The registry's version is an entry of every mesh session's wire version
