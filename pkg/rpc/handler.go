@@ -49,6 +49,14 @@ var ErrAmbiguousEffect = sharedDispatch.ErrAmbiguousEffect
 // not retryable. It is dispatch's sentinel under this package's name.
 var ErrAnswerersDisagree = sharedDispatch.ErrAnswerersDisagree
 
+// ErrNoAnswerer is returned when a relay finds no node advertising the operation
+// and the request names no target, before anything is sent: node's forwarder
+// sends only to the operation's answerers. It reaches the origin wrapped in a
+// *dispatch.NoAnswererError naming the operation, rebuilt from the relay's
+// response, and the origin tries its next route on it. It is dispatch's
+// sentinel under this package's name.
+var ErrNoAnswerer = sharedDispatch.ErrNoAnswerer
+
 // Effect is the effect class a Handler declares in its Effect field: package
 // effect's Class under this package's name, so a declaration names the type and
 // its values without a second import.
