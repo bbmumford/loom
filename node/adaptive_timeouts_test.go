@@ -11,27 +11,21 @@ import (
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/health"
+	"github.com/ORBTR/aether/quality"
 )
 
-// COVERAGE of the three RTT-derived timeout functions, all at 0.0%.
+// Tests of the RTT-derived bounds the node runtime gives up on a peer by:
 //
-// CENSUSED FIRST and every one is live on a hot path:
+//	adaptiveRPCTimeout       the forwarded-RPC deadline (rpc_forward.go)
+//	aether.KeepalivePlanFor  the keepalive's probe Interval and ProbeTimeout, which
+//	                         AcceptMeshConnection's keepalive goroutine reads before
+//	                         every wait and every probe
 //
-//	adaptiveRPCTimeout        rpc_forward.go:360        the forwarded-RPC deadline
-//	adaptiveKeepaliveInterval mesh_connection.go:604    keepalive ping cadence
-//	adaptiveKeepaliveTimeout  mesh_connection.go:665    per-ping death timer
-//
-// 🔴 EVERY ONE OF THEM DECIDES WHEN TO GIVE UP ON A PEER, and each carries a
-// long comment recording a production incident it was written to stop —
-// noise-UDP session-death clusters, fly CPU-steal blackholes, cross-region
-// jitter spikes chaining into the death policy. A regression here does not
-// fail a test somewhere else; it kills healthy sessions in the field.
-//
-// 🔑 AND ALL THREE SHARE ONE SHAPE THAT IS THE POINT OF THIS FILE: a nil
-// session, a nil Health(), and an unconverged estimator are ALL treated as
-// "no measurement yet" and get the SAFE (longer) bound — never the tight one.
-// That is the absent-vs-measured distinction decided
-// correctly, three times, by whoever wrote these.
+// A wrong bound here ends healthy sessions rather than failing a test elsewhere.
+// Both share one shape: a nil Health() and an unconverged estimator are "no
+// measurement yet" and get the longer bound, never the tight one (and
+// adaptiveRPCTimeout takes a nil session the same way, for its callers without a
+// session in hand).
 
 // srttSession is an aether.Session whose Health() monitor can be driven to a
 // chosen SRTT and sample count by feeding it real pong samples — the same
@@ -45,7 +39,7 @@ func (s *srttSession) Health() *health.Monitor { return s.health }
 
 // sessionWithSamples returns a session whose RFC-6298 estimator has consumed
 // n samples of the given RTT. n also drives SampleCount, which is what
-// adaptiveKeepaliveTimeout's warmup gate reads.
+// the keepalive plan's warmup gate reads.
 func sessionWithSamples(t *testing.T, rtt time.Duration, n int) *srttSession {
 	t.Helper()
 	m := health.NewMonitor(0.125)
@@ -64,15 +58,15 @@ func sessionWithSamples(t *testing.T, rtt time.Duration, n int) *srttSession {
 
 // nilHealthSession is a session that exists but whose Health() has not been
 // installed — the real race window between session construction and
-// SetHealthMonitor, called out by name in adaptiveKeepaliveTimeout's comment.
+// SetHealthMonitor, which aether.KeepalivePlanFor reads as nothing measured.
 type nilHealthSession struct{ probeSession }
 
 func (s *nilHealthSession) Health() *health.Monitor { return nil }
 
 // ── The shared safety property ──────────────────────────────────────────────
 
-// 🔴 THE ONE THAT MATTERS MOST: absence of a measurement must never produce
-// the aggressive bound. All three functions, all three absence shapes.
+// Absence of a measurement never produces the tight bound, for every bound and
+// every absence shape the bound's callers can hand it.
 func TestUnmeasuredPathsGetTheSafeBoundNotTheTightOne(t *testing.T) {
 	unconverged := sessionWithSamples(t, 0, 0) // monitor exists, no samples
 
@@ -89,34 +83,31 @@ func TestUnmeasuredPathsGetTheSafeBoundNotTheTightOne(t *testing.T) {
 		}
 	})
 
-	t.Run("adaptiveKeepaliveInterval", func(t *testing.T) {
+	// The keepalive goroutine always holds a session, so the plan is asked only
+	// for a session whose Health() may still be nil or unconverged.
+	t.Run("keepalive Interval", func(t *testing.T) {
 		for name, s := range map[string]aether.Session{
-			"nil session":  nil,
 			"nil Health()": &nilHealthSession{},
 			"zero SRTT":    unconverged,
 		} {
-			if got := adaptiveKeepaliveInterval(s); got != 5*time.Second {
+			if got := aether.KeepalivePlanFor(s).Interval; got != 5*time.Second {
 				t.Errorf("%s → %v, want the 5s floor", name, got)
 			}
 		}
 	})
 
-	// 🔑 The keepalive DEATH timer is the sharpest case. Its comment records
-	// that treating the nil-Health window as steady-state used a 1s timeout
-	// and "killed every fresh noise-UDP session that hit any transient
-	// jitter". A nil session, a nil Health(), and an under-converged
-	// estimator must all get the 5s WARMUP floor, not the 1s steady floor.
-	t.Run("adaptiveKeepaliveTimeout warmup floor", func(t *testing.T) {
+	// The probe timeout is the sharpest case: a 1s wait on a session whose
+	// estimator has not converged spends a strike on one slow answer, while the
+	// session is new and may be the peer's only path. A nil Health() and an
+	// estimator fed fewer than 8 answers get the 5s warmup floor.
+	t.Run("keepalive ProbeTimeout warmup floor", func(t *testing.T) {
 		for name, s := range map[string]aether.Session{
-			"nil session":     nil,
 			"nil Health()":    &nilHealthSession{},
 			"under 8 samples": sessionWithSamples(t, 10*time.Millisecond, 7),
 		} {
-			if got := adaptiveKeepaliveTimeout(s, 0); got != 5*time.Second {
-				t.Errorf("%s → %v, want the 5s warmup floor — a fresh session "+
-					"that hits one jitter spike now burns a keepalive strike, "+
-					"which is the exact noise-UDP death cluster the warmup "+
-					"floor was added to stop", name, got)
+			if got := aether.KeepalivePlanFor(s).ProbeTimeout; got != 5*time.Second {
+				t.Errorf("%s → %v, want the 5s warmup floor — a new session now "+
+					"spends a keepalive strike on one slow answer", name, got)
 			}
 		}
 	})
@@ -167,26 +158,24 @@ func TestRPCTimeoutScalesWithSRTTBetweenItsBounds(t *testing.T) {
 	}
 }
 
-// ── adaptiveKeepaliveInterval: clamp(2 × SRTT, 5s, 30s) ─────────────────────
+// ── keepalive Interval: clamp(2 × SRTT, 5s, 30s) ────────────────────────────
 
 func TestKeepaliveIntervalIsBoundedAtBothEnds(t *testing.T) {
 	fast := sessionWithSamples(t, 5*time.Millisecond, 8)
-	if got := adaptiveKeepaliveInterval(fast); got != 5*time.Second {
-		t.Fatalf("a 5ms path pings every %v, want the 5s floor — the floor "+
-			"exists because fly's edge proxy closes idle connections and a "+
-			"faster cadence buys nothing", got)
+	if got := aether.KeepalivePlanFor(fast).Interval; got != 5*time.Second {
+		t.Fatalf("a 5ms path pings every %v, want the 5s floor", got)
 	}
 
 	slow := sessionWithSamples(t, 20*time.Second, 8)
-	if got := adaptiveKeepaliveInterval(slow); got != 30*time.Second {
+	if got := aether.KeepalivePlanFor(slow).Interval; got != 30*time.Second {
 		t.Fatalf("a 20s-RTT path pings every %v, want the 30s cap", got)
 	}
 
 	// Inside the band the cadence really does track SRTT — without this the
-	// two clamps above would pass against a function that always returns a
+	// two clamps above would pass against a plan that always returns a
 	// constant.
 	mid := sessionWithSamples(t, 6*time.Second, 8)
-	got := adaptiveKeepaliveInterval(mid)
+	got := aether.KeepalivePlanFor(mid).Interval
 	if got <= 5*time.Second || got >= 30*time.Second {
 		t.Fatalf("a mid-band path returned %v, which is one of the clamps — "+
 			"the interval is not tracking SRTT at all (SRTT %v)",
@@ -197,59 +186,63 @@ func TestKeepaliveIntervalIsBoundedAtBothEnds(t *testing.T) {
 	}
 }
 
-// ── adaptiveKeepaliveTimeout: clamp(4 × RTO, floor, 15s) ────────────────────
+// ── keepalive ProbeTimeout: clamp(4 × RTO, floor, 15s) ──────────────────────
 
-// Once the estimator is converged the floor drops to 1s — but only then.
-// The gate is SampleCount >= 8, and the comment records why 3 was too tight:
-// a death cluster at ~34s, which is samples 4-7 at a 5s cadence.
+// Once the estimator has 8 samples the floor drops to 1s, and only then: samples
+// 4 to 7 still carry the estimator's initial spread, and at the 5s cadence they
+// arrive 20 to 35 s into a session, when a 1s wait would end a healthy new path.
 func TestKeepaliveTimeoutFloorDropsOnlyAfterEightSamples(t *testing.T) {
 	seven := sessionWithSamples(t, 10*time.Millisecond, 7)
 	eight := sessionWithSamples(t, 10*time.Millisecond, 8)
 
-	if got := adaptiveKeepaliveTimeout(seven, 0); got != 5*time.Second {
+	if got := aether.KeepalivePlanFor(seven).ProbeTimeout; got != 5*time.Second {
 		t.Fatalf("7 samples → %v, want the 5s warmup floor — the gate has "+
 			"moved back down and samples 4-7 are exposed again", got)
 	}
-	if got := adaptiveKeepaliveTimeout(eight, 0); got != time.Second {
+	if got := aether.KeepalivePlanFor(eight).ProbeTimeout; got != time.Second {
 		t.Fatalf("8 samples → %v, want the 1s steady floor — the estimator is "+
 			"converged and the timeout should now reflect the measured path",
 			got)
 	}
 }
 
+// The plan's RTO is the health monitor's, which a test cannot set exactly through
+// pong samples, so the band, the cap and a non-measurement are stated on
+// quality.Keepalive, the function aether.KeepalivePlanFor hands the monitor's
+// SRTT, RTO and sample count.
 func TestKeepaliveTimeoutIsFourRTOClampedAtFifteenSeconds(t *testing.T) {
-	converged := sessionWithSamples(t, 10*time.Millisecond, 8)
-
+	probe := func(rto time.Duration) time.Duration {
+		return quality.Keepalive(quality.KeepaliveInputs{SRTT: 10 * time.Millisecond, RTO: rto, Samples: 8}).ProbeTimeout
+	}
 	// 4 × 500ms = 2s, inside the band.
-	if got := adaptiveKeepaliveTimeout(converged, 500*time.Millisecond); got != 2*time.Second {
+	if got := probe(500 * time.Millisecond); got != 2*time.Second {
 		t.Fatalf("4 × 500ms RTO = %v, want 2s", got)
 	}
-	// 4 × 10s = 40s, capped.
-	if got := adaptiveKeepaliveTimeout(converged, 10*time.Second); got != 15*time.Second {
-		t.Fatalf("a huge RTO produced %v, want the 15s cap — the cap is what "+
-			"stops a documented 400ms-1.2s fly CPU-steal window from consuming "+
-			"a keepalive strike", got)
+	// 4 × 10s = 40s, capped: a pause of the peer's process of a second or so
+	// must not spend a strike.
+	if got := probe(10 * time.Second); got != 15*time.Second {
+		t.Fatalf("a huge RTO produced %v, want the 15s cap", got)
 	}
 	// A negative or zero RTO is not a measurement; it must land on the floor,
 	// not produce a tiny or negative timeout.
 	for _, rto := range []time.Duration{0, -time.Second} {
-		if got := adaptiveKeepaliveTimeout(converged, rto); got != time.Second {
+		if got := probe(rto); got != time.Second {
 			t.Fatalf("RTO %v → %v, want the 1s floor — a non-measurement "+
 				"produced a timeout derived from it", rto, got)
 		}
 	}
 }
 
-// The three functions must not collapse into each other: they have different
-// multipliers (20×, 2×, 4×) and different caps (30s, 30s, 15s), and a copy
-// -paste between them would be invisible to any single-function test.
-func TestTheThreeTimeoutsRemainDistinct(t *testing.T) {
+// The RPC deadline and the keepalive cadence must not collapse into each other:
+// they have different multipliers (20×, 2×), and one given the other's would be
+// invisible to a test of either alone.
+func TestTheRPCDeadlineAndTheKeepaliveCadenceRemainDistinct(t *testing.T) {
 	s := sessionWithSamples(t, 400*time.Millisecond, 8)
 	rpc := adaptiveRPCTimeout(s)
-	interval := adaptiveKeepaliveInterval(s)
+	interval := aether.KeepalivePlanFor(s).Interval
 
 	if rpc == interval {
-		t.Fatalf("adaptiveRPCTimeout and adaptiveKeepaliveInterval both "+
+		t.Fatalf("adaptiveRPCTimeout and the keepalive Interval both "+
 			"returned %v for the same session — one has been given the "+
 			"other's multiplier, and the RPC deadline and the ping cadence "+
 			"are not the same quantity", rpc)

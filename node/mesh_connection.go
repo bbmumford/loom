@@ -530,167 +530,92 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			}
 		}()
 
-		// Keepalive on stream 2 — grade-aware interval with retry before killing.
-		// Grade A (Noise): 30s interval — reliable transport, infrequent pings.
-		// Grade B (QUIC/gRPC): 20s interval — moderate.
-		// Grade C (WebSocket): 10s interval — frequent to beat proxy idle timeouts.
-		// Retries 3 times at KeepaliveTimeout intervals before declaring dead.
+		// Keepalive on stream 2: this session's one keepalive (health.Monitor holds one
+		// pending probe sequence, so a second prober would take this one's answers).
+		// Every number it waits on comes from aether.KeepalivePlanFor, read again before
+		// each wait and each probe: Interval between probes on a healthy session,
+		// ProbeTimeout per probe, RetryGap between probes once one went unanswered, and
+		// Strikes unanswered probes in a row before the session is let go. The plan
+		// derives them from the session's own measured SRTT, RTO and sample count, so
+		// they follow the path, never its transport or grade.
 		//
-		// Keepalive cadence is driven by the session's own measured
-		// SRTT (adaptiveKeepaliveInterval) rather than a static
-		// per-grade table. A 10 s GradeC tick — chosen for fly's
-		// edge-proxy idle close — was over-aggressive for inter-
-		// machine WS sessions that bypass the proxy and produced a
-		// chronic 10 s flap on cross-region pairs. clamp(2 × SRTT,
-		// 5 s, 30 s) lets a 250 ms cross-region path keep the same
-		// 5 s probe cadence the proxy actually needs while letting
-		// a stable 1 s RTT path relax to 2 s and a satellite-class
-		// 15 s path probe at 30 s.
+		// A dead session ends with connCancel, which runs this function's cleanup: the
+		// cleanup's OnPrimaryFailure call moves dispatch to a standby path when the
+		// peer's multipath manager holds one.
 		go func() {
-			// Per-ping timeout derives from RTO (RFC 6298) so paths with
-			// high RTT but low jitter get tight budgets, bursty ones get
-			// looser. Death-budget is now path-aware: when the per-peer
-			// multipath manager has a live standby ready to take over
-			// (PathCount>=2), 3 strikes still closes — failover is
-			// instant via the cleanup path's OnPrimaryFailure call so
-			// dispatch hops to the standby without the user-visible
-			// reconnect. When there's no standby (PathCount==1), the
-			// budget extends to 5 strikes so a healthy path under a
-			// transient CPU-steal or jitter burst doesn't get torn
-			// down with no alternative — a full reconnect costs an
-			// auth roundtrip and a handshake, an extra ~30 s of
-			// patience is worth more than the latency cost.
 			grade := SessionGrade(opts.Session)
-			// Capture install time so the tighter has-standby retry
-			// budget only applies once the path has had a chance to
-			// prove itself. A freshly-installed noise-UDP path on a
-			// peer where the old WS session is still in its proving
-			// window momentarily reads PathCount==2; without a grace
-			// window, the first three ping timeouts (~6 s of attempts
-			// after the first ping at T+5 s) would close the brand-new
-			// path before Fly's anycast routing or the peer's noise
-			// listener has settled. The grace lets the path live with
-			// the more lenient no-standby budget for its initial
-			// stability window; after the grace the standard
-			// PathCount>=2 budget kicks in.
+			// sessionInstalledAt starts the new-path grace below.
 			sessionInstalledAt := time.Now()
 			const (
-				retriesWithStandby = 3
-				retriesNoStandby   = 5
-				// newPathGraceWindow defers application of the tighter
-				// retriesWithStandby budget for newly-installed paths,
-				// long enough to absorb Fly anycast convergence + peer
-				// listener catch-up while short enough that a genuinely
-				// dead path is still reaped within ~ten of seconds.
+				// retriesWithStandby is the strike budget once the peer's multipath
+				// manager holds a second path (PathCount >= 2): failover to that path
+				// costs no reconnect, so a silent session is let go after fewer
+				// probes than the plan's Strikes, which applies when it is the only
+				// path and its loss costs a full reconnect (a join and a handshake).
+				// The lower of the two is used, so the plan's Strikes stays the bound.
 				//
-				// Sized to MATCH the per-peer proving timer (60 s — the
-				// AfterFunc that closes the old session once the new one
-				// has been registered). For the entire proving window
-				// PathCount() returns 2 (new + proving-old), but the
-				// "standby" is the OUTGOING old session — closing the
-				// new path on a tightened 3-retry budget during that
-				// window throws away the very upgrade we are trying to
-				// land. The 34 s noise-UDP death cluster observed in
-				// connection_history was an exact arithmetic match:
-				// 30 s grace expiry + 3 retries × 1 s fast-retry gap
-				// + 1 s last-retry wait = 34 s. Matching the grace to
-				// the proving window eliminates the false-standby
-				// budget tightening; a genuinely dead path is still
-				// reaped within retriesNoStandby × pingTimeout once
-				// proving completes and PathCount drops back to 1.
+				// TODO: derive the with-standby budget from the plan as well; it is
+				// a fixed count the keepalive plan does not decide.
+				retriesWithStandby = 3
+				// newPathGraceWindow holds a newly installed session to the plan's
+				// Strikes for as long as registerMeshSession's proving timer runs
+				// (the 60 s time.AfterFunc whose body is completeProving). While it
+				// runs, PathCount counts the outgoing session as a second path, so
+				// the with-standby budget would end the new session on the outgoing
+				// one's account and throw the upgrade away. The two must stay equal.
 				newPathGraceWindow = 60 * time.Second
 			)
-			// fastRetryGap is the inter-retry gap on the FAST path
-			// (after a ping has failed). Falling back to the full
-			// interval (5–30 s) between retries would make a genuinely
-			// dead session take 3 × interval = 15–90 s to declare.
-			// With a 1 s fast retry, the death budget after
-			// the first failed ping is bounded by maxKeepaliveRetries
-			// × pingTimeout — fast enough that the multipath manager
-			// can fail over before the dispatcher repeatedly hits a
-			// zombie session.
-			const fastRetryGap = 1 * time.Second
 			for {
-				interval := adaptiveKeepaliveInterval(opts.Session)
+				interval := aether.KeepalivePlanFor(opts.Session).Interval
 				select {
 				case <-connCtx.Done():
 					return
 				case <-time.After(interval):
 				}
-				// Fast-fail if the session is already closed. Without this,
-				// keepalive sat through up to maxKeepaliveRetries × interval
-				// before triggering connCancel even when IsClosed was already
-				// true — long enough for dispatch to repeatedly hit the
-				// zombie session and for the multipath manager to keep
-				// selecting closed paths.
+				// A session that closed during the wait ends here, before a probe, so
+				// dispatch and the multipath manager stop selecting it at once.
 				if opts.Session.IsClosed() {
 					log.Printf("[AETHER] %s: keepalive detected session closed (grade=%s, interval=%v), cancelling",
 						truncID(nodeID), grade, interval)
 					connCancel()
 					return
 				}
-				// Look up the per-peer multipath manager to pick the
-				// retry budget. Re-read on every outer-loop iteration
-				// because path topology evolves: a peer can start with
-				// PathCount=1, gain a standby via EnsureK during the
-				// session's life, then lose it again. The retry budget
-				// should reflect the picture at the moment a ping
-				// fails, not the picture at registerMeshSession time.
-				maxKeepaliveRetries := retriesNoStandby
-				// Only use the tighter has-standby budget once the new
-				// path has lived past newPathGraceWindow. Inside that
-				// window the standby that PathCount reports is the
-				// outgoing OLD session sitting in its 60 s proving
-				// timer, not a genuine failover target — closing the
-				// new path on 3 strikes during that window throws
-				// away exactly the upgrade we are trying to land.
+				// hasStandby is read once per probe cycle, because the peer's paths
+				// change over the session's life (EnsureK adds one, a failure takes
+				// one away), and only after newPathGraceWindow (see there).
+				hasStandby := false
 				if time.Since(sessionInstalledAt) > newPathGraceWindow {
 					m.multipathMu.Lock()
-					if mgr, ok := m.multipathManagers[nodeID]; ok {
-						if mgr.PathCount() >= 2 {
-							maxKeepaliveRetries = retriesWithStandby
-						}
+					if mgr, ok := m.multipathManagers[nodeID]; ok && mgr.PathCount() >= 2 {
+						hasStandby = true
 					}
 					m.multipathMu.Unlock()
 				}
-				// Fast-retry inner loop: once a ping fails we don't go
-				// back to the outer interval wait. Detection of a dead
-				// session is bounded by maxKeepaliveRetries × pingTimeout
-				// (worst case) rather than maxKeepaliveRetries × (interval
-				// + pingTimeout). Health().RTO() (RFC 6298) gives the
-				// per-attempt timeout which is already adapted to the
-				// path's mean+jitter.
+				// Once a probe goes unanswered the next follows after the plan's
+				// RetryGap, not its Interval, so a silent peer is found within the
+				// strike budget's probe timeouts.
 				dead := false
-				for retry := 0; retry < maxKeepaliveRetries; retry++ {
-					// BaseSession.Health() returns nil before
-					// SetHealthMonitor has been called (see
-					// aether/base_session.go). A nil health here means
-					// the path is mid-handshake; treat as
-					// estimator-unconverged so the keepalive budget
-					// stays warm rather than panicking the loop.
-					var rto time.Duration
-					if h := opts.Session.Health(); h != nil {
-						rto = h.RTO()
+				for attempt := 1; ; attempt++ {
+					plan := aether.KeepalivePlanFor(opts.Session)
+					maxKeepaliveRetries := plan.Strikes
+					if hasStandby && retriesWithStandby < maxKeepaliveRetries {
+						maxKeepaliveRetries = retriesWithStandby
 					}
-					pingTimeout := adaptiveKeepaliveTimeout(opts.Session, rto)
-					pingCtx, pingCancel := context.WithTimeout(connCtx, pingTimeout)
+					pingCtx, pingCancel := context.WithTimeout(connCtx, plan.ProbeTimeout)
 					_, err := opts.Session.Ping(pingCtx)
 					pingCancel()
 					if err == nil {
-						break // recovered — return to outer loop
+						break
 					}
-					attempt := retry + 1
-					log.Printf("[AETHER] %s: keepalive ping failed (%d/%d, grade=%s, rto=%v, timeout=%v, interval=%v): %v",
-						truncID(nodeID), attempt, maxKeepaliveRetries, grade, rto, pingTimeout, interval, err)
+					log.Printf("[AETHER] %s: keepalive ping failed (%d/%d, grade=%s, timeout=%v, interval=%v): %v",
+						truncID(nodeID), attempt, maxKeepaliveRetries, grade, plan.ProbeTimeout, plan.Interval, err)
 					if attempt >= maxKeepaliveRetries {
 						log.Printf("[AETHER] %s: keepalive dead after %d failures (grade=%s, retryBudget=%d), closing",
 							truncID(nodeID), attempt, grade, maxKeepaliveRetries)
 						dead = true
 						break
 					}
-					// Bail early if the session was closed under us —
-					// no point waiting a fast-retry gap to retry a
-					// guaranteed-failure ping.
+					// A session closed under the probe answers no retry.
 					if opts.Session.IsClosed() {
 						log.Printf("[AETHER] %s: keepalive detected session closed mid-retry (grade=%s), cancelling",
 							truncID(nodeID), grade)
@@ -700,7 +625,7 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 					select {
 					case <-connCtx.Done():
 						return
-					case <-time.After(fastRetryGap):
+					case <-time.After(plan.RetryGap):
 					}
 				}
 				if dead {

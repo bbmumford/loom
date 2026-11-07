@@ -392,48 +392,6 @@ func defaultQualityWeights() quality.Weights {
 	return quality.DefaultWeights
 }
 
-// adaptiveKeepaliveInterval computes the keepalive ping cadence for a
-// session from its measured SRTT: clamp(2 × SRTT, 5s, 30s).
-//
-// 2 × SRTT gives roughly one round-trip plus jitter between probes.
-// The 5 s floor handles fly's edge-proxy idle close (a transport-level
-// concern also covered separately by WSConn.pingLoop) and ensures a
-// brand-new session doesn't drift more than ~5 s without a probe
-// before SRTT converges. The 30 s ceiling keeps healthy stable paths
-// from being polled more aggressively than they need to be — a 5 ms
-// RTT path pings every 5 s, a stable 1 s RTT path every 2 s capped at
-// 5, a hypothetical 15 s satellite path every 30 s.
-//
-// SRTT 0 (nil session or estimator hasn't converged) returns the 5 s
-// floor — same as new sessions before AgeGrace lifts.
-func adaptiveKeepaliveInterval(s aether.Session) time.Duration {
-	const (
-		floor = 5 * time.Second
-		cap_  = 30 * time.Second
-	)
-	if s == nil {
-		return floor
-	}
-	// Health() returns nil before SetHealthMonitor lands on
-	// freshly-installed sessions; treat as estimator-unconverged.
-	h := s.Health()
-	if h == nil {
-		return floor
-	}
-	srtt := h.SRTT()
-	if srtt <= 0 {
-		return floor
-	}
-	interval := 2 * srtt
-	if interval < floor {
-		return floor
-	}
-	if interval > cap_ {
-		return cap_
-	}
-	return interval
-}
-
 // dialKeyFor derives the per-(peer, transport) key for the dial cooldown
 // ladder. Every cooldown read and write routes through here — dialIsSuppressed,
 // tryDial, recordDialFailure, recordStallCooldown and recordDialSuccess — so
@@ -569,83 +527,6 @@ func adaptiveRPCTimeout(s aether.Session) time.Duration {
 		return floor
 	}
 	timeout := 20 * srtt
-	if timeout < floor {
-		return floor
-	}
-	if timeout > cap_ {
-		return cap_
-	}
-	return timeout
-}
-
-// adaptiveKeepaliveTimeout returns the per-ping wait before declaring
-// a single keepalive ping failed. Replaces Grade.KeepaliveTimeout-
-// FromRTO() with a simpler RFC-6298-style formula:
-//
-//	timeout = clamp(4 × RTO, floor, 15 s)
-//
-// 4× RTO gives the path one full retransmit-window worth of slack
-// before declaring a probe dead — an honest path under transient loss
-// completes within that, a genuinely-broken path doesn't. The 15 s cap
-// gives jittery cross-region paths plenty of headroom before a single
-// ping is declared lost. Without that headroom a 1–2 s transient spike on a
-// 250 ms-RTT path with high jitter turns into a "ping failed" event, which
-// chains into the death policy. Documented CPU-steal events on
-// shared-cpu fly machines can blackhole inbound packet processing for
-// 400 ms–1.2 s windows; the 15 s cap means a single such window will
-// not consume a strike. Paired with the path-aware death policy in
-// mesh_connection.go (maxKeepaliveRetries varies by PathCount), the
-// worst-case death budget on a no-standby cross-region path is
-// interval + 5 × 15 s + 4 × steadyFloor = 5–30 s + 79 s = ~85–110 s —
-// well below the 5 min idle timeout, still above typical jitter spike
-// duration.
-//
-// During the SRTT warmup window — before the RFC 6298 estimator on
-// session.Health() has consumed at least 3 correlated pongs — RTO is
-// dominated by the InitialRTO seed and any first-packet jitter, not the
-// path's steady-state behaviour. A 1 s floor in that window is too
-// tight: a single transient loss on a freshly-installed noise-UDP
-// session burns the retry budget at exactly the moment the path is
-// still proving itself and no standby exists. Use a 5 s warmup floor
-// while SampleCount < 3, then drop to the steady-state 1 s floor once
-// the estimator is converged and the timeout reflects measured path
-// behaviour.
-//
-// Nil Session OR nil Health is treated as warmup (5 s floor), matching
-// adaptiveKeepaliveInterval / adaptiveRPCTimeout. A session whose
-// Health() has not yet been assigned is by definition uninitialised —
-// the keepalive loop in mesh_connection.go reads Health() once per
-// retry, and there is a tiny race window between session construction
-// and SetHealthMonitor. Treating that window as steady-state applies a 1 s
-// timeout to it, which kills every fresh noise-UDP session that hits any
-// transient jitter — the failure mode the warmup floor exists to prevent.
-func adaptiveKeepaliveTimeout(s aether.Session, rto time.Duration) time.Duration {
-	const (
-		steadyFloor = 1 * time.Second
-		warmupFloor = 5 * time.Second
-		cap_        = 15 * time.Second
-		// warmupSamples is the number of correlated pongs the RFC 6298
-		// estimator must consume before the 1 s steady-state floor is
-		// trusted. The previous threshold of 3 was too tight: by sample
-		// 3 RTO is fresh but still noisy; a single 1 s timeout on
-		// sample 4-7 can fire a ping failure on a healthy path purely
-		// because the estimator hasn't damped out its initial spread.
-		// History showed a noise-UDP session-death cluster at ~34 s,
-		// which is sample 4-7 territory at the default 5 s keepalive
-		// interval; raising the gate to 8 keeps the 5 s warmup floor
-		// in effect through the full convergence window.
-		warmupSamples = 8
-	)
-	floor := steadyFloor
-	if s == nil {
-		floor = warmupFloor
-	} else if h := s.Health(); h == nil || h.SampleCount() < warmupSamples {
-		floor = warmupFloor
-	}
-	if rto <= 0 {
-		return floor
-	}
-	timeout := 4 * rto
 	if timeout < floor {
 		return floor
 	}

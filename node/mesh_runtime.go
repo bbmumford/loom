@@ -41,10 +41,53 @@ func (rt *Runtime) SessionOptions() aether.SessionOptions {
 	return rt.sessionOpts
 }
 
+// meshPeerID says what the conn under a mesh session proved about the node ID
+// the session is built under. setupMeshSession builds a provedPeerID session
+// through the adapter factory that joins that node's per-peer ledgers, which
+// every session to the node shares, and a statedPeerID session through the
+// factory that gives it ledgers of its own, so a remote stating another node's
+// ID can neither fill that node's per-peer memory room nor send that node's
+// streams a typed reset.
+type meshPeerID bool
+
+const (
+	provedPeerID meshPeerID = true
+	statedPeerID meshPeerID = false
+)
+
+// meshSessionFactory is the adapter factory setupMeshSession builds a session
+// under peerID through.
+func meshSessionFactory(peerID meshPeerID) func(net.Conn, aether.Protocol, aether.NodeID, aether.NodeID, aether.SessionOptions) (aether.Session, error) {
+	if peerID == provedPeerID {
+		return adapter.NewSessionForProtocol
+	}
+	return adapter.NewSessionForStatedPeer
+}
+
+// dialedPeerID is what a dial over proto proves about the node ID it was made
+// for, which DialAndAcceptMesh builds the session under. A Noise-UDP dial (the
+// hole punch's included), a QUIC dial or a WebSocket dial (the hijack fallback
+// included) returns a conn only after the remote proved it holds that node's
+// key. A TLS dial reaches DialAndAcceptMesh only through dialWithProtocol, which
+// returns its conn only after the seed's join proof (finishSeedJoin) showed the
+// seed holds the key of the node ID it answered with, and refuses an answer
+// naming any node but the one dialled (provedTLSDial). A gRPC dial sends this
+// node's signed identity and checks none from the server, which the session
+// names by the dial target's ID, so it builds under statedPeerID.
+func dialedPeerID(proto Protocol) meshPeerID {
+	if proto == ProtoGRPC {
+		return statedPeerID
+	}
+	return provedPeerID
+}
+
 // SetupMeshSession creates the appropriate transport adapter for the
 // connection and returns it once its wire version set is chosen and selects
-// a gossip profile. Identity is established by the underlying crypto
-// handshake (Noise XX/XK, QUIC TLS, WS Ed25519 header, gRPC metadata). The
+// a gossip profile. nodeID must be the identity the conn's transport proved
+// (the Noise handshake, the QUIC peer certificate, the WebSocket dial's signed
+// headers, the seed join proof, an accepted gRPC caller's signed metadata):
+// SetupMeshSession builds under provedPeerID, and setupMeshSession takes the
+// choice. The
 // wire version set is negotiated by aether: a Noise conn carries the set its
 // handshake chose, and a byte-stream session exchanges a preface offering the
 // options' WireVersions, which this function sets to loom's entries
@@ -66,6 +109,13 @@ func (rt *Runtime) SessionOptions() aether.SessionOptions {
 // before the first session is established.
 func (rt *Runtime) SetupMeshSession(ctx context.Context, conn net.Conn, nodeID string,
 	proto Protocol, isInitiator bool) (aether.Session, error) {
+	return rt.setupMeshSession(ctx, conn, nodeID, proto, isInitiator, provedPeerID)
+}
+
+// setupMeshSession is SetupMeshSession with peerID, what the conn proved about
+// nodeID (meshSessionFactory). DialAndAcceptMesh passes dialedPeerID(proto).
+func (rt *Runtime) setupMeshSession(ctx context.Context, conn net.Conn, nodeID string,
+	proto Protocol, isInitiator bool, peerID meshPeerID) (aether.Session, error) {
 
 	// Map node Protocol to aether.Protocol
 	transportProto := mapProtocol(proto)
@@ -74,7 +124,7 @@ func (rt *Runtime) SetupMeshSession(ctx context.Context, conn net.Conn, nodeID s
 	opts.WireVersions = meshWireVersions(opts.WireVersions)
 
 	// Create transport-appropriate adapter
-	session, err := adapter.NewSessionForProtocol(conn, transportProto,
+	session, err := meshSessionFactory(peerID)(conn, transportProto,
 		rt.identity.NodeID, aether.NodeID(nodeID), opts)
 	if err != nil {
 		return nil, err
@@ -220,7 +270,7 @@ func (rt *Runtime) DialAndAcceptMesh(ctx context.Context, conn net.Conn,
 	nodeID string, region string, proto Protocol, bootstrapHost string, serviceName, roles string,
 	owns ownsConnectingState) {
 
-	session, err := rt.SetupMeshSession(ctx, conn, nodeID, proto, true)
+	session, err := rt.setupMeshSession(ctx, conn, nodeID, proto, true, dialedPeerID(proto))
 	if err != nil {
 		log.Printf("[AETHER] Dial setup failed for %s: %v", truncID(nodeID), err)
 		conn.Close()
