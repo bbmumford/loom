@@ -107,6 +107,29 @@ func (e *AnswerersDisagreeError) Error() string {
 
 func (e *AnswerersDisagreeError) Unwrap() error { return ErrAnswerersDisagree }
 
+// ErrNoAnswerer is what every NoAnswererError unwraps to: no node this one knows
+// of advertises the operation, so there is no node it may send the call to.
+// pkg/rpc re-exports it.
+var ErrNoAnswerer = errors.New("no node advertises this operation")
+
+// NoAnswererError is the typed refusal node's forwarder gives before sending when
+// the role table lists no answerer for Handler and the request names no target.
+// The forwarder picks only among the operation's answerers, because a node that
+// claims Handler's role without listing Handler answers it as not found
+// (RPCServer), so sending there spends a hop on a call that cannot run.
+// StampRefusal records it on the failed response a relay returns and
+// responseError rebuilds it at the origin, which tries its next route on it
+// (Unsent), as it does on the other route refusals.
+type NoAnswererError struct {
+	Handler string
+}
+
+func (e *NoAnswererError) Error() string {
+	return fmt.Sprintf("%s: %v", e.Handler, ErrNoAnswerer)
+}
+
+func (e *NoAnswererError) Unwrap() error { return ErrNoAnswerer }
+
 // AnswererChecker is the optional SessionFinder method HWPCaller asks before it
 // reads the result cache, chooses a route or opens a stream. node's
 // ConnectionManager implements it from the requirements the holders' peer records
@@ -201,7 +224,7 @@ func routeGrade(r aether.ProbeRoute) grade.Grade {
 // Call returns wrapped so the caller can still test them with errors.Is.
 func isRouteRefusal(err error) bool {
 	return errors.Is(err, ErrGradeTooLow) || errors.Is(err, ErrRouteDeadline) ||
-		errors.Is(err, ErrAnswerersDisagree)
+		errors.Is(err, ErrAnswerersDisagree) || errors.Is(err, ErrNoAnswerer)
 }
 
 // A refusal made by a later hop reaches the origin as a failed RPCResponse.
@@ -220,6 +243,7 @@ const (
 	refusalKindDeadline  = "deadline"
 	refusalKindAmbiguous = "ambiguous"
 	refusalKindAdverts   = "adverts"
+	refusalKindNoAnswer  = "no-answerer"
 	refusalKindDenied    = "denied"
 
 	refusalClassKey        = "refusal.class"
@@ -245,6 +269,7 @@ func StampRefusal(resp *pb.RPCResponse, err error) {
 	var gte *GradeTooLowError
 	var rde *RouteDeadlineError
 	var ade *AnswerersDisagreeError
+	var nae *NoAnswererError
 	switch {
 	case errors.Is(err, ErrAmbiguousEffect):
 		resp.Metadata = map[string]string{refusalKindKey: refusalKindAmbiguous}
@@ -267,6 +292,8 @@ func StampRefusal(resp *pb.RPCResponse, err error) {
 			refusalKindKey:         refusalKindAdverts,
 			refusalRequirementsKey: strings.Join(ade.Requirements, "; "),
 		}
+	case errors.As(err, &nae):
+		resp.Metadata = map[string]string{refusalKindKey: refusalKindNoAnswer}
 	}
 }
 
@@ -344,6 +371,8 @@ func responseError(handler string, resp *pb.RPCResponse) error {
 			Handler:      handler,
 			Requirements: strings.Split(resp.Metadata[refusalRequirementsKey], "; "),
 		}
+	case refusalKindNoAnswer:
+		refusal = &NoAnswererError{Handler: handler}
 	case refusalKindDenied:
 		text := resp.Error
 		if text == "" {

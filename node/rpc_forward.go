@@ -33,7 +33,8 @@ import (
 //  1. Direct Aether session to the target node
 //  2. LAD-routed — sessions to peers with recent latency / signed-route
 //     advertisements to the target (one extra hop)
-//  3. Role-aware — sessions to peers that also serve the same role
+//  3. Answerer-aware — sessions to other peers that advertise the operation
+//     (RoleTable.Answerers), never to a peer of the role that does not list it
 //
 // There is no blind-relay or direct-dial fallback: Forward() fails fast when
 // none of Paths 1-3 produce a candidate, leaving recovery to the dispatch
@@ -45,7 +46,7 @@ type runtimeForwarder struct {
 	//   forwardDirect    — Path 1 hit (direct session to target node)
 	//   forwardLADRouted — Path 2 hit (intermediate routed hop) OR the
 	//                      fast-path RouteList (upstream-supplied route)
-	//   forwardRole      — Path 3 hit (same-role peer fallback)
+	//   forwardRole      — Path 3 hit (another answerer of the operation)
 	// Read by the monitoring/mesh-debug endpoint; sum should equal total
 	// successful forwards.
 	forwardDirect    int64 // atomic
@@ -127,10 +128,12 @@ func keepCallerBudget(ctx context.Context, req *pb.RPCRequest) {
 	}
 }
 
-// Forward sends an RPC request to the correct handler node.
-// It discovers which node handles the method, finds a path to it, and sends
-// the RPC. If no direct path exists, it forwards to any connected peer
-// (which will forward onward, up to MaxRPCHops).
+// Forward sends an RPC request toward a node that advertises its handler:
+// the target the request names, or else the first of the operation's
+// answerers in the role table. It sends over a direct session, through a peer
+// LAD or the route engine says reaches that node, or to another answerer, and
+// refuses before sending, typed, when there is no answerer and no target, no
+// path, or no path that meets the class floor or the caller's budget.
 func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse, error) {
 	// Extract role from FQN: "example.health.CheckHealth" → "example.health"
 	// Uses last dot to split namespace.domain from Operation.
@@ -232,6 +235,13 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 	// refuse the request here, before anything is sent, so a relay never takes a
 	// request to a holder the origin would have refused to pick. RPCServer stamps
 	// the refusal on its response so the origin gets it typed.
+	//
+	// Only the operation's answerers are picked, never another node of the role:
+	// a peer whose record does not list req.Handler answers it as not found
+	// (RPCServer.handleRequest), and the origin's findNodeForRole picks from the
+	// same answerers, so the target a relay picks is one the origin could have
+	// picked. With none and no target named, the request is refused here with
+	// the typed NoAnswererError naming req.Handler.
 	var roleNodes []lad.RoleRecord
 	if f.rt.swarm != nil && f.rt.swarm.RoleTable != nil {
 		answerers, err := f.rt.swarm.RoleTable.Answerers(role, req.Handler)
@@ -239,9 +249,6 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 			return nil, err
 		}
 		roleNodes = answerers
-		if len(roleNodes) == 0 {
-			roleNodes = f.rt.swarm.RoleTable.Lookup(role, "")
-		}
 	}
 
 	targetNodeID := req.TargetNodeId
@@ -249,9 +256,8 @@ func (f *runtimeForwarder) Forward(ctx context.Context, req *pb.RPCRequest) (*pb
 		targetNodeID = roleNodes[0].NodeID
 	}
 
-	// No target found — nobody serves this role. Fail fast instead of bouncing.
 	if targetNodeID == "" {
-		return nil, dispatch.NotSent(fmt.Errorf("no node serves role %s (handler %s)", role, req.Handler))
+		return nil, &dispatch.NoAnswererError{Handler: req.Handler}
 	}
 
 	// Parallel re-route: build up to 3 candidate paths and probe simultaneously.
