@@ -130,20 +130,56 @@ func (t *RoleTable) Answerers(role, handler string) ([]lad.RoleRecord, error) {
 	return kept, nil
 }
 
+// Advertisers returns every peer whose record lists handler, whatever roles it
+// claims, ordered by NodeID: the records HandlerAdverts, and so
+// LADDirectory.HandlersByName, answers from. CheckAnswerers judges a targeted
+// call over them.
+func (t *RoleTable) Advertisers(handler string) []lad.RoleRecord {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	var out []lad.RoleRecord
+	for _, rec := range t.byNode {
+		if sliceContains(handlerFQNs(rec), handler) {
+			out = append(out, rec)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].NodeID < out[j].NodeID })
+	return out
+}
+
 // CheckAnswerers implements dispatch.AnswererChecker for HWPCaller: nil when a call
 // to handler may leave, and the typed refusal when the adverts of handler disagree,
 // when nodeID, the node a targeted call names, is one whose advert names no
 // requirement beside adverts that do, or when no record of nodeID lists handler.
-// The last is a *dispatch.NoAnswererError naming handler and nodeID: a routed call
-// goes only to a node whose record lists handler (findNodeForRole), and a named
-// node outside those answers handler as not found (RPCServer.handleRequest), after
-// the send and untyped. A node with no swarm running holds no adverts to compare,
-// so it refuses nothing here.
+// The last is a *dispatch.NoAnswererError naming handler and nodeID.
+//
+// A routed call (nodeID "") is judged over Lookup(role, handler), the records
+// findNodeForRole picks from through Answerers. A targeted call is judged over
+// Advertisers(handler), every record listing the operation whatever role the call
+// names or the node claims, because HWPCaller.CallNode and OpenNodeStream send to
+// the named node whatever role they were given, and the named node runs a handler
+// it registers without reading the request's role; judged by role, a call naming
+// a role the node's record does not claim would be refused for an operation it
+// advertises.
+//
+// The request CallNode sends names no target node (TargetNodeId is empty), so
+// RPCServer.handleRequest on a named node that lacks handler forwards it to a node
+// that lists it; only a request whose TargetNodeId names the receiving node is
+// answered "handler not found on target node". A stream open is not forwarded: the
+// named node's HandlerRegistry.DispatchStream refuses it after the open, untyped.
+// A node with no swarm running holds no adverts to compare, so it refuses nothing
+// here.
 func (m *ConnectionManager) CheckAnswerers(role, handler, nodeID string) error {
 	if m == nil || m.rt == nil || m.rt.swarm == nil || m.rt.swarm.RoleTable == nil {
 		return nil
 	}
-	records := m.rt.swarm.RoleTable.Lookup(role, handler)
+	table := m.rt.swarm.RoleTable
+	var records []lad.RoleRecord
+	if nodeID == "" {
+		records = table.Lookup(role, handler)
+	} else {
+		records = table.Advertisers(handler)
+	}
 	if len(records) >= 2 {
 		judged := ports.JudgeHandlerAdverts(handlerAdverts(records, handler))
 		if judged.Disagree() {

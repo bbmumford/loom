@@ -114,11 +114,15 @@ var ErrNoAnswerer = errors.New("no node advertises this operation")
 
 // NoAnswererError is the typed refusal of a call before it is sent to a node
 // that does not advertise Handler. node's forwarder gives it when the role table
-// lists no answerer for Handler and the request names no target; node's
+// lists no answerer for Handler and the request names no target, because the
+// forwarder sends only to a node whose record lists Handler. node's
 // ConnectionManager.CheckAnswerers gives it, with Node set, when a call
 // HWPCaller.CallNode or OpenNodeStream would send to Node finds no record of
-// Node listing Handler. Either way the call would reach a node that answers
-// Handler as not found (RPCServer), after the send and untyped, so nothing is
+// Node listing Handler, whatever role the call names. Sent, the request CallNode
+// builds names no target node, so RPCServer.handleRequest on Node would forward
+// it to another node that lists Handler, against TargetedCaller's contract
+// ("Reaching nodeID, or an error. Never another node."), and a stream open would
+// be refused by Node's handler registry after the open, untyped; so nothing is
 // sent. StampRefusal records it on the failed response a relay returns and
 // responseError rebuilds it at the origin, which tries its next route on it
 // (Unsent), as it does on the other route refusals; the forwarder's refusal is
