@@ -108,23 +108,31 @@ func (e *AnswerersDisagreeError) Error() string {
 func (e *AnswerersDisagreeError) Unwrap() error { return ErrAnswerersDisagree }
 
 // ErrNoAnswerer is what every NoAnswererError unwraps to: no node this one knows
-// of advertises the operation, so there is no node it may send the call to.
-// pkg/rpc re-exports it.
+// of advertises the operation, or the one node a call names does not, so there
+// is no node it may send the call to. pkg/rpc re-exports it.
 var ErrNoAnswerer = errors.New("no node advertises this operation")
 
-// NoAnswererError is the typed refusal node's forwarder gives before sending when
-// the role table lists no answerer for Handler and the request names no target.
-// The forwarder picks only among the operation's answerers, because a node that
-// claims Handler's role without listing Handler answers it as not found
-// (RPCServer), so sending there spends a hop on a call that cannot run.
-// StampRefusal records it on the failed response a relay returns and
+// NoAnswererError is the typed refusal of a call before it is sent to a node
+// that does not advertise Handler. node's forwarder gives it when the role table
+// lists no answerer for Handler and the request names no target; node's
+// ConnectionManager.CheckAnswerers gives it, with Node set, when a call
+// HWPCaller.CallNode or OpenNodeStream would send to Node finds no record of
+// Node listing Handler. Either way the call would reach a node that answers
+// Handler as not found (RPCServer), after the send and untyped, so nothing is
+// sent. StampRefusal records it on the failed response a relay returns and
 // responseError rebuilds it at the origin, which tries its next route on it
-// (Unsent), as it does on the other route refusals.
+// (Unsent), as it does on the other route refusals; the forwarder's refusal is
+// the only one that crosses a hop, and it names no node, so the stamp carries
+// the kind alone.
 type NoAnswererError struct {
 	Handler string
+	Node    string // the node a targeted call names; "" for a routed call
 }
 
 func (e *NoAnswererError) Error() string {
+	if e.Node != "" {
+		return fmt.Sprintf("%s: node %s does not advertise this operation", e.Handler, e.Node)
+	}
 	return fmt.Sprintf("%s: %v", e.Handler, ErrNoAnswerer)
 }
 
@@ -132,9 +140,10 @@ func (e *NoAnswererError) Unwrap() error { return ErrNoAnswerer }
 
 // AnswererChecker is the optional SessionFinder method HWPCaller asks before it
 // reads the result cache, chooses a route or opens a stream. node's
-// ConnectionManager implements it from the requirements the holders' peer records
-// advertise. nodeID names the one node a targeted call must reach, and is "" for a
-// routed call. A finder that does not implement it holds no adverts to compare.
+// ConnectionManager implements it from the requirements and handler lists the
+// holders' peer records advertise. nodeID names the one node a targeted call must
+// reach, and is "" for a routed call. A finder that does not implement it holds no
+// adverts to compare.
 type AnswererChecker interface {
 	CheckAnswerers(role, handler, nodeID string) error
 }

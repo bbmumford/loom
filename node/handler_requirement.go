@@ -131,24 +131,30 @@ func (t *RoleTable) Answerers(role, handler string) ([]lad.RoleRecord, error) {
 }
 
 // CheckAnswerers implements dispatch.AnswererChecker for HWPCaller: nil when a call
-// to handler may leave, and the typed refusal when the adverts of handler disagree
-// or when nodeID, the node a targeted call names, is one whose advert names no
-// requirement beside adverts that do. A node with no swarm running holds no adverts
-// to compare, so it refuses nothing here.
+// to handler may leave, and the typed refusal when the adverts of handler disagree,
+// when nodeID, the node a targeted call names, is one whose advert names no
+// requirement beside adverts that do, or when no record of nodeID lists handler.
+// The last is a *dispatch.NoAnswererError naming handler and nodeID: a routed call
+// goes only to a node whose record lists handler (findNodeForRole), and a named
+// node outside those answers handler as not found (RPCServer.handleRequest), after
+// the send and untyped. A node with no swarm running holds no adverts to compare,
+// so it refuses nothing here.
 func (m *ConnectionManager) CheckAnswerers(role, handler, nodeID string) error {
 	if m == nil || m.rt == nil || m.rt.swarm == nil || m.rt.swarm.RoleTable == nil {
 		return nil
 	}
 	records := m.rt.swarm.RoleTable.Lookup(role, handler)
-	if len(records) < 2 {
-		return nil
+	if len(records) >= 2 {
+		judged := ports.JudgeHandlerAdverts(handlerAdverts(records, handler))
+		if judged.Disagree() {
+			return answerersDisagree(handler, judged)
+		}
+		if nodeID != "" && nodeListed(judged.Undeclared, nodeID) {
+			return answerersDisagree(handler, judged)
+		}
 	}
-	judged := ports.JudgeHandlerAdverts(handlerAdverts(records, handler))
-	if judged.Disagree() {
-		return answerersDisagree(handler, judged)
-	}
-	if nodeID != "" && nodeListed(judged.Undeclared, nodeID) {
-		return answerersDisagree(handler, judged)
+	if nodeID != "" && !recordListed(records, nodeID) {
+		return &dispatch.NoAnswererError{Handler: handler, Node: nodeID}
 	}
 	return nil
 }
@@ -178,6 +184,16 @@ func requirementGroup(requirement string, nodes []ports.NodeID) string {
 func nodeListed(nodes []ports.NodeID, id string) bool {
 	for _, n := range nodes {
 		if string(n) == id {
+			return true
+		}
+	}
+	return false
+}
+
+// recordListed reports whether one of records is id's.
+func recordListed(records []lad.RoleRecord, id string) bool {
+	for _, r := range records {
+		if r.NodeID == id {
 			return true
 		}
 	}
