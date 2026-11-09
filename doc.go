@@ -12,6 +12,13 @@
 // node.Initialize(cfg) (*Runtime, error) is the sole entry point; see the
 // README for a quick start.
 //
+// Targets: loom builds for hosts that hold UDP and TCP sockets and a data
+// directory. GOOS=js is not a target: node and core/transport/manager dial
+// Noise over UDP (aether/noise's NoiseTransport) and node dials QUIC
+// (aether/quic), and neither transport builds for js, so those two packages
+// do not build for js. A browser reaches the mesh through aether's own js
+// transports, not through loom.
+//
 // Module layout:
 //
 //   - node/           — the runtime: Runtime, Config, RPC server, sessions,

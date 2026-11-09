@@ -280,7 +280,11 @@ func TestSwarmTransportReopensAfterATypedReset(t *testing.T) {
 	ta.OnPeerLeave(func(swarm.NodeID) { leftA.Add(1) })
 	ta.OnPeerJoin(func(swarm.NodeID) { joinedA.Add(1) })
 	ta.onStreamReopened(func(swarm.NodeID) { reopenedA.Add(1) })
-	ta.OnReceive(func(swarm.NodeID, []byte) { framesAtA.Add(1) })
+	ta.OnReceive(func(_ swarm.NodeID, f []byte) {
+		if len(f) == 1 {
+			framesAtA.Add(1)
+		}
+	})
 	tb.OnReceive(func(_ swarm.NodeID, f []byte) {
 		if len(f) == 1 {
 			framesAtB.Add(1)
@@ -304,9 +308,8 @@ func TestSwarmTransportReopensAfterATypedReset(t *testing.T) {
 		return framesAtB.Load() > 0
 	})
 	reopenWaitFor(t, "a frame did not cross the new stream to the opener", func() bool {
-		before := framesAtA.Load()
 		_ = tb.Send("vl1_aaa", []byte("y"))
-		return framesAtA.Load() > before
+		return framesAtA.Load() > 0
 	})
 }
 

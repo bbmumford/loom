@@ -8,11 +8,13 @@ import (
 	"context"
 	"log"
 	"net"
+	"slices"
 	"sync/atomic"
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/adapter"
 	"github.com/bbmumford/loom/core/directory/gossip"
+	"github.com/bbmumford/loom/core/streams"
 )
 
 // Mesh session-establishment counters, exposed as mesh_initiator_sessions /
@@ -122,6 +124,7 @@ func (rt *Runtime) setupMeshSession(ctx context.Context, conn net.Conn, nodeID s
 
 	opts := rt.sessionOpts
 	opts.WireVersions = meshWireVersions(opts.WireVersions)
+	opts.ClaimedStreams = meshClaimedStreams(opts.ClaimedStreams)
 
 	// Create transport-appropriate adapter
 	session, err := meshSessionFactory(peerID)(conn, transportProto,
@@ -151,6 +154,32 @@ func (rt *Runtime) setupMeshSession(ctx context.Context, conn net.Conn, nodeID s
 		truncID(nodeID), proto, isInitiator)
 
 	return session, nil
+}
+
+// meshClaimedStreams returns the stream IDs every mesh session's acceptor holds for an
+// AcceptStreamByID however late it arms (aether.SessionOptions.ClaimedStreams): app, the
+// runtime options' own claims, and loom's. Loom's are the setup streams, which the
+// responder claims in AcceptMeshConnection and the gossip loops claim again after a
+// typed reset (streamReopener), and the streams bound per peer pair, which the higher
+// NodeID claims (MeshSwarmTransport.RegisterPeer, meshdb's acceptor). AcceptMeshConnection
+// runs an AcceptStream loop beside those claimants for the session's life, and without
+// the claim that loop takes a stream whose claimant armed after aether.ByIDBacklogGrace
+// and hands it to serveUnclaimedStream, which refuses it. setupMeshSession puts the
+// result on the options of every session it builds, so a caller's SetSessionOptions
+// cannot leave a claim out.
+func meshClaimedStreams(app []uint64) []uint64 {
+	own := []uint64{
+		streams.StreamGossip, streams.StreamRPC, streams.StreamKeepalive,
+		streams.StreamControl, streams.StreamReconcile,
+		streams.StreamSwarm, streams.StreamMeshDB,
+	}
+	out := append([]uint64(nil), app...)
+	for _, id := range own {
+		if !slices.Contains(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
 }
 
 // awaitMeshSessionProfile returns the gossip profile a session's chosen wire

@@ -1243,7 +1243,6 @@ func Initialize(cfg Config) (*Runtime, error) {
 		quicCfg := quictransport.QuicTransportConfig{
 			LocalNode:  rt.identity.NodeID,
 			PrivateKey: rt.identity.PrivateKey,
-			KeepAlive:  30 * time.Second,
 			ListenAddr: fmt.Sprintf(":%d", quicPort),
 		}
 
@@ -4497,13 +4496,11 @@ func (rt *Runtime) classifyNATBehaviour(ctx context.Context) {
 			}
 			rt.natBehaviourMu.Lock()
 			rt.natBehaviour = behaviour
-			// StrategyConfig takes the STUN client + optional port
-			// mapper. Local/remote behaviours are passed per-call to
-			// PickMethod — the Strategy itself is stateless aside from
-			// its backends.
-			rt.natStrategy = nat.NewStrategy(nat.StrategyConfig{
-				STUN: stunClient,
-			})
+			// The Strategy decides from the local and remote behaviours
+			// PickMethod is passed per call and runs no discovery of its
+			// own, so it takes no STUN client; with no PortMapper it holds
+			// the null mapper.
+			rt.natStrategy = nat.NewStrategy(nat.StrategyConfig{})
 			rt.natBehaviourMu.Unlock()
 			// STUN classification finishes asynchronously, after the
 			// reach publisher's initial publish. Push the freshly
