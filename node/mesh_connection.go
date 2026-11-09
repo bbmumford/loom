@@ -530,108 +530,12 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 			}
 		}()
 
-		// Keepalive on stream 2: this session's one keepalive (health.Monitor holds one
-		// pending probe sequence, so a second prober would take this one's answers).
-		// Every number it waits on comes from aether.KeepalivePlanFor, read again before
-		// each wait and each probe: Interval between probes on a healthy session,
-		// ProbeTimeout per probe, RetryGap between probes once one went unanswered, and
-		// Strikes unanswered probes in a row before the session is let go. The plan
-		// derives them from the session's own measured SRTT, RTO and sample count, so
-		// they follow the path, never its transport or grade.
-		//
-		// A dead session ends with connCancel, which runs this function's cleanup: the
-		// cleanup's OnPrimaryFailure call moves dispatch to a standby path when the
-		// peer's multipath manager holds one.
+		// Keepalive on stream 2 (runMeshKeepalive). A dead session ends with connCancel,
+		// which runs this function's cleanup: the cleanup's OnPrimaryFailure call moves
+		// dispatch to a standby path when the peer's multipath manager holds one.
 		go func() {
-			grade := SessionGrade(opts.Session)
-			// sessionInstalledAt starts the new-path grace below.
-			sessionInstalledAt := time.Now()
-			const (
-				// retriesWithStandby is the strike budget once the peer's multipath
-				// manager holds a second path (PathCount >= 2): failover to that path
-				// costs no reconnect, so a silent session is let go after fewer
-				// probes than the plan's Strikes, which applies when it is the only
-				// path and its loss costs a full reconnect (a join and a handshake).
-				// The lower of the two is used, so the plan's Strikes stays the bound.
-				//
-				// TODO: derive the with-standby budget from the plan as well; it is
-				// a fixed count the keepalive plan does not decide.
-				retriesWithStandby = 3
-				// newPathGraceWindow holds a newly installed session to the plan's
-				// Strikes for as long as registerMeshSession's proving timer runs
-				// (the 60 s time.AfterFunc whose body is completeProving). While it
-				// runs, PathCount counts the outgoing session as a second path, so
-				// the with-standby budget would end the new session on the outgoing
-				// one's account and throw the upgrade away. The two must stay equal.
-				newPathGraceWindow = 60 * time.Second
-			)
-			for {
-				interval := aether.KeepalivePlanFor(opts.Session).Interval
-				select {
-				case <-connCtx.Done():
-					return
-				case <-time.After(interval):
-				}
-				// A session that closed during the wait ends here, before a probe, so
-				// dispatch and the multipath manager stop selecting it at once.
-				if opts.Session.IsClosed() {
-					log.Printf("[AETHER] %s: keepalive detected session closed (grade=%s, interval=%v), cancelling",
-						truncID(nodeID), grade, interval)
-					connCancel()
-					return
-				}
-				// hasStandby is read once per probe cycle, because the peer's paths
-				// change over the session's life (EnsureK adds one, a failure takes
-				// one away), and only after newPathGraceWindow (see there).
-				hasStandby := false
-				if time.Since(sessionInstalledAt) > newPathGraceWindow {
-					m.multipathMu.Lock()
-					if mgr, ok := m.multipathManagers[nodeID]; ok && mgr.PathCount() >= 2 {
-						hasStandby = true
-					}
-					m.multipathMu.Unlock()
-				}
-				// Once a probe goes unanswered the next follows after the plan's
-				// RetryGap, not its Interval, so a silent peer is found within the
-				// strike budget's probe timeouts.
-				dead := false
-				for attempt := 1; ; attempt++ {
-					plan := aether.KeepalivePlanFor(opts.Session)
-					maxKeepaliveRetries := plan.Strikes
-					if hasStandby && retriesWithStandby < maxKeepaliveRetries {
-						maxKeepaliveRetries = retriesWithStandby
-					}
-					pingCtx, pingCancel := context.WithTimeout(connCtx, plan.ProbeTimeout)
-					_, err := opts.Session.Ping(pingCtx)
-					pingCancel()
-					if err == nil {
-						break
-					}
-					log.Printf("[AETHER] %s: keepalive ping failed (%d/%d, grade=%s, timeout=%v, interval=%v): %v",
-						truncID(nodeID), attempt, maxKeepaliveRetries, grade, plan.ProbeTimeout, plan.Interval, err)
-					if attempt >= maxKeepaliveRetries {
-						log.Printf("[AETHER] %s: keepalive dead after %d failures (grade=%s, retryBudget=%d), closing",
-							truncID(nodeID), attempt, grade, maxKeepaliveRetries)
-						dead = true
-						break
-					}
-					// A session closed under the probe answers no retry.
-					if opts.Session.IsClosed() {
-						log.Printf("[AETHER] %s: keepalive detected session closed mid-retry (grade=%s), cancelling",
-							truncID(nodeID), grade)
-						dead = true
-						break
-					}
-					select {
-					case <-connCtx.Done():
-						return
-					case <-time.After(plan.RetryGap):
-					}
-				}
-				if dead {
-					connCancel()
-					return
-				}
+			if runMeshKeepalive(connCtx, opts.Session, nodeID) {
+				connCancel()
 			}
 		}()
 

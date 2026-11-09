@@ -120,6 +120,10 @@ go vet ./...
 go test ./...
 ```
 
+GOOS=js is not a build target: `node` and `core/transport/manager` reach the
+network through aether's Noise-over-UDP and QUIC transports, which have no js
+build (see the package doc).
+
 ## License
 
 Proprietary — Copyright (c) 2026 HSTLES / ORBTR Pty Ltd. All Rights

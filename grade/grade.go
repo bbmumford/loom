@@ -84,9 +84,12 @@ func (g Grade) Weight() float64 {
 //     noise-udp path from being permanently demoted just for having
 //     >30 ms RTT.
 //   - aether.KeepalivePlanFor(session), which node's keepalive loop reads,
-//     for ping cadence, clamp(2 × SRTT, 5s, 30s), and the per-ping wait,
-//     clamp(4 × RTO, 1s, 15s) with a 5s floor until the estimator has 8
-//     samples. Reads the session's own measured RTT.
+//     for ping cadence, clamp(2 × SRTT, 5s, 30s); the per-ping wait,
+//     clamp(4 × RTO × (1 + Instability), 1s, 15s) with a 5s floor until the
+//     estimator has 8 samples; and the unanswered pings in a row that end
+//     the session, 5 raised on a lossy path to at most 10. Reads the
+//     session's own measured round trips, their instability and the
+//     keepalive's probe loss.
 //   - node.adaptiveRPCTimeout(session) for the default RPC
 //     deadline: clamp(20 × SRTT, 5s, 30s).
 
