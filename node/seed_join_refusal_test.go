@@ -34,8 +34,9 @@ import (
 const seedJoinTestKey = "seed-join-test-network-key"
 
 // seedJoinTestRuntime starts a runtime on its own loopback UDP port holding
-// networkKey for the control-style partition "orbtr" on the shared transport,
-// as an endpoint's spine configures one, with verify as its anchor verifier.
+// networkKey for the control-style partition "orbtr" on the shared transport
+// and naming it the mesh's partition, as an endpoint's spine configures one,
+// with verify as its anchor verifier.
 func seedJoinTestRuntime(t *testing.T, service, networkKey string, verify ports.VerifyBootstrapFunc) *Runtime {
 	t.Helper()
 	t.Setenv(EnvNodeIdentitySeed, "")
@@ -46,6 +47,7 @@ func seedJoinTestRuntime(t *testing.T, service, networkKey string, verify ports.
 		DataDir:         dir,
 		NetworkKeys:     []string{networkKey},
 		Partitions:      []PartitionTransportConfig{{PartitionID: "orbtr", NetworkKeys: []string{networkKey}}},
+		MeshPartition:   "orbtr",
 		VL1:             VL1TransportConfig{Enabled: true, UDPPort: freeUDPPort(t)},
 		LAD:             LADDirectoryConfig{Storage: "local", LocalDir: filepath.Join(dir, "lad"), BootstrapHosts: "127.0.0.1:9"},
 		VerifyBootstrap: verify,

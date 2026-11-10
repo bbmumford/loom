@@ -110,9 +110,11 @@ func seedJoinTranscript(role, partition, joinerID, seedID string, joinerNonce, s
 }
 
 // seedJoinPartition is the partition this node names when it joins through a
-// seed: the one partition its shared transport holds, the partition its own
-// fleet.peer record names (advertisedDialPartition), or "" when it holds
-// none or several, which joins under the unpartitioned keys (cfg.NetworkKeys).
+// seed, the partition its own fleet.peer record names
+// (advertisedDialPartition): cfg.MeshPartition while its shared transport
+// holds it, else the one partition that transport holds, else "", which joins
+// under the unpartitioned keys (cfg.NetworkKeys) and binds the session to no
+// partition.
 func (rt *Runtime) seedJoinPartition() string {
 	if partition, ok := rt.advertisedDialPartition(); ok {
 		return partition
