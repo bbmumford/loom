@@ -35,17 +35,26 @@ func transportPartitionOf(conn net.Conn) string {
 }
 
 // advertisedDialPartition returns the partition this node's peer record names as
-// the one it accepts dials under, and whether it names one. It names one only
-// while the shared transport holds exactly one partition: a node holding several
-// would otherwise name every partition it serves to every peer that reads
-// fleet.peer, and its record, which swarm caps at MaxRecordBytes, would grow
-// with that count. PeerPublisher.publishOnce calls it on every publish, so a
+// the one it accepts dials under, and whether it names one: cfg.MeshPartition
+// while the shared transport holds it, otherwise the shared transport's one
+// partition when it holds exactly one, otherwise none. It names one partition
+// at most: a node holding several would otherwise name every partition it
+// serves to every peer that reads fleet.peer, and its record, which swarm caps
+// at MaxRecordBytes, would grow with that count. PeerPublisher.publishOnce
+// calls it on every publish, and seedJoinPartition on every seed dial, so a
 // partition registered or removed at runtime is reflected on the next one.
 func (rt *Runtime) advertisedDialPartition() (string, bool) {
 	if rt == nil || rt.sharedTransport == nil {
 		return "", false
 	}
 	partitions := rt.sharedTransport.Partitions()
+	if mesh := rt.cfg.MeshPartition; mesh != "" {
+		for _, p := range partitions {
+			if string(p) == mesh {
+				return mesh, true
+			}
+		}
+	}
 	if len(partitions) != 1 {
 		return "", false
 	}

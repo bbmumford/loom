@@ -194,6 +194,21 @@ type Config struct {
 	// a session accepted on it carries no transport partition.
 	Partitions []PartitionTransportConfig
 
+	// MeshPartition names the transport partition of the mesh this node joins
+	// through its seeds. While the shared transport holds it, the node's seed
+	// join names it and its fleet.peer record advertises it as the partition
+	// peers dial this node under (advertisedDialPartition), whatever other
+	// partitions the shared transport also holds. The composition root sets it
+	// to the mesh's own partition. "" (or a partition the shared transport does
+	// not hold) leaves both to the one-partition rule: a shared transport
+	// holding exactly one partition names it, so a node serving one partition
+	// still joins under that one, and one holding several names none. Why a
+	// setting: nothing on the transport tells which of several partitions is
+	// the mesh's, and a seed join naming none binds the session to no
+	// partition, over which bindAuthenticatedPrincipal refuses every mesh
+	// principal.
+	MeshPartition string
+
 	// Anchor bootstrapping (Secure Snapshot)
 	Anchor AnchorConfig
 
