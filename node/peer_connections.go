@@ -865,7 +865,7 @@ type ConnectionManager struct {
 
 	// multipath_failover_total counts every time the ConnectionManager
 	// promotes a standby path after a primary session failure. Incremented at
-	// the OnPrimaryFailure call site in mesh_connection.go; a single multipath
+	// the OnPathFailure call site in mesh_connection.go; a single multipath
 	// takeover bumps this once regardless of how many paths exist. Monotonically
 	// increasing — compare successive snapshots to get the per-interval rate.
 	// Useful for distinguishing "path flap" (rate > 0 continuously) from "one-

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/ORBTR/aether"
+	"github.com/ORBTR/aether/quality"
 )
 
 // meshKeepalives holds every session a runMeshKeepalive is probing, so a session runs
@@ -20,40 +21,57 @@ import (
 // session before the first probe and deletes it when it returns.
 var meshKeepalives sync.Map
 
+// meshKeepalivePaths is the peer's multipath manager as runMeshKeepalive reads and feeds it
+// (multipath.Manager).
+type meshKeepalivePaths interface {
+	KeepalivePlanFor(aether.Session) quality.KeepalivePlan
+	RecordKeepaliveProbe(aether.Session, time.Duration, error)
+}
+
 // runMeshKeepalive is a mesh session's one keepalive: AcceptMeshConnection runs it on
 // stream 2 for the session's life. aether.RunKeepalive is the keepalive of a session no
 // node runtime runs one on, so nothing in this package calls it on a mesh session, and a
 // second runMeshKeepalive for a session whose keepalive is running returns false at once
 // and probes nothing.
 //
-// Every number it waits on comes from aether.KeepalivePlanFor, read again before each
+// Every number it waits on comes from the session's keepalive plan, read again before each
 // wait and each probe: Interval between probes on a healthy session, ProbeTimeout per
 // probe, RetryGap between probes once one went unanswered, and Strikes unanswered probes
-// in a row before the session is let go. The plan derives them from the session's
-// health monitor: SRTT, RTO, sample count and Instability from the PONGs the session's
-// control handler records, and ProbeLoss from RecordKeepaliveAnswer, which this loop
-// calls on every answered probe with the count of unanswered probes before it. So the
-// probe wait widens on a path whose round trips jump and Strikes rises on a path that
-// loses probes, as they do under aether.RunKeepalive.
+// in a row before the session is let go. The plan is the peer's multipath manager's
+// (paths, multipath.Manager.KeepalivePlanFor) and, with no manager, aether.KeepalivePlanFor;
+// both derive it from the session's health monitor: SRTT, RTO, sample count and
+// Instability from the PONGs the session's control handler records, and ProbeLoss from
+// RecordKeepaliveAnswer, which this loop calls on every answered probe with the count of
+// unanswered probes before it. So the probe wait widens on a path whose round trips jump
+// and Strikes rises on a path that loses probes, as they do under aether.RunKeepalive.
 //
-// A session whose peer has a standby path is held to the same Strikes. Strikes is the
-// fewest unanswered probes a healthy peer on this path's measured loss reaches with
-// chance at most 1 in 1000, and a standby path does not change that chance; a live
-// session let go early costs the peer that session and the redial that replaces it,
-// standby or not. The standby takes dispatch when this loop lets the session go, through
-// AcceptMeshConnection's cleanup (OnPrimaryFailure).
+// The manager's plan adds the peer's standby path: beside a standby whose own keepalive
+// has converged and whose latest probe was answered, quality.Keepalive lowers the floor
+// under Strikes from 5 to 2 and keeps the loss rule, so a silent session is let go sooner
+// and the standby takes dispatch through AcceptMeshConnection's cleanup
+// (OnPathFailure). Every probe's result goes to the manager (RecordKeepaliveProbe), the
+// manager's own probe rounds ping nothing (TakeProbesFromKeepalive in
+// addMultipathSession), and this loop is the session's one prober. paths is called per
+// probe because the peer's manager is dropped with its last path and rebuilt with the
+// next; a nil paths or a nil manager reads aether.KeepalivePlanFor and reports nothing.
 //
 // It returns true when the session is to be let go (it closed, or Strikes probes in a
 // row went unanswered), and false when ctx ended or another keepalive holds s.
-func runMeshKeepalive(ctx context.Context, s aether.Session, nodeID string) bool {
+func runMeshKeepalive(ctx context.Context, s aether.Session, nodeID string, paths func() meshKeepalivePaths) bool {
 	if _, running := meshKeepalives.LoadOrStore(s, struct{}{}); running {
 		log.Printf("[AETHER] %s: keepalive already running on this session, not starting a second", truncID(nodeID))
 		return false
 	}
 	defer meshKeepalives.Delete(s)
 	grade := SessionGrade(s)
+	planFor := func() quality.KeepalivePlan {
+		if p := meshPathsOf(paths); p != nil {
+			return p.KeepalivePlanFor(s)
+		}
+		return aether.KeepalivePlanFor(s)
+	}
 	for {
-		interval := aether.KeepalivePlanFor(s).Interval
+		interval := planFor().Interval
 		select {
 		case <-ctx.Done():
 			return false
@@ -69,10 +87,13 @@ func runMeshKeepalive(ctx context.Context, s aether.Session, nodeID string) bool
 		// Once a probe goes unanswered the next follows after the plan's RetryGap,
 		// not its Interval, so a silent peer is found within Strikes probe timeouts.
 		for attempt := 1; ; attempt++ {
-			plan := aether.KeepalivePlanFor(s)
+			plan := planFor()
 			pingCtx, pingCancel := context.WithTimeout(ctx, plan.ProbeTimeout)
-			_, err := s.Ping(pingCtx)
+			rtt, err := s.Ping(pingCtx)
 			pingCancel()
+			if p := meshPathsOf(paths); p != nil && ctx.Err() == nil {
+				p.RecordKeepaliveProbe(s, rtt, err)
+			}
 			if err == nil {
 				if h := s.Health(); h != nil {
 					h.RecordKeepaliveAnswer(attempt - 1)
@@ -99,4 +120,13 @@ func runMeshKeepalive(ctx context.Context, s aether.Session, nodeID string) bool
 			}
 		}
 	}
+}
+
+// meshPathsOf is the peer's multipath manager paths returns now, or nil when paths is nil
+// or the peer has none.
+func meshPathsOf(paths func() meshKeepalivePaths) meshKeepalivePaths {
+	if paths == nil {
+		return nil
+	}
+	return paths()
 }

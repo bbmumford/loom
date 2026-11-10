@@ -252,7 +252,7 @@ func (s *ConnectionScaler) TargetConnections(peer *peerConn, peerRegion string) 
 	// Universal K>=2 floor for forever-sessions design: every peer gets
 	// at least one standby path so the keepalive failure of any single
 	// path can fail over instantly via the multipath manager's
-	// OnPrimaryFailure instead of triggering a full reconnect. The
+	// OnPathFailure instead of triggering a full reconnect. The
 	// dispatch registry swap + bidiRPC eviction in the mesh_connection
 	// cleanup path means the logical session survives transport
 	// instance death whenever a standby exists. The floor is not gated

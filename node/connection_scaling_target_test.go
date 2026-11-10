@@ -281,7 +281,7 @@ func TestTheMinimumClampRaisesATargetThatWouldFallBelowIt(t *testing.T) {
 // — not from the PriorityCritical branch but from the LAST statement in the
 // function, `if result < 2 && result < maxPerPeer { result = 2 }`. Its comment
 // gives the reason: every peer gets a standby path so a keepalive failure fails
-// over via OnPrimaryFailure instead of triggering a full reconnect.
+// over via OnPathFailure instead of triggering a full reconnect.
 //
 // ⇒ THE `PriorityCritical` MINIMUM-2 EARLIER IN THE FUNCTION CAN NO LONGER
 // DETERMINE ANY OUTCOME — the universal floor already guarantees what it asks

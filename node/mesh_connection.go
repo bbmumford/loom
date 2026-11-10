@@ -531,10 +531,20 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 		}()
 
 		// Keepalive on stream 2 (runMeshKeepalive). A dead session ends with connCancel,
-		// which runs this function's cleanup: the cleanup's OnPrimaryFailure call moves
-		// dispatch to a standby path when the peer's multipath manager holds one.
+		// which runs this function's cleanup: the cleanup's OnPathFailure call moves
+		// dispatch to a standby path when the session was the peer's primary and the
+		// peer's multipath manager holds another. The
+		// keepalive reads its plan from, and hands every probe's result to, the peer's
+		// multipath manager, looked up per probe because the manager is dropped and
+		// rebuilt as the peer's last path goes and a new one arrives.
 		go func() {
-			if runMeshKeepalive(connCtx, opts.Session, nodeID) {
+			paths := func() meshKeepalivePaths {
+				if mgr, ok := m.GetMultipathManager(nodeID); ok {
+					return mgr
+				}
+				return nil
+			}
+			if runMeshKeepalive(connCtx, opts.Session, nodeID, paths) {
 				connCancel()
 			}
 		}()
@@ -953,13 +963,15 @@ cleanup:
 		}
 	}
 
-	// Multipath failover: if a standby session exists, promote it instead of
-	// full reconnect. Call OnPrimaryFailure before removing the dying session
-	// so the manager can promote the best standby to active.
+	// Multipath failover: if the dying session is the peer's primary and a
+	// standby exists, promote it instead of a full reconnect. OnPathFailure runs
+	// before removing the dying session so the manager can promote the best
+	// standby to active; a dying standby is only marked dead, so the primary and
+	// dispatch stay as they are (OnPrimaryFailure would mark the live primary dead
+	// and could promote the dying session, which is not yet closed here).
 	failedOver := false
 	m.multipathMu.Lock()
-	if mgr, ok := m.multipathManagers[nodeID]; ok && mgr.PathCount() > 1 {
-		mgr.OnPrimaryFailure()
+	if mgr, ok := m.multipathManagers[nodeID]; ok && mgr.PathCount() > 1 && mgr.OnPathFailure(opts.Session) {
 		// Count every primary-failure → promotion event regardless
 		// of whether a live standby was actually found (the manager still
 		// attempted a takeover and changed its internal primary index).
@@ -1919,19 +1931,15 @@ func (m *ConnectionManager) addMultipathSession(nodeID string, session aether.Se
 		// loss measurements via RecordMultipathStats below.
 		mgr.EnableWeightedLoadBalance()
 
-		// Set the multipath probe cadence BEFORE EnsureK starts the
-		// probe loop. EnsureK's first call invokes
-		// q.probeOnce.Do(go m.RunProbeLoop(ctx)) which snapshots
-		// probeInterval at start; setting it after has no effect on
-		// the running ticker. 5s beats the worst-case UDP idle close
-		// (kernel UDP conntrack ~10s for unreplied flows / Fly
-		// cross-region NAT mapping reap ~13s) with a small safety
-		// margin, so noise-UDP standbys actually receive PING traffic
-		// before their underlying conn is reaped. Without this, every
-		// non-primary noise-UDP path dies with the misleading
-		// "stalled=13s" reporting line and EnsureK redials in a
-		// churn loop that dominates fleet instability.
+		// The manager's round is 5 s: RunProbeLoop (started by EnsureK and re-reading
+		// the interval every round) returns dead and flapping paths whose wait has passed
+		// to standby each round, and a dead path waits one round (deadPathWaitLocked).
 		mgr.SetProbeInterval(5 * time.Second)
+		// Every session added here runs runMeshKeepalive (AcceptMeshConnection), which
+		// pings it at its plan's Interval and hands each result to this manager, so the
+		// manager's rounds ping nothing: health.Monitor holds one pending probe sequence
+		// per session, and a second prober's PING would take the keepalive's answers.
+		mgr.TakeProbesFromKeepalive()
 
 		// Bind the shared quality.Tracker and wire the EnsureK
 		// reconnect loop's DialFunc. Target K comes from
