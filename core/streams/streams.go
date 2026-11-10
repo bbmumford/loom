@@ -114,11 +114,15 @@ const (
 	// opened by the worker: each call the worker makes of the platform goes out
 	// on it and the call's answer comes back on it, so a worker that holds no
 	// API key reaches the platform through the session it was admitted on.
-	// Neither workeraccept nor the worker's meshwire opens or claims it: they
-	// declare the number only, so both ends take this one when the channel is
-	// served. library mesh/wire re-exports all four, and workeraccept and
-	// meshwire read them there. IDs above them in the 700 band are left for
-	// the worker-edge channels that declare them.
+	// The worker's meshwire opens it as the fourth arm of each session, and the
+	// edge's workeraccept claims it with AcceptStreamByID and claims it again
+	// when the worker reopens it on the same session. Both ends name all four
+	// IDs in their SessionLifetimeStreams, so a channel that carries no call
+	// stays open as long as the session: aether's stream GC would otherwise
+	// reset it at aether.DefaultStreamIdleTimeout and lose a call in flight.
+	// library mesh/wire re-exports all four, and workeraccept and meshwire read
+	// them there. IDs above them in the 700 band are left for the worker-edge
+	// channels that declare them.
 	StreamPlatformConversation uint64 = 700
 	StreamPlatformCoordination uint64 = 701
 	StreamPlatformDispatch     uint64 = 702
