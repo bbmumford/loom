@@ -236,6 +236,47 @@ func Conflict(err error) error {
 	return nil
 }
 
+// keepRefusalKind gives resp, the failed response a middleware's After chain
+// answered over a Before refusal, the kind of that refusal when the chain's
+// last After built a failed response of its own naming neither kind: Denied or
+// Conflict as the error the chain ended with (after) carries it, or else as
+// the Before's refusal (before) does, under resp's own text. dispatchRPC calls
+// it once the chain has run. A response that is a success, or names a kind,
+// or follows a refusal of neither kind is left as the After answered it.
+// Without it an outer After rewriting the refusal's text drops its kind, and
+// RPCServer.executeLocal, node's local dispatcher and dispatch.LocalCaller,
+// which read the kind from Denied and Conflict alone, hand the refusal on as a
+// handler failure that an HTTP bridge answers 400 rather than 403 or 409.
+func keepRefusalKind(resp *RPCResponse, after, before error) {
+	if resp == nil || resp.Success || resp.Denied != nil || resp.Conflict != nil {
+		return
+	}
+	for _, cause := range []error{after, before} {
+		if Denial(cause) == nil && Conflict(cause) == nil {
+			continue
+		}
+		if resp.Error == "" {
+			resp.Error = cause.Error()
+		}
+		kept := &restatedRefusal{text: resp.Error, cause: cause}
+		resp.Denied, resp.Conflict = Denial(kept), Conflict(kept)
+		return
+	}
+}
+
+// restatedRefusal is a refusal carried under the text of the response that
+// restated it: its text is that response's Error, as RPCResponse.Denied and
+// RPCResponse.Conflict require, and it unwraps to the refusal it restates, so
+// Denial and Conflict judge it as they judge that refusal. keepRefusalKind
+// builds it.
+type restatedRefusal struct {
+	text  string
+	cause error
+}
+
+func (e *restatedRefusal) Error() string { return e.text }
+func (e *restatedRefusal) Unwrap() error { return e.cause }
+
 // executionAuthRefusal is the AuthValidator's refusal of a call's execution auth
 // as dispatchRPC reports it: its text is the failed response's Error, and it
 // unwraps to scope.ErrDenied and to the validator's own error.
@@ -1184,6 +1225,7 @@ func (h ResolvedHandler) dispatchRPC(
 			if rr != nil {
 				rejection = rr
 			}
+			keepRefusalKind(rejection, re, err)
 			return rejection, nil
 		}
 	}
