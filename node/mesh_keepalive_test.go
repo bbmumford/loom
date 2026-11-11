@@ -438,3 +438,129 @@ func TestAStandbyDyingAtThePrimarysLastWithStandbyProbeLeavesTheNoStandbyStrikes
 		t.Errorf("the primary was let go after %d unanswered probes with its standby already dead, want 5", got)
 	}
 }
+
+// blockingProbeSession is a keepaliveSession whose unanswered Ping waits out its probe
+// context, as a session's Ping does when no PONG comes, and runs onEnd(n) after the wait
+// and before the failure returns: the latest moment inside the probe at which the
+// peer's standby can die, after which runMeshKeepalive's re-read of the plan is the only
+// read that can see it.
+type blockingProbeSession struct {
+	*keepaliveSession
+	onEnd func(n int32)
+}
+
+func (s *blockingProbeSession) Ping(ctx context.Context) (time.Duration, error) {
+	n := s.pings.Add(1)
+	if s.answer != nil && s.answer(n) {
+		return time.Millisecond, nil
+	}
+	<-ctx.Done()
+	if s.onEnd != nil {
+		s.onEnd(n)
+	}
+	return 0, context.DeadlineExceeded
+}
+
+// keepaliveBesideABlockingProbe runs a primary whose unanswered probes wait out their
+// ProbeTimeout and an answering standby, each with its one keepalive and the peer's
+// manager, then silences the primary. With dieAt above 0 the standby dies as
+// AcceptMeshConnection's cleanup reports it (OnPathFailure) at the end of the primary's
+// dieAt-th unanswered probe, after its timeout and before its failure returns; with
+// dieAt 0 it stays alive and answering. It returns how many unanswered probes the
+// primary's keepalive took before letting it go.
+func keepaliveBesideABlockingProbe(t *testing.T, dieAt int32, primaryID, standbyID string) int32 {
+	t.Helper()
+	var silent atomic.Bool
+	var silentFrom atomic.Int32
+	var mgr *multipath.Manager
+	var standby *keepaliveSession
+	died := make(chan bool, 1)
+	inner := &keepaliveSession{health: seededHealth()}
+	inner.answer = func(n int32) bool {
+		if !silent.Load() {
+			return true
+		}
+		if silentFrom.Load() == 0 {
+			silentFrom.Store(n)
+		}
+		return false
+	}
+	primary := &blockingProbeSession{keepaliveSession: inner}
+	primary.onEnd = func(n int32) {
+		if dieAt > 0 && n-silentFrom.Load()+1 == dieAt {
+			died <- mgr.OnPathFailure(standby)
+		}
+	}
+	standby = &keepaliveSession{health: seededHealth(), answer: func(int32) bool { return true }}
+	mgr = multipath.NewManager()
+	mgr.AddPath(primary, aether.ProtoNoise, 100)
+	mgr.AddPath(standby, aether.ProtoNoise, 50)
+	paths := func() meshKeepalivePaths { return mgr }
+	if got := mgr.KeepalivePlanFor(primary).Strikes; got != 2 {
+		t.Fatalf("premise: the primary beside a measured, answering standby has %d strikes, want 2", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Second)
+	defer cancel()
+	sctx, scancel := context.WithCancel(ctx)
+	defer scancel()
+	go runMeshKeepalive(sctx, standby, standbyID, paths)
+	letGo := make(chan bool, 1)
+	go func() { letGo <- runMeshKeepalive(ctx, primary, primaryID, paths) }()
+
+	deadline := time.Now().Add(40 * time.Second)
+	for (inner.pings.Load() < 1 || standby.pings.Load() < 1) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	silent.Store(true)
+	if dieAt > 0 {
+		select {
+		case failover := <-died:
+			scancel() // the dead standby's keepalive ends with it
+			if failover {
+				t.Error("OnPathFailure for the dying standby reported a failover")
+			}
+		case <-time.After(90 * time.Second):
+			t.Fatal("the primary never reached its unanswered probe")
+		}
+	}
+	select {
+	case v := <-letGo:
+		if !v {
+			t.Fatal("the primary's keepalive ended without letting it go")
+		}
+	case <-time.After(120 * time.Second):
+		t.Fatal("the silent primary was never let go")
+	}
+	return inner.pings.Load() - silentFrom.Load() + 1
+}
+
+// The standby dies at the very end of the primary's second unanswered probe, the last of
+// the with-standby Strikes (2), after the probe's timeout and before its failure
+// returns: the plan read before that probe still had the standby, so only the plan read
+// once the probe failed holds the primary to the no-standby Strikes (5).
+func TestAStandbyDyingAtTheEndOfThePrimarysLastWithStandbyProbeLeavesTheNoStandbyStrikes(t *testing.T) {
+	t.Parallel()
+	if got := keepaliveBesideABlockingProbe(t, 2, "vl1_keepalive_end_last_p", "vl1_keepalive_end_last_s"); got != 5 {
+		t.Errorf("the primary was let go after %d unanswered probes with its standby dead at the decision, want 5", got)
+	}
+}
+
+// The standby dies at the end of the primary's first unanswered probe: every decision
+// from that probe on reads no standby, so the primary is let go at the no-standby
+// Strikes (5).
+func TestAStandbyDyingAtTheEndOfThePrimarysFirstSilentProbeLeavesTheNoStandbyStrikes(t *testing.T) {
+	t.Parallel()
+	if got := keepaliveBesideABlockingProbe(t, 1, "vl1_keepalive_end_first_p", "vl1_keepalive_end_first_s"); got != 5 {
+		t.Errorf("the primary was let go after %d unanswered probes, want 5 (no standby left)", got)
+	}
+}
+
+// With the standby alive and answering the same blocking primary is let go at the
+// with-standby Strikes (2), so the two tests above measure the plan's re-read after a
+// failed probe and not a plan that never reads the standby.
+func TestABlockingPrimaryBesideAnAnsweringStandbyKeepsTheWithStandbyStrikes(t *testing.T) {
+	t.Parallel()
+	if got := keepaliveBesideABlockingProbe(t, 0, "vl1_keepalive_end_ctrl_p", "vl1_keepalive_end_ctrl_s"); got != 2 {
+		t.Errorf("the primary beside an answering standby was let go after %d unanswered probes, want 2", got)
+	}
+}
