@@ -56,10 +56,15 @@ func (c *LocalCaller) Call(ctx context.Context, role, method string, payload []b
 	}
 
 	// A refusal of the caller's authority stays one (errors.Is matches
-	// scope.ErrDenied), as HWPCaller returns it for a handler on another node.
+	// scope.ErrDenied), and a handler's conflict with its stored state stays
+	// one (ErrConflict), as HWPCaller returns each for a handler on another
+	// node.
 	if !resp.Success {
 		if resp.Denied != nil {
 			return nil, fmt.Errorf("local dispatch %s: %w", method, resp.Denied)
+		}
+		if resp.Conflict != nil {
+			return nil, fmt.Errorf("local dispatch %s: %w", method, resp.Conflict)
 		}
 		return nil, fmt.Errorf("local dispatch %s: %s", method, resp.Error)
 	}
