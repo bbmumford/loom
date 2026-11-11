@@ -12,8 +12,6 @@ import (
 	"time"
 
 	"github.com/ORBTR/aether"
-	"github.com/ORBTR/aether/adapter"
-	aethercrypto "github.com/ORBTR/aether/crypto"
 	"github.com/ORBTR/aether/multipath"
 	"github.com/ORBTR/aether/quality"
 	"github.com/ORBTR/aether/resume"
@@ -337,16 +335,18 @@ func (m *ConnectionManager) AcceptMeshConnection(ctx context.Context, opts Accep
 		}
 	}
 
-	// Derive per-session encryption keys from session key (if available)
-	if sessionKey := opts.Session.SessionKey(); len(sessionKey) >= 32 {
-		kr, err := aethercrypto.DeriveKeyring(sessionKey, string(m.selfID), nodeID)
-		if err == nil {
-			// Wire encryption into Noise adapter (if it's a Noise session)
-			if noiseSession, ok := opts.Session.(*adapter.NoiseSession); ok {
-				noiseSession.SetSessionKey(kr.EncryptionKey)
-				dbgSessionHealth.Printf("%s: per-frame encryption enabled via keyring", truncID(nodeID))
-			}
-		}
+	// The node installs no per-frame key: a mesh session's frames travel under
+	// its transport's encryption, Noise sealing every packet between the two
+	// nodes and TLS or wss carrying the TCP family. SessionKey reports only a
+	// key the session itself holds (adapter.NoiseSession.SetSessionKey installs
+	// it and refuses a second install; TCPSession and QUICSession hold none).
+	// A key installed by each node here would land on the two ends at different
+	// instants of a session whose setup streams open just below, and the end not
+	// yet keyed refuses the sealed frames in between (NoiseSession's
+	// processIncomingFrame refuses a frame flagged ENCRYPTED while it holds no
+	// key). A session that does hold a frame key is reported.
+	if len(opts.Session.SessionKey()) > 0 {
+		dbgSessionHealth.Printf("%s: session holds a per-frame key", truncID(nodeID))
 	}
 
 	// 0-RTT resume token will be sent on the control stream after it's opened (below)
