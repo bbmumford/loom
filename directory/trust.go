@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"errors"
 	"fmt"
 	"strings"
@@ -49,6 +50,18 @@ type Policy struct {
 	// endorsement one of them signed (endorsements supplies the records).
 	anchorKeys   map[string]bool
 	endorsements AnchorEndorsements
+
+	// verified caches each endorsement signature check by the record's
+	// endorsementDigest, under verifiedMu: AuthorizeObserver judges every
+	// attestation against the records that could outrank the observer's,
+	// and fleet.peer is open to any node's publish, so without it a peer
+	// publishing records with bogus tags under a listed key would cost one
+	// ed25519 check per record per attestation. It holds the signature's
+	// validity alone, which no key-list change or revocation alters; both
+	// are read live. AuthorizeObserver drops the digests of records no
+	// longer held once the cache outgrows them (pruneVerified).
+	verifiedMu sync.Mutex
+	verified   map[[sha256.Size]byte]bool
 
 	// publishPrefixes[rule] = set of NodeIDs allowed to publish the topics
 	// that restricted rule covers (ruleCovers); the empty rule is the
@@ -104,6 +117,7 @@ func NewPolicy(cfg PolicyConfig) *Policy {
 		roleEntitlements: map[string]map[ports.NodeID]bool{},
 		observers:        map[ports.NodeID]bool{},
 		anchorKeys:       map[string]bool{},
+		verified:         map[[sha256.Size]byte]bool{},
 		publishPrefixes:  map[string]map[ports.NodeID]bool{},
 		openPublish:      map[string]bool{},
 		revoked:          map[string]bool{},
@@ -114,11 +128,7 @@ func NewPolicy(cfg PolicyConfig) *Policy {
 	for _, o := range cfg.Observers {
 		p.observers[o] = true
 	}
-	for _, k := range cfg.AnchorKeys {
-		if len(k) == ed25519.PublicKeySize {
-			p.anchorKeys[string(k)] = true
-		}
-	}
+	p.SetAnchorKeys(cfg.AnchorKeys)
 	for role, nodes := range cfg.RoleEntitlements {
 		set := map[ports.NodeID]bool{}
 		for _, n := range nodes {
@@ -262,6 +272,25 @@ func (p *Policy) AuthorizeRoleEntitlement(_ context.Context, pr ports.Principal,
 	return nil
 }
 
+// SetAnchorKeys replaces the anchor public keys whose endorsements admit an
+// observer with keys (each of Ed25519 size; any other is left out). NewPolicy
+// seeds them from PolicyConfig.AnchorKeys, and node's
+// Runtime.SetAnchorPublicKeys calls it with the list a reloaded mesh document
+// names, so a re-signed document's holders count without a restart. The
+// next AuthorizeObserver reads the new set; cached signature checks stay
+// valid because they do not depend on it.
+func (p *Policy) SetAnchorKeys(keys []ed25519.PublicKey) {
+	set := make(map[string]bool, len(keys))
+	for _, k := range keys {
+		if len(k) == ed25519.PublicKeySize {
+			set[string(k)] = true
+		}
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.anchorKeys = set
+}
+
 // SetAnchorEndorsements names where AuthorizeObserver reads each peer's
 // fleet.peer endorsement. node's InitSwarm passes its RoleTable. Unset, only
 // the configured Observers are admitted.
@@ -274,15 +303,20 @@ func (p *Policy) SetAnchorEndorsements(src AnchorEndorsements) {
 // AuthorizeObserver implements ports.TrustPolicy. After the key bind and the
 // self-attestation refusal it admits a configured observer, or a node whose
 // latest fleet.peer record carries an endorsement that verifies under one of
-// the configured anchor keys, provided no node with a lower NodeID also holds
-// a valid endorsement under the same key.
+// the configured anchor keys, provided no other node holds a valid
+// endorsement under the same key that outranks it (outranks: a later
+// IssuedAt, or the same IssuedAt and a lower NodeID).
 //
-// The lowest-NodeID rule is what makes the K-of-N quorum count distinct anchor
-// keys: swarm's attestation accumulator keys its set by ObserverNodeID and
-// asks this check one attestation at a time, so admitting one node per anchor
-// key is the only way a holder running several machines, or minting several
-// node keys, counts once. The choice is stable while the holder's records
-// are: every node reading the same records admits the same one.
+// One node per anchor key is what makes the K-of-N quorum count distinct
+// anchor keys: swarm's attestation accumulator keys its set by
+// ObserverNodeID, so admitting one node per key is the only way a holder
+// running several machines, or minting several node keys, counts once. The
+// freshest endorsement is the one admitted because a holder's live machine
+// republishes its record and so re-signs its endorsement, while a dead
+// machine's last record only ages until the role table prunes it: a
+// replacement machine counts at once, whatever its NodeID. Because the
+// admitted node changes as records are republished, swarm asks this check
+// again for every attestation it holds when it counts a quorum.
 func (p *Policy) AuthorizeObserver(_ context.Context, pr ports.Principal, subject ports.NodeID) error {
 	if err := p.VerifyNodeKey(pr.NodeID, pr.PubKey); err != nil {
 		return err
@@ -302,6 +336,7 @@ func (p *Policy) AuthorizeObserver(_ context.Context, pr ports.Principal, subjec
 		return fmt.Errorf("trust: node %s is not an authorized observer", short(pr.NodeID))
 	}
 	records := src.AnchorEndorsements()
+	defer p.pruneVerified(records)
 	own, ok := records[pr.NodeID]
 	if !ok {
 		return fmt.Errorf("trust: node %s is not an authorized observer: its fleet.peer record carries no anchor endorsement", short(pr.NodeID))
@@ -314,15 +349,69 @@ func (p *Policy) AuthorizeObserver(_ context.Context, pr ports.Principal, subjec
 		return fmt.Errorf("trust: node %s is not an authorized observer: %w", short(pr.NodeID), err)
 	}
 	for id, rec := range records {
-		if id >= pr.NodeID || !bytes.Equal(rec.Endorsement.AnchorKey, anchorKey) {
+		if id == pr.NodeID || !outranks(id, rec, pr.NodeID, own) || !bytes.Equal(rec.Endorsement.AnchorKey, anchorKey) {
 			continue
 		}
 		if _, err := p.endorsedKey(id, rec); err == nil {
-			return fmt.Errorf("trust: node %s is not counted as an observer: its anchor key already counts through node %s",
+			return fmt.Errorf("trust: node %s is not counted as an observer: its anchor key counts through node %s, whose endorsement is fresher",
 				short(pr.NodeID), short(id))
 		}
 	}
 	return nil
+}
+
+// outranks reports whether node id's record rec is the one counted before
+// node self's record own under one anchor key: rec was issued later, or at
+// the same instant by a lower NodeID, so every node reading the same records
+// admits the same one. AuthorizeObserver calls it before any signature
+// check, so only records that could displace the observer cost one.
+func outranks(id ports.NodeID, rec EndorsedRecord, self ports.NodeID, own EndorsedRecord) bool {
+	if rec.IssuedAt != own.IssuedAt {
+		return rec.IssuedAt > own.IssuedAt
+	}
+	return id < self
+}
+
+// endorsementVerifies reports whether rec's endorsement is a valid signature
+// by its own anchor key over (id, rec's identity key, rec's IssuedAt),
+// checking each distinct record (endorsementDigest) once. endorsedKey calls
+// it after the cheap checks (key bind, listed key) have passed.
+func (p *Policy) endorsementVerifies(id ports.NodeID, rec EndorsedRecord) bool {
+	d := endorsementDigest(id, rec)
+	p.verifiedMu.Lock()
+	ok, cached := p.verified[d]
+	p.verifiedMu.Unlock()
+	if cached {
+		return ok
+	}
+	ok = verifyAnchorEndorsement(rec.Endorsement, id, rec.NodeKey, rec.IssuedAt)
+	p.verifiedMu.Lock()
+	p.verified[d] = ok
+	p.verifiedMu.Unlock()
+	return ok
+}
+
+// pruneVerified keeps the signature cache bounded by the records the
+// endorsement source holds: once it holds more than twice their count (plus
+// a floor, so a small table is not swept on every check) it keeps only the
+// digests of records in records. AuthorizeObserver calls it after each
+// check, so a peer churning bogus records grows the cache by at most that
+// bound, which swarm's own record caps bound in turn.
+func (p *Policy) pruneVerified(records map[ports.NodeID]EndorsedRecord) {
+	const floor = 64
+	p.verifiedMu.Lock()
+	defer p.verifiedMu.Unlock()
+	if len(p.verified) <= 2*len(records)+floor {
+		return
+	}
+	kept := make(map[[sha256.Size]byte]bool, len(records))
+	for id, rec := range records {
+		d := endorsementDigest(id, rec)
+		if ok, cached := p.verified[d]; cached {
+			kept[d] = ok
+		}
+	}
+	p.verified = kept
 }
 
 // endorsedKey returns the anchor key under which rec's endorsement admits id:
@@ -339,7 +428,7 @@ func (p *Policy) endorsedKey(id ports.NodeID, rec EndorsedRecord) (ed25519.Publi
 	if !listed {
 		return nil, errors.New("its endorsement is signed by an anchor key the mesh document does not list")
 	}
-	if !rec.Endorsement.verify(id, rec.NodeKey, rec.IssuedAt) {
+	if !p.endorsementVerifies(id, rec) {
 		return nil, errors.New("its anchor endorsement does not verify")
 	}
 	return rec.Endorsement.AnchorKey, nil

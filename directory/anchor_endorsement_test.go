@@ -54,45 +54,79 @@ func newTestAnchorKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
 	return pub, priv
 }
 
-// One node per anchor key is an observer: the lowest NodeID among the nodes a
-// key validly endorses. Once that node's record is gone the next one counts,
-// and a node under another listed key counts beside it.
+// reissuedAt is rec re-signed by holder at issuedAt, as node id's next
+// fleet.peer record carries it.
+func reissuedAt(t *testing.T, holder ed25519.PrivateKey, id ports.NodeID, rec EndorsedRecord, issuedAt int64) EndorsedRecord {
+	t.Helper()
+	v, err := SignAnchorEndorsement(holder, id, rec.NodeKey, issuedAt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := ParseAnchorEndorsement(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return EndorsedRecord{NodeKey: rec.NodeKey, IssuedAt: issuedAt, Endorsement: e}
+}
+
+// One node per anchor key is an observer: the node whose valid endorsement
+// under that key is the freshest (the highest IssuedAt), and at an equal
+// IssuedAt the lower NodeID. Once that node's record is gone the next one
+// counts, a node under another listed key counts beside it, and a fresher
+// record whose endorsement does not verify displaces nobody.
 func TestAuthorizeObserverCountsOneNodePerAnchorKey(t *testing.T) {
 	ctx := context.Background()
 	pubA, privA := newTestAnchorKey(t)
 	pubB, privB := newTestAnchorKey(t)
-	id1, key1, rec1 := endorsedTestNode(t, privA)
-	id2, key2, rec2 := endorsedTestNode(t, privA)
-	if id2 < id1 {
-		id1, key1, rec1, id2, key2, rec2 = id2, key2, rec2, id1, key1, rec1
-	}
-	id3, key3, rec3 := endorsedTestNode(t, privB)
-	src := endorsementMap{id1: rec1, id2: rec2, id3: rec3}
+	idOld, keyOld, recOld := endorsedTestNode(t, privA)
+	idNew, keyNew, recNew := endorsedTestNode(t, privA)
+	issued := time.Now().UnixNano()
+	recOld = reissuedAt(t, privA, idOld, recOld, issued-int64(time.Minute))
+	recNew = reissuedAt(t, privA, idNew, recNew, issued)
+	idB, keyB, recB := endorsedTestNode(t, privB)
+	src := endorsementMap{idOld: recOld, idNew: recNew, idB: recB}
 	p := NewPolicy(PolicyConfig{AnchorKeys: []ed25519.PublicKey{pubA, pubB}})
 	p.SetAnchorEndorsements(src)
 
-	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: id1, PubKey: key1}, ""); err != nil {
-		t.Fatalf("the lowest node under anchor key A: %v", err)
+	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: idNew, PubKey: keyNew}, ""); err != nil {
+		t.Fatalf("the freshest node under anchor key A: %v", err)
 	}
-	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: id2, PubKey: key2}, ""); err == nil {
+	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: idOld, PubKey: keyOld}, ""); err == nil {
 		t.Fatal("a second node under anchor key A is admitted, so one holder counts twice")
 	}
-	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: id3, PubKey: key3}, ""); err != nil {
+	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: idB, PubKey: keyB}, ""); err != nil {
 		t.Fatalf("the node under anchor key B: %v", err)
 	}
-	delete(src, id1)
-	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: id2, PubKey: key2}, ""); err != nil {
-		t.Fatalf("the remaining node under anchor key A once the lower one's record is gone: %v", err)
+
+	// At an equal IssuedAt the lower NodeID counts, on every reader.
+	lo, hi := idOld, idNew
+	keyLo, keyHi := keyOld, keyNew
+	if hi < lo {
+		lo, hi, keyLo, keyHi = hi, lo, keyHi, keyLo
+	}
+	src[lo] = reissuedAt(t, privA, lo, src[lo], issued)
+	src[hi] = reissuedAt(t, privA, hi, src[hi], issued)
+	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: lo, PubKey: keyLo}, ""); err != nil {
+		t.Fatalf("the lower node at an equal IssuedAt: %v", err)
+	}
+	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: hi, PubKey: keyHi}, ""); err == nil {
+		t.Fatal("both nodes under anchor key A are admitted at an equal IssuedAt")
+	}
+	src[idOld], src[idNew] = recOld, recNew
+
+	delete(src, idNew)
+	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: idOld, PubKey: keyOld}, ""); err != nil {
+		t.Fatalf("the remaining node under anchor key A once the fresher one's record is gone: %v", err)
 	}
 
-	// A lower node whose endorsement does not verify does not displace a valid one.
-	broken := rec1
+	// A fresher node whose endorsement does not verify does not displace a valid one.
+	broken := recNew
 	broken.IssuedAt++
-	src[id1] = broken
-	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: id1, PubKey: key1}, ""); err == nil {
+	src[idNew] = broken
+	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: idNew, PubKey: keyNew}, ""); err == nil {
 		t.Fatal("an endorsement over another IssuedAt is admitted")
 	}
-	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: id2, PubKey: key2}, ""); err != nil {
+	if err := p.AuthorizeObserver(ctx, ports.Principal{NodeID: idOld, PubKey: keyOld}, ""); err != nil {
 		t.Fatalf("an invalid endorsement under the same key displaced the valid one: %v", err)
 	}
 }

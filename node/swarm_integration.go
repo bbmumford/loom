@@ -333,15 +333,19 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 
 	// Wire the observer-tombstone gate. swarm asks it on every observer
 	// attestation, inbound and local, before the attestation counts toward
-	// the K-of-N quorum. It is TrustPolicy.AuthorizeObserver over the anchor
-	// public keys the configuration lists (anchorObserverPolicy): the
-	// observer's NodeID must derive from the attestation's Sig-verified key,
-	// and its fleet.peer record, as RoleTable holds it, must carry an
-	// endorsement a listed anchor key signed over that NodeID, key and the
-	// record's IssuedAt; one node per anchor key is admitted, so the quorum
-	// counts distinct anchor keys. The anchor role a peer advertises on its
-	// own record is not read: any peer can advertise it, and with it any
-	// peer could mint attestations and evict a live node.
+	// the K-of-N quorum, and again for each attestation it holds when it
+	// counts one, handing it each attestation's subject. It is
+	// TrustPolicy.AuthorizeObserver over the anchor public keys the
+	// configuration lists (anchorObserverPolicy; SetAnchorPublicKeys replaces
+	// them from a reloaded document): the observer's NodeID must derive from
+	// the attestation's Sig-verified key, it must not be the subject, and its
+	// fleet.peer record, as RoleTable holds it, must carry an endorsement a
+	// listed anchor key signed over that NodeID, key and the record's
+	// IssuedAt; one node per anchor key is admitted, the one whose
+	// endorsement is the freshest, so the quorum counts distinct anchor keys.
+	// The anchor role a peer advertises on its own record is not read: any
+	// peer can advertise it, and with it any peer could mint attestations and
+	// evict a live node.
 	observers := anchorObserverPolicy(rt.cfg, roleTable)
 	rt.swarm.observers = observers
 	node.SetObserverRoleCheck(observerCheck(observers))

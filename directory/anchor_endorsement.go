@@ -8,6 +8,7 @@ package directory
 import (
 	"bytes"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
@@ -124,4 +125,32 @@ func (e AnchorEndorsement) verify(id ports.NodeID, nodeKey ed25519.PublicKey, is
 		return false
 	}
 	return ed25519.Verify(e.AnchorKey, anchorEndorsementMessage(id, nodeKey, issuedAt), e.Signature)
+}
+
+// verifyAnchorEndorsement is the one signature check Policy makes of a
+// record's endorsement (AnchorEndorsement.verify). Policy.endorsementVerifies
+// calls it at most once per record digest; a variable so the flood test in
+// this package counts the checks made.
+var verifyAnchorEndorsement = AnchorEndorsement.verify
+
+// endorsementDigest identifies one record's endorsement claim: the node ID,
+// its identity key, the record's IssuedAt, and the anchor key and signature
+// the record carries, each length-prefixed so no two claims share a digest
+// by splitting the same bytes differently. Two records with the same digest
+// make the same claim, so one signature check's outcome stands for both;
+// Policy.endorsementVerifies keys its cache by it, and a peer's crafted
+// record therefore cannot plant a refusal under a valid record's digest.
+func endorsementDigest(id ports.NodeID, rec EndorsedRecord) [sha256.Size]byte {
+	h := sha256.New()
+	var issued [8]byte
+	binary.BigEndian.PutUint64(issued[:], uint64(rec.IssuedAt))
+	for _, field := range [][]byte{[]byte(id), rec.NodeKey, issued[:], rec.Endorsement.AnchorKey, rec.Endorsement.Signature} {
+		var n [4]byte
+		binary.BigEndian.PutUint32(n[:], uint32(len(field)))
+		h.Write(n[:])
+		h.Write(field)
+	}
+	var d [sha256.Size]byte
+	h.Sum(d[:0])
+	return d
 }

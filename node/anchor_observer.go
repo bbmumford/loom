@@ -10,6 +10,7 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -137,10 +138,24 @@ func anchorObserverPolicy(cfg Config, table directory.AnchorEndorsements) *direc
 	if err != nil {
 		log.Printf("[SWARM] observer gate: %v; admitting under the %d keys that decode", err, len(keys))
 	}
+	reportAnchorKeyList(cfg.Anchor, keys)
+	pc.AnchorKeys = keys
+	p := directory.NewPolicy(pc)
+	p.SetAnchorEndorsements(table)
+	return p
+}
+
+// reportAnchorKeyList logs what the observer gate's anchor key list keys
+// leaves out: every endorsed observer when it is empty, and this node's own
+// endorsement when the anchor private key a holds is not listed, which
+// peers reading the same list then refuse. anchorObserverPolicy calls it at
+// boot and SetAnchorPublicKeys on every reloaded list, so a re-signed
+// document is reported as the booted one was.
+func reportAnchorKeyList(a AnchorConfig, keys []ed25519.PublicKey) {
 	if len(keys) == 0 {
 		log.Printf("[SWARM] observer gate: no anchor public key configured, so no endorsed observer is admitted")
 	}
-	if priv, ok := anchorPrivateKey(cfg.Anchor); ok {
+	if priv, ok := anchorPrivateKey(a); ok {
 		own := priv.Public().(ed25519.PublicKey)
 		listed := false
 		for _, k := range keys {
@@ -150,22 +165,44 @@ func anchorObserverPolicy(cfg Config, table directory.AnchorEndorsements) *direc
 			log.Printf("[SWARM] observer gate: this node's anchor key is not among the listed anchor public keys, so peers do not admit its endorsement")
 		}
 	}
-	pc.AnchorKeys = keys
-	p := directory.NewPolicy(pc)
-	p.SetAnchorEndorsements(table)
-	return p
+}
+
+// SetAnchorPublicKeys replaces the anchor public keys under which the
+// observer gate InitSwarm wired admits an endorsement with publicKeys: hex
+// Ed25519 keys, one per anchor-key holder, read as anchorPublicKeys reads
+// Config.Anchor.PublicKeys (trimmed, each key once). The composition root
+// calls it with the list a reloaded signed mesh document names (meshcfg's
+// HolderPublicKeys), as its partition-key reloader calls UpdatePartitionKeys,
+// so a holder a re-signed document adds counts, and one it drops stops
+// counting, without a restart. An entry that does not decode is left out and
+// named (not its value) in the returned error while the keys that decode
+// apply, as InitSwarm's gate reads the booted list. It refuses a runtime
+// whose InitSwarm has not built the gate, which holds no list to replace.
+// The snapshot keys bootstrapFromAnchor read at boot are not changed: a
+// bootstrap happens once.
+func (rt *Runtime) SetAnchorPublicKeys(publicKeys []string) error {
+	si := rt.Swarm()
+	if si == nil || si.observers == nil {
+		return errors.New("node: no observer gate to update (InitSwarm has not run)")
+	}
+	keys, err := anchorPublicKeys(AnchorConfig{PublicKeys: publicKeys})
+	reportAnchorKeyList(rt.cfg.Anchor, keys)
+	si.observers.SetAnchorKeys(keys)
+	return err
 }
 
 // observerCheck adapts policy.AuthorizeObserver to swarm's observer gate
 // (Node.SetObserverRoleCheck), which swarm calls on every observer
-// attestation before it counts toward the K-of-N quorum, local ones included.
-// swarm hands the gate no attestation target, so the subject passed is empty
-// and AuthorizeObserver's self-attestation refusal never fires through it.
-func observerCheck(policy ports.TrustPolicy) func(swarm.NodeID, []byte) bool {
+// attestation before it counts toward the K-of-N quorum, local ones included,
+// with the observer, its Sig-verified key and the attestation's subject.
+// The subject is passed on, so AuthorizeObserver refuses a node attesting
+// about itself: swarm's own refusal of that (PublishObserverTombstone) binds
+// only an honest sender, and a crafted self-attestation reaches this gate.
+func observerCheck(policy ports.TrustPolicy) func(swarm.NodeID, []byte, swarm.NodeID) bool {
 	var refused atomic.Uint64
-	return func(id swarm.NodeID, pub []byte) bool {
+	return func(id swarm.NodeID, pub []byte, subject swarm.NodeID) bool {
 		err := policy.AuthorizeObserver(context.Background(),
-			ports.Principal{NodeID: ports.NodeID(string(id)), PubKey: ed25519.PublicKey(pub)}, "")
+			ports.Principal{NodeID: ports.NodeID(string(id)), PubKey: ed25519.PublicKey(pub)}, ports.NodeID(string(subject)))
 		if err != nil {
 			if n := refused.Add(1); n <= 10 || n%100 == 0 {
 				log.Printf("[SWARM] observer attestation from %s dropped: %v (#%d)", truncID(string(id)), err, n)
