@@ -248,8 +248,19 @@ func isRouteRefusal(err error) bool {
 // refusal of the caller's authority: by RPCServer.executeLocal from the refusal
 // its registry reports (handlers.RPCResponse.Denied), and by
 // RPCServer.handleRequest from its refusal of the principal the caller sent; a
-// handler chooses that kind by returning an error wrapping scope.ErrDenied, and
-// can set no other key.
+// handler chooses that kind by returning an error wrapping scope.ErrDenied.
+// The conflict kind is written through StampConflict alone, for a handler's
+// conflict with the state it holds: a handler chooses it by returning an error
+// wrapping ErrConflict. A handler can set no other key. A kind is a string
+// value in the response's Metadata map, which StampRefusal, StampDenial and
+// StampConflict write and responseError reads, and no field of the wire
+// message, so a kind the reading node does not know reads as a handler
+// rejection (responseError's default).
+//
+// TODO: RPCServer.executeLocal calls StampDenial alone and handlers.RPCResponse
+// carries Denied alone, so a conflict a handler on another node answers still
+// reaches HWPCaller's caller as a handler rejection; LocalCaller.Call and
+// node's local dispatcher likewise return it as text.
 const (
 	refusalKindKey       = "refusal"
 	refusalKindGrade     = "grade"
@@ -258,6 +269,7 @@ const (
 	refusalKindAdverts   = "adverts"
 	refusalKindNoAnswer  = "no-answerer"
 	refusalKindDenied    = "denied"
+	refusalKindConflict  = "conflict"
 
 	refusalClassKey        = "refusal.class"
 	refusalUnknownKey      = "refusal.unknown-class"
@@ -337,6 +349,53 @@ type deniedAnswer struct{ text string }
 func (e *deniedAnswer) Error() string   { return e.text }
 func (e *deniedAnswer) Unwrap() []error { return []error{rpcscope.ErrDenied, ErrHandlerError} }
 
+// ErrConflict is what a handler's conflict with the state it holds unwraps to:
+// the write names a revision older than the stored one, would duplicate a
+// record that must be unique, would pass a limit the stored state has reached,
+// or meets a change of the same record already in flight. It refuses nothing
+// about the caller's authority, so it is distinct from scope.ErrDenied: a
+// handler returns an error wrapping it, StampConflict carries it on the
+// response a node answers over the mesh, and responseError hands HWPCaller's
+// caller an error that errors.Is matches to it, which a caller answering HTTP
+// maps to 409 where it maps scope.ErrDenied to 403.
+var ErrConflict = errors.New("rpc: the request conflicts with the stored state")
+
+// Conflict returns err when it is a handler's conflict (it wraps ErrConflict)
+// and not also a refusal of the caller's authority (scope.ErrDenied), and nil
+// otherwise: the one error StampConflict stamps. A response carries one kind,
+// which responseError reads, and an error wrapping both is a denial, which
+// StampDenial stamps, so a caller refused authority over a record is not told
+// how the record's stored state stands.
+func Conflict(err error) error {
+	if errors.Is(err, ErrConflict) && !errors.Is(err, rpcscope.ErrDenied) {
+		return err
+	}
+	return nil
+}
+
+// StampConflict records err on resp when err is a handler's conflict
+// (Conflict), so the origin's HWPCaller returns an error that errors.Is
+// matches to ErrConflict (responseError) and not a handler rejection. A
+// response that succeeded, or already carries a kind (StampDenial or
+// StampRefusal stamped it first), is left as it is, as is one for any other
+// error.
+func StampConflict(resp *pb.RPCResponse, err error) {
+	if resp == nil || resp.Success || Conflict(err) == nil || resp.Metadata[refusalKindKey] != "" {
+		return
+	}
+	resp.Metadata = map[string]string{refusalKindKey: refusalKindConflict}
+}
+
+// conflictAnswer is a conflict a handler on another node answered with. Its
+// text is that node's. It unwraps to ErrConflict and, for the reason
+// deniedAnswer does, to ErrHandlerError: HWPCaller.Call keeps its last probe's
+// error wrapped only when it is an ErrHandlerError or a route refusal, and a
+// flattened conflict would drop ErrConflict.
+type conflictAnswer struct{ text string }
+
+func (e *conflictAnswer) Error() string   { return e.text }
+func (e *conflictAnswer) Unwrap() []error { return []error{ErrConflict, ErrHandlerError} }
+
 // hopRefusal is a route refusal another node made. Its text is that node's
 // own, which names the hop, and it unwraps to the typed refusal rebuilt from
 // the response, so errors.Is and errors.As see what the refusing node saw.
@@ -350,7 +409,8 @@ func (e *hopRefusal) Unwrap() error { return e.refusal }
 
 // responseError is the error for a response whose Success is false: the typed
 // refusal StampRefusal recorded on it, the handler's refusal of its caller
-// StampDenial recorded (a *deniedAnswer), or else a handler rejection. Every
+// StampDenial recorded (a *deniedAnswer), the handler's conflict StampConflict
+// recorded (a *conflictAnswer), or else a handler rejection. Every
 // place HWPCaller reads a failed response goes through it, so a route refusal
 // is never reported as ErrHandlerError, which the HTTP bridge answers as a
 // caller's mistake. A field that does not parse reads as zero; the kind alone
@@ -392,6 +452,12 @@ func responseError(handler string, resp *pb.RPCResponse) error {
 			text = rpcscope.ErrDenied.Error()
 		}
 		return &deniedAnswer{text: text}
+	case refusalKindConflict:
+		text := resp.Error
+		if text == "" {
+			text = ErrConflict.Error()
+		}
+		return &conflictAnswer{text: text}
 	default:
 		return NewHandlerError(resp.Error)
 	}
