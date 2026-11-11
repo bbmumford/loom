@@ -35,10 +35,12 @@ type meshKeepalivePaths interface {
 // and probes nothing.
 //
 // Every number it waits on comes from the session's keepalive plan, read again before each
-// wait and each probe: Interval between probes on a healthy session, ProbeTimeout per
-// probe, RetryGap between probes once one went unanswered, and Strikes unanswered probes
-// in a row before the session is let go. The plan is the peer's multipath manager's
-// (paths, multipath.Manager.KeepalivePlanFor) and, with no manager, aether.KeepalivePlanFor;
+// wait, before each probe and after each unanswered probe: Interval between probes on a
+// healthy session, ProbeTimeout per probe, RetryGap between probes once one went
+// unanswered, and Strikes unanswered probes in a row before the session is let go, held
+// to the plan read after the latest unanswered probe. The plan is the peer's multipath
+// manager's (paths, multipath.Manager.KeepalivePlanFor) and, with no manager,
+// aether.KeepalivePlanFor;
 // both derive it from the session's health monitor: SRTT, RTO, sample count and
 // Instability from the PONGs the session's control handler records, and ProbeLoss from
 // RecordKeepaliveAnswer, which this loop calls on every answered probe with the count of
@@ -100,6 +102,12 @@ func runMeshKeepalive(ctx context.Context, s aether.Session, nodeID string, path
 				}
 				break
 			}
+			// The Strikes this run of unanswered probes is held to, and the RetryGap
+			// before the next, come from the plan as it stands once this probe failed:
+			// the peer's standby can die while the probe waits (AcceptMeshConnection's
+			// cleanup calls OnPathFailure for it), and multipath.Manager.KeepalivePlanFor
+			// then reads no answering standby and raises Strikes to the no-standby floor.
+			plan = planFor()
 			log.Printf("[AETHER] %s: keepalive ping failed (%d/%d, grade=%s, timeout=%v, interval=%v): %v",
 				truncID(nodeID), attempt, plan.Strikes, grade, plan.ProbeTimeout, plan.Interval, err)
 			if attempt >= plan.Strikes {

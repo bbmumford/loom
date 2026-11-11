@@ -251,3 +251,190 @@ func TestAMeshPeersPathManagerPingsNoPath(t *testing.T) {
 		t.Fatalf("the manager's probe rounds pinged the primary %d and the standby %d times, want none", p, s)
 	}
 }
+
+// A standby going silent beside an answering primary, both sessions running their one
+// keepalive with the peer's manager: the standby reads the answering primary as its own
+// standby and is let go; AcceptMeshConnection's cleanup reports it (OnPathFailure), which
+// leaves the primary as primary; the primary's plan then reads no standby (5 strikes),
+// and the answering primary is never let go.
+func TestAStandbyGoingSilentBesideAnAnsweringPrimaryIsLetGoAlone(t *testing.T) {
+	t.Parallel()
+	primary := &keepaliveSession{health: seededHealth(), answer: func(int32) bool { return true }}
+	var silent atomic.Bool
+	standby := &keepaliveSession{health: seededHealth(), answer: func(int32) bool { return !silent.Load() }}
+	mgr := multipath.NewManager()
+	mgr.AddPath(primary, aether.ProtoNoise, 100)
+	mgr.AddPath(standby, aether.ProtoNoise, 50)
+	paths := func() meshKeepalivePaths { return mgr }
+	if got := mgr.KeepalivePlanFor(primary).Strikes; got != 2 {
+		t.Fatalf("premise: the primary beside a measured, answering standby has %d strikes, want 2", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	primaryLetGo := make(chan bool, 1)
+	go func() { primaryLetGo <- runMeshKeepalive(ctx, primary, "vl1_keepalive_answering_primary", paths) }()
+	standbyLetGo := make(chan bool, 1)
+	go func() { standbyLetGo <- runMeshKeepalive(ctx, standby, "vl1_keepalive_silent_standby", paths) }()
+
+	deadline := time.Now().Add(30 * time.Second)
+	for standby.pings.Load() < 1 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	silent.Store(true)
+	select {
+	case v := <-standbyLetGo:
+		if !v {
+			t.Fatal("the standby's keepalive ended without letting it go")
+		}
+	case <-time.After(40 * time.Second):
+		t.Fatal("the silent standby was never let go")
+	}
+	if mgr.OnPathFailure(standby) {
+		t.Error("OnPathFailure for the standby reported a failover")
+	}
+	if p, _ := mgr.PrimarySession(); p != primary {
+		t.Error("the standby's failure moved the primary")
+	}
+	if got := mgr.KeepalivePlanFor(primary).Strikes; got != 5 {
+		t.Errorf("with its standby dead the primary's plan has %d strikes, want 5", got)
+	}
+	select {
+	case <-primaryLetGo:
+		t.Fatal("the answering primary was let go")
+	case <-time.After(12 * time.Second):
+	}
+}
+
+// The peer dies: the primary and its standby go silent at once, each reading the other
+// as its standby. The with-standby floor holds only while the other path's latest probe
+// was answered, so neither is let go after a single unanswered probe.
+func TestAPrimaryAndItsStandbyGoingSilentTogetherAreEachLetGo(t *testing.T) {
+	t.Parallel()
+	var silent atomic.Bool
+	answer := func(int32) bool { return !silent.Load() }
+	primary := &keepaliveSession{health: seededHealth(), answer: answer}
+	standby := &keepaliveSession{health: seededHealth(), answer: answer}
+	mgr := multipath.NewManager()
+	mgr.AddPath(primary, aether.ProtoNoise, 100)
+	mgr.AddPath(standby, aether.ProtoNoise, 50)
+	paths := func() meshKeepalivePaths { return mgr }
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	pDone := make(chan bool, 1)
+	sDone := make(chan bool, 1)
+	go func() { pDone <- runMeshKeepalive(ctx, primary, "vl1_keepalive_both_primary", paths) }()
+	go func() { sDone <- runMeshKeepalive(ctx, standby, "vl1_keepalive_both_standby", paths) }()
+	deadline := time.Now().Add(30 * time.Second)
+	for (primary.pings.Load() < 1 || standby.pings.Load() < 1) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	silent.Store(true)
+	p0, s0 := primary.pings.Load(), standby.pings.Load()
+	for _, ch := range []chan bool{pDone, sDone} {
+		select {
+		case v := <-ch:
+			if !v {
+				t.Fatal("a keepalive ended without letting its session go")
+			}
+		case <-time.After(90 * time.Second):
+			t.Fatal("a silent session was never let go")
+		}
+	}
+	pu, su := primary.pings.Load()-p0, standby.pings.Load()-s0
+	if pu < 2 || su < 2 {
+		t.Errorf("a session was let go after a single unanswered probe (primary %d, standby %d)", pu, su)
+	}
+}
+
+// standbyDiesWhilePrimarySilent runs a primary and a standby that both answer, each
+// with its one keepalive and the peer's manager, then silences the primary; during the
+// primary's dieAt-th unanswered probe, inside its Ping and so before its keepalive acts
+// on the failure, the standby dies as AcceptMeshConnection's cleanup reports it
+// (OnPathFailure). It returns how many unanswered probes the primary's keepalive took
+// before letting it go.
+func standbyDiesWhilePrimarySilent(t *testing.T, dieAt int32, primaryID, standbyID string) int32 {
+	t.Helper()
+	var silent atomic.Bool
+	var silentFrom atomic.Int32
+	var mgr *multipath.Manager
+	var standby *keepaliveSession
+	died := make(chan bool, 1)
+	primary := &keepaliveSession{health: seededHealth()}
+	primary.answer = func(n int32) bool {
+		if !silent.Load() {
+			return true
+		}
+		if silentFrom.Load() == 0 {
+			silentFrom.Store(n)
+		}
+		if n-silentFrom.Load()+1 == dieAt {
+			died <- mgr.OnPathFailure(standby)
+		}
+		return false
+	}
+	standby = &keepaliveSession{health: seededHealth(), answer: func(int32) bool { return true }}
+	mgr = multipath.NewManager()
+	mgr.AddPath(primary, aether.ProtoNoise, 100)
+	mgr.AddPath(standby, aether.ProtoNoise, 50)
+	paths := func() meshKeepalivePaths { return mgr }
+	if got := mgr.KeepalivePlanFor(primary).Strikes; got != 2 {
+		t.Fatalf("premise: the primary beside a measured, answering standby has %d strikes, want 2", got)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+	sctx, scancel := context.WithCancel(ctx)
+	defer scancel()
+	go runMeshKeepalive(sctx, standby, standbyID, paths)
+	letGo := make(chan bool, 1)
+	go func() { letGo <- runMeshKeepalive(ctx, primary, primaryID, paths) }()
+
+	deadline := time.Now().Add(40 * time.Second)
+	for (primary.pings.Load() < 1 || standby.pings.Load() < 1) && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	silent.Store(true)
+	select {
+	case failover := <-died:
+		scancel() // the dead standby's keepalive ends with it
+		if failover {
+			t.Error("OnPathFailure for the dying standby reported a failover")
+		}
+	case <-time.After(60 * time.Second):
+		t.Fatal("the primary never reached its unanswered probe")
+	}
+	if p, _ := mgr.PrimarySession(); p != primary {
+		t.Error("the standby's death moved the primary")
+	}
+	if got := mgr.KeepalivePlanFor(primary).Strikes; got != 5 {
+		t.Errorf("with its standby dead the primary's plan has %d strikes, want 5", got)
+	}
+	select {
+	case v := <-letGo:
+		if !v {
+			t.Fatal("the primary's keepalive ended without letting it go")
+		}
+	case <-time.After(90 * time.Second):
+		t.Fatal("the silent primary was never let go")
+	}
+	return primary.pings.Load() - silentFrom.Load() + 1
+}
+
+// The standby dies during the primary's first unanswered probe: from then on the
+// primary has no standby, so it is let go at the no-standby Strikes (5).
+func TestAStandbyDyingAtThePrimarysFirstSilentProbeLeavesTheNoStandbyStrikes(t *testing.T) {
+	t.Parallel()
+	if got := standbyDiesWhilePrimarySilent(t, 1, "vl1_keepalive_dies_first_p", "vl1_keepalive_dies_first_s"); got != 5 {
+		t.Errorf("the primary was let go after %d unanswered probes, want 5 (no standby left)", got)
+	}
+}
+
+// The standby dies during the primary's second unanswered probe, the last of the
+// with-standby Strikes (2). When the keepalive decides on that probe the primary has no
+// standby, so the no-standby Strikes (5) decide it: the plan is the one read after the
+// probe failed, not before it was sent.
+func TestAStandbyDyingAtThePrimarysLastWithStandbyProbeLeavesTheNoStandbyStrikes(t *testing.T) {
+	t.Parallel()
+	if got := standbyDiesWhilePrimarySilent(t, 2, "vl1_keepalive_dies_last_p", "vl1_keepalive_dies_last_s"); got != 5 {
+		t.Errorf("the primary was let go after %d unanswered probes with its standby already dead, want 5", got)
+	}
+}
