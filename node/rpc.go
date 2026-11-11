@@ -924,9 +924,12 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 //
 // A refusal of the caller's authority, an error Dispatch returns or the Denied
 // of the response it gives, is stamped on the failed response
-// (dispatch.StampDenial): the Error text alone reaches dispatch.HWPCaller at
-// the origin as a handler failure, which the HTTP bridge proxying the call
-// would answer 400 where it answers the same refusal in its own process 403.
+// (dispatch.StampDenial), and a handler's conflict with the state it holds,
+// such an error or the response's Conflict, likewise (dispatch.StampConflict,
+// which leaves a response StampDenial stamped): the Error text alone reaches
+// dispatch.HWPCaller at the origin as a handler failure, which the HTTP bridge
+// proxying the call would answer 400 where it answers the same refusal in its
+// own process 403, or the same conflict 409.
 func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startTime time.Time) *pb.RPCResponse {
 	atomic.AddInt32(&s.activeHandlers, 1)
 	defer atomic.AddInt32(&s.activeHandlers, -1)
@@ -964,6 +967,7 @@ func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startT
 			LatencyNs: int64(time.Since(startTime)),
 		}
 		dispatch.StampDenial(failed, err)
+		dispatch.StampConflict(failed, err)
 		return failed
 	}
 	// Dispatch can return (nil, nil) — e.g. a custom RPCHandler or an
@@ -986,6 +990,7 @@ func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startT
 		LatencyNs: int64(resp.Latency),
 	}
 	dispatch.StampDenial(out, resp.Denied)
+	dispatch.StampConflict(out, resp.Conflict)
 	return out
 }
 

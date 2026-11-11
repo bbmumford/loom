@@ -57,6 +57,16 @@ var ErrAnswerersDisagree = sharedDispatch.ErrAnswerersDisagree
 // sentinel under this package's name.
 var ErrNoAnswerer = sharedDispatch.ErrNoAnswerer
 
+// ErrConflict is what a handler's conflict with the state it holds unwraps to
+// (a stale revision, a duplicate, a limit reached, a change already in
+// flight), which refuses nothing about the caller's authority. A Func chooses
+// it by returning an error wrapping it; the call's caller gets an error that
+// errors.Is matches to it, whether the handler ran on another node (the node
+// stamps it, dispatch.StampConflict) or in this process, and the HTTP bridge
+// answers it 409 where it answers ErrScopeDenied 403. It is dispatch's
+// sentinel under this package's name.
+var ErrConflict = sharedDispatch.ErrConflict
+
 // Effect is the effect class a Handler declares in its Effect field: package
 // effect's Class under this package's name, so a declaration names the type and
 // its values without a second import.

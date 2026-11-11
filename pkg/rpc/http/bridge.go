@@ -255,7 +255,7 @@ func (b *Bridge) dispatch(w http.ResponseWriter, r *http.Request, h *rpc.Handler
 //     it on this local execution path only; executeProxy leaves it to the
 //     destination, where registryShim.ExecuteRPC runs it.
 //
-// classifyHandlerStatus maps ErrScopeDenied → 403 and
+// classifyHandlerStatus maps ErrScopeDenied → 403, ErrConflict → 409 and
 // ErrWebhookSignatureInvalid / ErrWebhookSecretUnset → 401, keeping
 // status-code shaping single-sourced.
 func (b *Bridge) executeLocal(r *http.Request, h *rpc.Handler, req proto.Message) ([]byte, error) {
@@ -340,6 +340,9 @@ func classifyHandlerStatus(err error) int {
 	switch {
 	case errors.Is(err, rpc.ErrScopeDenied):
 		return http.StatusForbidden
+	case errors.Is(err, rpc.ErrConflict):
+		// After the denial: an error wrapping both refuses the caller.
+		return http.StatusConflict
 	case errors.Is(err, rpc.ErrHandlerNotFound):
 		return http.StatusNotFound
 	case errors.Is(err, rpc.ErrProxyDispatchLocal):

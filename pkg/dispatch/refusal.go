@@ -250,17 +250,14 @@ func isRouteRefusal(err error) bool {
 // RPCServer.handleRequest from its refusal of the principal the caller sent; a
 // handler chooses that kind by returning an error wrapping scope.ErrDenied.
 // The conflict kind is written through StampConflict alone, for a handler's
-// conflict with the state it holds: a handler chooses it by returning an error
+// conflict with the state it holds: by RPCServer.executeLocal from an error its
+// registry returns or the conflict its response reports
+// (handlers.RPCResponse.Conflict); a handler chooses it by returning an error
 // wrapping ErrConflict. A handler can set no other key. A kind is a string
 // value in the response's Metadata map, which StampRefusal, StampDenial and
 // StampConflict write and responseError reads, and no field of the wire
 // message, so a kind the reading node does not know reads as a handler
 // rejection (responseError's default).
-//
-// TODO: RPCServer.executeLocal calls StampDenial alone and handlers.RPCResponse
-// carries Denied alone, so a conflict a handler on another node answers still
-// reaches HWPCaller's caller as a handler rejection; LocalCaller.Call and
-// node's local dispatcher likewise return it as text.
 const (
 	refusalKindKey       = "refusal"
 	refusalKindGrade     = "grade"

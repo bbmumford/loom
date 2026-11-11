@@ -9,6 +9,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	"github.com/bbmumford/loom/node/handlers"
+	sharedDispatch "github.com/bbmumford/loom/pkg/dispatch"
 	"github.com/bbmumford/loom/pkg/rpc/effect"
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
@@ -125,9 +126,10 @@ var _ handlers.StreamHandler = (*registryShim)(nil)
 // missing secret or a signature that does not verify.
 //
 // A Func error becomes a failed response with the error's text, and with the
-// error itself as Denied when it refuses the caller's authority, so the node
-// serving the call over the mesh (RPCServer.executeLocal) answers it as a
-// refusal and not as a handler failure.
+// error itself as Denied when it refuses the caller's authority, or as Conflict
+// when it is a conflict with the state the handler holds, so the node serving
+// the call over the mesh (RPCServer.executeLocal) answers it as that refusal
+// and not as a handler failure.
 func (s *registryShim) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest) (*handlers.RPCResponse, error) {
 	fn, sig := s.handler.Func, s.handler.WebhookSignature
 	if fn == nil {
@@ -159,10 +161,11 @@ func (s *registryShim) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest)
 	protoResp, err := fn(ctx, protoReq)
 	if err != nil {
 		return &handlers.RPCResponse{
-			Success: false,
-			Error:   err.Error(),
-			Latency: time.Since(start),
-			Denied:  handlers.Denial(err),
+			Success:  false,
+			Error:    err.Error(),
+			Latency:  time.Since(start),
+			Denied:   handlers.Denial(err),
+			Conflict: sharedDispatch.Conflict(err),
 		}, nil
 	}
 

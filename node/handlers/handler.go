@@ -198,6 +198,18 @@ type RPCResponse struct {
 	// dispatcher and dispatch.LocalCaller wrap it. An HTTP bridge then answers
 	// the refusal 403 whichever of them carried it.
 	Denied error `json:"-"`
+
+	// Conflict is the handler's conflict with the state it holds behind a
+	// failed response, an error wrapping dispatch.ErrConflict and not
+	// scope.ErrDenied whose text is Error, and nil for every other outcome
+	// (dispatch.Conflict). pkg/rpc's registryShim sets it for a Func's; a
+	// handler building its own response sets it. RPCServer.executeLocal stamps
+	// it on the wire response (dispatch.StampConflict), and node's local
+	// dispatcher and dispatch.LocalCaller wrap it, so an HTTP bridge answers it
+	// 409 whichever of them carried it. It is its own field beside Denied
+	// because this package cannot import pkg/dispatch, which imports it, to
+	// test for dispatch.ErrConflict.
+	Conflict error `json:"-"`
 }
 
 // Denial returns err when it is a refusal of the caller's authority (it wraps
