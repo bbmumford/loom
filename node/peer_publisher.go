@@ -14,6 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/bbmumford/loom/directory"
 	"github.com/bbmumford/loom/pkg/rpc"
 	"github.com/bbmumford/swarm"
 	swarmpb "github.com/bbmumford/swarm/proto/pb"
@@ -518,6 +519,17 @@ func (p *PeerPublisher) publishOnce() {
 		}
 	}
 
+	// anchor_endorsement: on an anchor-key holder, its anchor key's signature
+	// over this record's node ID, identity key and IssuedAt, which peers'
+	// observer gates (anchorObserverPolicy) require before an attestation from
+	// this node counts. Signed on every publish because it covers IssuedAt.
+	issuedAt := time.Now().UnixNano()
+	if p.rt != nil {
+		if endorsement, ok := p.rt.anchorEndorsement(issuedAt); ok {
+			tags = append(tags, directory.AnchorEndorsementTag+"="+endorsement)
+		}
+	}
+
 	// saturated / backoff_until: advertise connection-budget pressure so peers
 	// stop opening fresh paths to us. The bit is recomputed here (not cached on
 	// the struct), so it is automatically correct on the 5-min TTL refresh and
@@ -545,7 +557,7 @@ func (p *PeerPublisher) publishOnce() {
 	rec := &swarmpb.PeerRecord{
 		NodeId:      nodeIDBytes,
 		Epoch:       p.epoch.Add(1),
-		IssuedAt:    time.Now().UnixNano(),
+		IssuedAt:    issuedAt,
 		Addresses:   addrs,
 		RpcHandlers: handlers,
 		Grade:       maxGrade,

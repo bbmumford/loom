@@ -38,6 +38,10 @@ type SwarmIntegration struct {
 	Transport    *MeshSwarmTransport
 	trustGate    *trustGateCounters // non-nil when Config.SwarmTrustMode is observe/enforce
 	trustShadow  *TrustShadow       // non-nil only in "observe" mode; mirrors accepted records for parity
+	// observers is the TrustPolicy the observer-attestation gate asks
+	// (anchorObserverPolicy over RoleTable); InitSwarm builds it, and tests
+	// read it to judge what the wired gate admits.
+	observers *directory.Policy
 }
 
 // trustGateCounters records the inbound trust-gate outcome on the swarm
@@ -327,16 +331,21 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 		log.Printf("[SWARM] InitSwarm: AddressTable wake hook wired -> ConnectionManager.SignalWalkerWake")
 	}
 
-	// Wire the observer-tombstone gate. Every inbound observer
-	// attestation passes through RoleTable.IsAnchorWithPubKey before
-	// counting toward the K-of-N quorum, which (a) restricts attestation
-	// authority to peers with the anchor role and (b) binds the claimed
-	// ObserverNodeID to the Sig-verified PubKey on the attestation. A
-	// non-anchor or pubkey-mismatch attestation is silently dropped;
-	// without this gate any peer could mint attestations and the K-of-N
-	// quorum would be trivially Sybil-defeatable.
-	node.SetObserverRoleCheck(roleTable.IsAnchorWithPubKey)
-	log.Printf("[SWARM] InitSwarm: observer-tombstone gate wired (anchor + pubkey binding)")
+	// Wire the observer-tombstone gate. swarm asks it on every observer
+	// attestation, inbound and local, before the attestation counts toward
+	// the K-of-N quorum. It is TrustPolicy.AuthorizeObserver over the anchor
+	// public keys the configuration lists (anchorObserverPolicy): the
+	// observer's NodeID must derive from the attestation's Sig-verified key,
+	// and its fleet.peer record, as RoleTable holds it, must carry an
+	// endorsement a listed anchor key signed over that NodeID, key and the
+	// record's IssuedAt; one node per anchor key is admitted, so the quorum
+	// counts distinct anchor keys. The anchor role a peer advertises on its
+	// own record is not read: any peer can advertise it, and with it any
+	// peer could mint attestations and evict a live node.
+	observers := anchorObserverPolicy(rt.cfg, roleTable)
+	rt.swarm.observers = observers
+	node.SetObserverRoleCheck(observerCheck(observers))
+	log.Printf("[SWARM] InitSwarm: observer-tombstone gate wired (anchor-key endorsement on fleet.peer)")
 
 	// Plumb the anchor role into the swarm Node's role enum.
 	//

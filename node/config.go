@@ -14,9 +14,23 @@ import (
 	"github.com/bbmumford/loom/ports"
 )
 
-// AnchorConfig holds configuration for secure bootstrapping via signed snapshots
+// AnchorConfig holds the anchor keys: every anchor-key holder's anchor public
+// key, hex Ed25519, and on a holder its own anchor private key.
+//
+// PublicKey and PublicKeys are read together as one list (anchorPublicKeys:
+// PublicKey first, each key once), so a composition root naming one key in
+// PublicKey hands a one-entry list. bootstrapFromAnchor accepts a snapshot
+// that verifies under any listed key, and InitSwarm's observer gate admits an
+// attestation only from a node whose fleet.peer record carries an endorsement
+// a listed key signed, counting each key once. One pair per holder is why it
+// is a list: each holder signs its snapshots and endorsements with its own key.
+//
+// PrivateKey (hex, 64-byte Ed25519 private key) is set only on a holder: it
+// makes the node anchor-capable, signs its snapshots (startAnchorService) and
+// the endorsement PeerPublisher puts on its fleet.peer record.
 type AnchorConfig struct {
 	PublicKey  string
+	PublicKeys []string
 	PrivateKey string
 }
 

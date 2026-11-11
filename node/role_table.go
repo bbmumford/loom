@@ -34,12 +34,10 @@ type PeerInfo struct {
 	MaxGrade    int
 	Updated     time.Time
 	// PubKey is the Sig-verified Ed25519 public key carried on the
-	// PeerRecord swarm.Record envelope. Captured so the observer-
-	// tombstone gate (IsAnchorWithPubKey) can bind a claimed
-	// ObserverNodeID to the Sig-verified pubkey on the attestation,
-	// closing the Sybil hole where a malicious peer could mint a fake
-	// (NodeID, PubKey) pair and have its attestations counted toward
-	// the K-of-N quorum.
+	// PeerRecord swarm.Record envelope. AnchorEndorsements hands it to the
+	// observer-tombstone gate (directory.Policy.AuthorizeObserver), which
+	// requires the attestation's key to be the one that signed the record
+	// whose anchor endorsement it checks, and IsAnchorWithPubKey compares it.
 	PubKey []byte
 
 	// Saturated reports that the peer advertised connection-budget
@@ -256,17 +254,16 @@ func (t *RoleTable) PeerInfo(nodeID string) (PeerInfo, bool) {
 	return info, ok
 }
 
-// IsAnchorWithPubKey is the swarm observer-tombstone gate. It returns
-// true when nodeID is in the RoleTable with the "anchor" role AND the
-// supplied pubKey byte-for-byte matches the PubKey on that peer's most
-// recent PeerRecord. Used by node.SetObserverRoleCheck to bind a claimed
-// ObserverNodeID to its Sig-verified pubkey before counting the
-// attestation toward the K-of-N quorum — without this bind, a Sybil
-// attacker could claim any NodeID and supply their own keypair.
+// IsAnchorWithPubKey reports whether nodeID is in the RoleTable with the
+// "anchor" role on its own record AND the supplied pubKey byte-for-byte
+// matches the PubKey on that peer's most recent PeerRecord. The role is
+// self-advertised, so the answer authorises nothing: InitSwarm's observer
+// gate does not read it (it asks directory.Policy.AuthorizeObserver over
+// anchor-key endorsements, anchorObserverPolicy), and no production caller
+// reads it.
 //
 // Returns false when the peer is unknown, has no anchor role, the
-// pubkeys don't match exactly, or the supplied pubKey is empty (refuse
-// the obvious bypass attempt).
+// pubkeys don't match exactly, or the supplied pubKey is empty.
 func (t *RoleTable) IsAnchorWithPubKey(nodeID swarm.NodeID, pubKey []byte) bool {
 	if len(pubKey) == 0 {
 		return false
@@ -326,8 +323,8 @@ func (t *RoleTable) onRecord(r swarm.Record) error {
 		return nil
 	}
 	// Capture the Sig-verified pubkey on the record envelope so the
-	// observer-tombstone gate can bind a claimed observer NodeID to its
-	// pubkey on attestations — see IsAnchorWithPubKey.
+	// observer-tombstone gate can require an attestation's key to be the one
+	// that signed this record (AnchorEndorsements).
 	if len(r.PubKey) > 0 {
 		info.PubKey = append([]byte(nil), r.PubKey...)
 	}
