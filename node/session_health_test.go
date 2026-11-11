@@ -56,8 +56,8 @@ func (s *healthSession) OnClose(func())                          {}
 
 var _ aether.Connection = (*healthSession)(nil)
 
-// aether.HealthReporter + aether.Pingable — the two optional interfaces
-// checkSession type-asserts.
+// aether.HealthReporter, which checkSession type-asserts, and aether.Pingable,
+// whose SendPing counts any PING the monitor sends to a session that could take one.
 func (s *healthSession) LastActivity() time.Time             { return s.lastActivity }
 func (s *healthSession) RTT() (time.Duration, time.Duration) { return 0, 0 }
 func (s *healthSession) IsAlive(time.Duration) bool          { return s.alive }
@@ -307,20 +307,14 @@ func TestCheckSessionVerdicts(t *testing.T) {
 		}
 	})
 
-	t.Run("missed pings at the limit evict", func(t *testing.T) {
+	// The session's own keepalive lets a silent peer go at its plan's Strikes; a
+	// missed-ping count is the keepalive's measurement, not a monitor verdict.
+	t.Run("missed pings at MaxMissedPings are no verdict", func(t *testing.T) {
 		s := healthy("n")
 		s.missedPings = 3 // == MaxMissedPings
-		if got := m.checkSession(s); got != "max missed pings exceeded" {
-			t.Fatalf("verdict = %q at exactly MaxMissedPings, want eviction — "+
-				"an off-by-one here keeps a dead session forever", got)
-		}
-	})
-
-	t.Run("one below the limit does not evict", func(t *testing.T) {
-		s := healthy("n")
-		s.missedPings = 2
 		if got := m.checkSession(s); got != "" {
-			t.Fatalf("verdict = %q one ping below the limit, want kept", got)
+			t.Fatalf("verdict = %q at MaxMissedPings, want kept — the session's "+
+				"keepalive, not a fixed count in the monitor, lets a silent peer go", got)
 		}
 	})
 
@@ -333,31 +327,41 @@ func TestCheckSessionVerdicts(t *testing.T) {
 	})
 }
 
-// An overdue pong triggers a ping, and a ping that FAILS counts toward the
-// missed-ping budget rather than being swallowed.
-func TestOverduePongSendsAPingAndFailuresCountTowardTheBudget(t *testing.T) {
+// The monitor is no prober: a session's one keepalive probes it, and
+// health.Monitor holds one pending probe sequence, so a PING from the monitor
+// would replace the keepalive's and take its answer. An overdue pong, a failing
+// transport or a missed-ping count at the limit sends nothing and evicts nothing;
+// the sweep alone, run by the monitor loop, sends no PING either.
+func TestTheMonitorSendsNoPing(t *testing.T) {
 	cfg := relay.HealthConfig{IdleTimeout: time.Hour, MaxMissedPings: 3, PingInterval: time.Millisecond}
-	m := NewSessionHealthMonitor(cfg)
+	m, ev := monitorForTest(t, cfg)
 
-	s := healthy("n")
-	s.lastPong = time.Now().Add(-time.Hour) // long overdue
-	if got := m.checkSession(s); got != "" {
-		t.Fatalf("verdict = %q, want kept — one overdue pong is a reason to "+
-			"ping, not to evict", got)
-	}
-	if s.pingCalls.Load() != 1 {
-		t.Fatalf("SendPing called %d times for an overdue pong, want 1 — "+
-			"liveness is never probed and the session dies silently",
-			s.pingCalls.Load())
-	}
-
-	failing := healthy("n")
+	overdue := healthy("node-overdue")
+	overdue.lastPong = time.Now().Add(-time.Hour) // long overdue
+	failing := healthy("node-failing")
 	failing.lastPong = time.Now().Add(-time.Hour)
 	failing.pingErr = errors.New("transport down")
-	failing.missedPings = 2 // one failure away from the limit
-	if got := m.checkSession(failing); got != "ping send failures" {
-		t.Fatalf("verdict = %q after a ping send failure at the limit, want "+
-			"eviction — a transport that cannot even send is being kept", got)
+	failing.missedPings = 2
+	for _, s := range []*healthSession{overdue, failing} {
+		if got := m.checkSession(s); got != "" {
+			t.Fatalf("verdict = %q for %s, want kept — the session's keepalive "+
+				"decides when a silent peer goes", got, s.nodeID)
+		}
+	}
+	m.Register(overdue)
+	m.Register(failing)
+	m.checkAllSessions()
+	time.Sleep(20 * time.Millisecond)
+
+	if n := overdue.pingCalls.Load() + failing.pingCalls.Load(); n != 0 {
+		t.Fatalf("the monitor sent %d PINGs — it is a second prober beside the "+
+			"session's keepalive and takes the keepalive's answers", n)
+	}
+	if got := failing.missedPings; got != 2 {
+		t.Fatalf("the monitor moved the missed-ping count to %d, want 2 untouched", got)
+	}
+	if got := ev.all(); len(got) != 0 {
+		t.Fatalf("the sweep evicted %v, want nothing", got)
 	}
 }
 

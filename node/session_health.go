@@ -21,9 +21,15 @@ type sessionEntry struct {
 	lastUsed time.Time
 }
 
-// SessionHealthMonitor tracks and monitors active VL1 sessions for health.
-// It sends periodic pings, detects idle sessions, evicts unhealthy ones,
-// and performs LRU eviction when at capacity.
+// SessionHealthMonitor holds the sessions Runtime.RegisterSession hands it (the QUIC
+// fallback listener's sessions and the external relay sessions RegisterExternalSession
+// adds), closes one that reports itself closed or idle past IdleTimeout, and evicts the
+// least recently active one past MaxSessions. It sends no PING and keeps no missed-ping
+// verdict: a session's liveness probe is its one keepalive (runMeshKeepalive on the mesh
+// session AcceptMeshConnection runs over it, aether.RunKeepalive for a session held
+// outside a node runtime), whose plan quality.Keepalive derives from that session's
+// measurements, and health.Monitor holds one pending probe sequence, so a PING from
+// here would replace the keepalive's and take its answer.
 type SessionHealthMonitor struct {
 	config   relay.HealthConfig
 	sessions map[aether.NodeID]*list.Element // Map to LRU list element
@@ -200,8 +206,8 @@ func (m *SessionHealthMonitor) evictLRULocked() {
 func (m *SessionHealthMonitor) Start() {
 	m.wg.Add(1)
 	go m.monitorLoop()
-	log.Printf("[SESSION_HEALTH] Monitor started (ping interval: %v, idle timeout: %v, max missed: %d)",
-		m.config.PingInterval, m.config.IdleTimeout, m.config.MaxMissedPings)
+	log.Printf("[SESSION_HEALTH] Monitor started (sweep interval: %v, idle timeout: %v, max sessions: %d)",
+		m.config.PingInterval, m.config.IdleTimeout, m.config.MaxSessions)
 }
 
 // Stop terminates the health monitor. Idempotent.
@@ -226,7 +232,9 @@ func (m *SessionHealthMonitor) ActiveCount() int {
 	return len(m.sessions)
 }
 
-// monitorLoop runs periodically to check session health.
+// monitorLoop sweeps every session once per config.PingInterval (checkAllSessions).
+// The sweep sends nothing to a peer; the interval only bounds how long a closed or
+// idle session holds its slot.
 func (m *SessionHealthMonitor) monitorLoop() {
 	defer m.wg.Done()
 
@@ -273,15 +281,15 @@ func (m *SessionHealthMonitor) checkAllSessions() {
 	}
 }
 
-// checkSession performs health check on a single session.
-// Returns eviction reason if session should be evicted, empty string if healthy.
+// checkSession returns the reason checkAllSessions evicts session for, or "" to keep
+// it: a session that reports itself closed, or one that tracks activity and has been
+// idle past IdleTimeout. A session that reports no health is kept. It sends no PING
+// and reads no missed-ping count; the session's keepalive lets a silent peer go.
 func (m *SessionHealthMonitor) checkSession(session aether.Connection) string {
 	hr, ok := session.(aether.HealthReporter)
 	if !ok {
 		return "" // Session doesn't support health reporting — skip
 	}
-
-	nodeID := session.RemoteNodeID()
 
 	if hr.IsClosed() {
 		return "session closed"
@@ -294,34 +302,11 @@ func (m *SessionHealthMonitor) checkSession(session aether.Connection) string {
 	// unconditional check therefore evicts EVERY healthy WS/gRPC relay session
 	// on each PingInterval, which is pure reconnect churn on exactly the
 	// fallback transports. Only trust IsAlive==false as an idle timeout when the session
-	// actually tracks activity (non-zero LastActivity); otherwise fall through to
-	// the ping-based liveness below, matching the non-HealthReporter skip above.
+	// actually tracks activity (non-zero LastActivity); otherwise keep it, matching the
+	// non-HealthReporter skip above.
 	if !hr.LastActivity().IsZero() && !hr.IsAlive(m.config.IdleTimeout) {
 		return "idle timeout exceeded"
 	}
-	if hr.MissedPings() >= m.config.MaxMissedPings {
-		return "max missed pings exceeded"
-	}
-
-	// Send ping if overdue (only if session supports it)
-	lastPong := hr.LastPongReceived()
-	if time.Since(lastPong) > m.config.PingInterval {
-		p, pingOK := session.(aether.Pingable)
-		if !pingOK {
-			return "" // Can't ping — rely on activity-based health only
-		}
-		seq, err := p.SendPing()
-		if err != nil {
-			log.Printf("[SESSION_HEALTH] Failed to send ping to %s: %v", nodeID, err)
-			missed := p.IncrementMissedPings()
-			if missed >= m.config.MaxMissedPings {
-				return "ping send failures"
-			}
-		} else {
-			dbgSessionHealth.Printf("Sent ping seq=%d to %s", seq, nodeID)
-		}
-	}
-
 	return ""
 }
 

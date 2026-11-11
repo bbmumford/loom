@@ -1931,10 +1931,14 @@ func (m *ConnectionManager) addMultipathSession(nodeID string, session aether.Se
 		// loss measurements via RecordMultipathStats below.
 		mgr.EnableWeightedLoadBalance()
 
-		// The manager's round is 5 s: RunProbeLoop (started by EnsureK and re-reading
-		// the interval every round) returns dead and flapping paths whose wait has passed
-		// to standby each round, and a dead path waits one round (deadPathWaitLocked).
-		mgr.SetProbeInterval(5 * time.Second)
+		// No cycle is fixed here (SetProbeInterval): RunProbeLoop, started by EnsureK,
+		// waits the shortest keepalive plan Interval among the live paths between rounds,
+		// and a dead path waits its own plan's Interval before a round or a pick returns
+		// it to standby (multipath probeCycleLocked, deadPathWaitLocked). Each Interval is
+		// the one runMeshKeepalive probes that path at, derived by quality.Keepalive from
+		// the path's own round trips, so a slow path is not reconsidered at a fast path's
+		// cycle.
+		//
 		// Every session added here runs runMeshKeepalive (AcceptMeshConnection), which
 		// pings it at its plan's Interval and hands each result to this manager, so the
 		// manager's rounds ping nothing: health.Monitor holds one pending probe sequence
