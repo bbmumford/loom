@@ -322,6 +322,18 @@ func (t *RoleTable) onRecord(r swarm.Record) error {
 			truncID(string(r.NodeID)), time.Since(info.Updated).Round(time.Second))
 		return nil
 	}
+	// Reject a record dated more than directory.MaxIssuedAtSkew past this
+	// node's clock. StaleNodes ages a record by its IssuedAt, so such a record
+	// outlives its publisher by the excess, and AnchorEndorsements hands its
+	// IssuedAt to the observer gate, whose freshest rule would rank it above
+	// every later record of the same holder. Self is exempt, as above; a peer
+	// whose clock runs ahead within the allowance is held.
+	if info.NodeID != t.selfNode && !info.Updated.IsZero() &&
+		info.Updated.After(time.Now().Add(directory.MaxIssuedAtSkew)) {
+		log.Printf("[SWARM] RoleTable.onRecord: DROP future-dated node=%s issuedAhead=%s",
+			truncID(string(r.NodeID)), time.Until(info.Updated).Round(time.Second))
+		return nil
+	}
 	// Capture the Sig-verified pubkey on the record envelope so the
 	// observer-tombstone gate can require an attestation's key to be the one
 	// that signed this record (AnchorEndorsements).
