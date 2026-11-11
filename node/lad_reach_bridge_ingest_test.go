@@ -47,16 +47,16 @@ func (s *stubSwarmNode) Subscribe(topic swarm.Topic, sub swarm.Subscriber) (swar
 	return func() {}, nil
 }
 
-func (s *stubSwarmNode) Start(context.Context) error                              { return nil }
-func (s *stubSwarmNode) Stop() error                                              { return nil }
-func (s *stubSwarmNode) Publish(swarm.Topic, []byte) error                        { return nil }
-func (s *stubSwarmNode) PublishKeyed(swarm.Topic, string, []byte) error           { return nil }
-func (s *stubSwarmNode) PublishKeyedTombstone(swarm.Topic, string) error          { return nil }
-func (s *stubSwarmNode) PublishTombstone(swarm.Topic) error                       { return nil }
-func (s *stubSwarmNode) PublishObserverTombstone(swarm.Topic, swarm.NodeID) error { return nil }
-func (s *stubSwarmNode) SetObserverRoleCheck(func(swarm.NodeID, []byte) bool)     {}
-func (s *stubSwarmNode) SetRole(swarm.Role) error                                 { return nil }
-func (s *stubSwarmNode) SelfRole() swarm.Role                                     { return swarm.Role(0) }
+func (s *stubSwarmNode) Start(context.Context) error                                        { return nil }
+func (s *stubSwarmNode) Stop() error                                                        { return nil }
+func (s *stubSwarmNode) Publish(swarm.Topic, []byte) error                                  { return nil }
+func (s *stubSwarmNode) PublishKeyed(swarm.Topic, string, []byte) error                     { return nil }
+func (s *stubSwarmNode) PublishKeyedTombstone(swarm.Topic, string) error                    { return nil }
+func (s *stubSwarmNode) PublishTombstone(swarm.Topic) error                                 { return nil }
+func (s *stubSwarmNode) PublishObserverTombstone(swarm.Topic, swarm.NodeID) error           { return nil }
+func (s *stubSwarmNode) SetObserverRoleCheck(func(swarm.NodeID, []byte, swarm.NodeID) bool) {}
+func (s *stubSwarmNode) SetRole(swarm.Role) error                                           { return nil }
+func (s *stubSwarmNode) SelfRole() swarm.Role                                               { return swarm.Role(0) }
 func (s *stubSwarmNode) Get(swarm.Topic, swarm.NodeID) (swarm.Record, bool) {
 	return swarm.Record{}, false
 }

@@ -266,7 +266,7 @@ func TestOneHoldersTwoAttestationsCountOnceTowardTheQuorum(t *testing.T) {
 
 // observerGateFixture is a RoleTable fed fleet.peer records directly and the
 // gate InitSwarm builds over it for the listed holders.
-func observerGateFixture(t *testing.T, listed ...anchorTestHolder) (*RoleTable, func(swarm.NodeID, []byte) bool) {
+func observerGateFixture(t *testing.T, listed ...anchorTestHolder) (*RoleTable, func(swarm.NodeID, []byte, swarm.NodeID) bool) {
 	t.Helper()
 	table, err := NewRoleTable(nil, "self")
 	if err != nil {
@@ -278,6 +278,11 @@ func observerGateFixture(t *testing.T, listed ...anchorTestHolder) (*RoleTable, 
 	}
 	return table, observerCheck(anchorObserverPolicy(Config{Anchor: AnchorConfig{PublicKeys: keys}}, table))
 }
+
+// gateTestSubject is the node the gate fixture's attestations are about: a
+// node other than every observer asked, so only the observer's standing
+// decides.
+const gateTestSubject = swarm.NodeID("attested-target")
 
 // canonicalTestNode is a fresh node identity whose NodeID derives from its key.
 func canonicalTestNode(t *testing.T) (swarm.NodeID, ed25519.PublicKey) {
@@ -313,7 +318,7 @@ func TestASelfAdvertisedAnchorIsNotAnObserver(t *testing.T) {
 		if err := table.onRecord(swarm.Record{NodeID: n.id, Body: endorsedPeerBody(t, n.id, n.pub, []string{"anchor"}, nil), PubKey: n.pub}); err != nil {
 			t.Fatal(err)
 		}
-		if gate(n.id, n.pub) {
+		if gate(n.id, n.pub, gateTestSubject) {
 			t.Fatalf("an attestation from %s, which advertises the anchor role and holds no configured anchor key, passes the observer gate", n.id)
 		}
 	}
@@ -329,11 +334,11 @@ func TestTheObserverGateAdmitsOnlyAListedHoldersEndorsementOfThatNode(t *testing
 	if err := table.onRecord(swarm.Record{NodeID: endorsedID, Body: endorsedPeerBody(t, endorsedID, endorsedPub, nil, &listed), PubKey: endorsedPub}); err != nil {
 		t.Fatal(err)
 	}
-	if !gate(endorsedID, endorsedPub) {
+	if !gate(endorsedID, endorsedPub, gateTestSubject) {
 		t.Fatal("a node endorsed by a listed anchor key is refused as an observer")
 	}
 	otherID, otherPub := canonicalTestNode(t)
-	if gate(endorsedID, otherPub) {
+	if gate(endorsedID, otherPub, gateTestSubject) {
 		t.Fatal("an attestation whose key is not the endorsed node's passes")
 	}
 
@@ -341,7 +346,7 @@ func TestTheObserverGateAdmitsOnlyAListedHoldersEndorsementOfThatNode(t *testing
 	if err := table.onRecord(swarm.Record{NodeID: strangerID, Body: endorsedPeerBody(t, strangerID, strangerPub, nil, &unlisted), PubKey: strangerPub}); err != nil {
 		t.Fatal(err)
 	}
-	if gate(strangerID, strangerPub) {
+	if gate(strangerID, strangerPub, gateTestSubject) {
 		t.Fatal("a node endorsed by an anchor key the mesh document does not list passes")
 	}
 
@@ -359,7 +364,7 @@ func TestTheObserverGateAdmitsOnlyAListedHoldersEndorsementOfThatNode(t *testing
 	if err := table.onRecord(swarm.Record{NodeID: otherID, Body: body, PubKey: otherPub}); err != nil {
 		t.Fatal(err)
 	}
-	if gate(otherID, otherPub) {
+	if gate(otherID, otherPub, gateTestSubject) {
 		t.Fatal("another node's endorsement copied onto a record passes")
 	}
 }
