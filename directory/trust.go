@@ -14,6 +14,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	aether "github.com/ORBTR/aether"
 	"github.com/bbmumford/loom/ports"
@@ -305,7 +306,9 @@ func (p *Policy) SetAnchorEndorsements(src AnchorEndorsements) {
 // latest fleet.peer record carries an endorsement that verifies under one of
 // the configured anchor keys, provided no other node holds a valid
 // endorsement under the same key that outranks it (outranks: a later
-// IssuedAt, or the same IssuedAt and a lower NodeID).
+// IssuedAt, or the same IssuedAt and a lower NodeID). A record dated more
+// than MaxIssuedAtSkew past this node's clock counts for nothing: its node is
+// not admitted and it outranks no one.
 //
 // One node per anchor key is what makes the K-of-N quorum count distinct
 // anchor keys: swarm's attestation accumulator keys its set by
@@ -344,12 +347,16 @@ func (p *Policy) AuthorizeObserver(_ context.Context, pr ports.Principal, subjec
 	if !bytes.Equal(own.NodeKey, pr.PubKey) {
 		return fmt.Errorf("trust: node %s is not an authorized observer: its fleet.peer record is signed by another key", short(pr.NodeID))
 	}
+	latest := time.Now().Add(MaxIssuedAtSkew).UnixNano()
+	if own.IssuedAt > latest {
+		return fmt.Errorf("trust: node %s is not an authorized observer: its fleet.peer record is dated more than %s past this node's clock", short(pr.NodeID), MaxIssuedAtSkew)
+	}
 	anchorKey, err := p.endorsedKey(pr.NodeID, own)
 	if err != nil {
 		return fmt.Errorf("trust: node %s is not an authorized observer: %w", short(pr.NodeID), err)
 	}
 	for id, rec := range records {
-		if id == pr.NodeID || !outranks(id, rec, pr.NodeID, own) || !bytes.Equal(rec.Endorsement.AnchorKey, anchorKey) {
+		if id == pr.NodeID || !outranks(id, rec, pr.NodeID, own, latest) || !bytes.Equal(rec.Endorsement.AnchorKey, anchorKey) {
 			continue
 		}
 		if _, err := p.endorsedKey(id, rec); err == nil {
@@ -363,9 +370,16 @@ func (p *Policy) AuthorizeObserver(_ context.Context, pr ports.Principal, subjec
 // outranks reports whether node id's record rec is the one counted before
 // node self's record own under one anchor key: rec was issued later, or at
 // the same instant by a lower NodeID, so every node reading the same records
-// admits the same one. AuthorizeObserver calls it before any signature
-// check, so only records that could displace the observer cost one.
-func outranks(id ports.NodeID, rec EndorsedRecord, self ports.NodeID, own EndorsedRecord) bool {
+// admits the same one. A rec dated after latest (unix nanoseconds: the
+// judging node's clock plus MaxIssuedAtSkew) outranks no one: ranked by a
+// date its machine's clock or its holder's key put past the judging clock,
+// it would displace every later machine of the same holder until that clock
+// reached it. AuthorizeObserver calls it before any signature check, so only
+// records that could displace the observer cost one.
+func outranks(id ports.NodeID, rec EndorsedRecord, self ports.NodeID, own EndorsedRecord, latest int64) bool {
+	if rec.IssuedAt > latest {
+		return false
+	}
 	if rec.IssuedAt != own.IssuedAt {
 		return rec.IssuedAt > own.IssuedAt
 	}

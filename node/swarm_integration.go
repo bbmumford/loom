@@ -343,6 +343,8 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	// listed anchor key signed over that NodeID, key and the record's
 	// IssuedAt; one node per anchor key is admitted, the one whose
 	// endorsement is the freshest, so the quorum counts distinct anchor keys.
+	// A record dated more than directory.MaxIssuedAtSkew past this node's
+	// clock is refused by RoleTable and counted for nothing by the policy.
 	// The anchor role a peer advertises on its own record is not read: any
 	// peer can advertise it, and with it any peer could mint attestations and
 	// evict a live node.

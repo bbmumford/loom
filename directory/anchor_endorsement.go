@@ -14,9 +14,23 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/bbmumford/loom/ports"
 )
+
+// MaxIssuedAtSkew is how far ahead of this node's clock a fleet.peer record's
+// IssuedAt may be dated and still be held. node's RoleTable.onRecord refuses a
+// peer's record dated later, and Policy.AuthorizeObserver neither admits nor
+// counts a record dated later than its own clock plus this, because the
+// freshest rule (outranks) ranks records by IssuedAt: unbounded, a record
+// from a machine whose clock ran fast outranks every later machine of the
+// same holder until the receiver's clock reaches it. It is the bound swarm's
+// inbound gate places on the HLC of the same records (Config.MaxClockSkew,
+// 10 minutes unset, which node's InitSwarm leaves unset), and a publisher
+// dates IssuedAt and its HLC by the same clock, so it refuses no record from
+// a publisher that swarm's gate admits.
+const MaxIssuedAtSkew = 10 * time.Minute
 
 // AnchorEndorsementTag is the Capabilities.tags key under which a node's
 // fleet.peer record carries its anchor endorsement, as
