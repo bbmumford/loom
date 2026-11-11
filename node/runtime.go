@@ -2600,14 +2600,13 @@ func (rt *Runtime) bootstrapFromAnchor(ctx context.Context, cfg Config) (bool, e
 		return false, nil // No candidates, skip
 	}
 
-	if cfg.Anchor.PublicKey == "" {
-		log.Printf("[NODE] Anchor candidates available but no PublicKey provided. Skipping secure bootstrap.")
-		return false, nil
-	}
-
-	pubKey, err := hex.DecodeString(cfg.Anchor.PublicKey)
+	anchorKeys, err := anchorPublicKeys(cfg.Anchor)
 	if err != nil {
-		return false, fmt.Errorf("invalid anchor public key: %w", err)
+		return false, err
+	}
+	if len(anchorKeys) == 0 {
+		log.Printf("[NODE] Anchor candidates available but no anchor public key provided. Skipping secure bootstrap.")
+		return false, nil
 	}
 
 	log.Printf("[NODE] Bootstrap: Attempting to fetch directory snapshot from %d candidates", len(candidateURLs))
@@ -2674,7 +2673,7 @@ func (rt *Runtime) bootstrapFromAnchor(ctx context.Context, cfg Config) (bool, e
 		}
 
 		// Verify signature
-		if err := anchor.Verify(&s, pubKey); err != nil {
+		if err := verifyAnchorSnapshot(&s, anchorKeys); err != nil {
 			log.Printf("[NODE] Snapshot verification failed for %s: %v", url, err)
 			fetchErr = err
 			continue

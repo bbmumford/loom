@@ -34,9 +34,10 @@ const (
 //
 // It is rooted in configured partition/anchor identity and explicit role
 // entitlement. It explicitly does NOT derive from self-advertised state:
-// RoleTable.IsAnchorWithPubKey (the observer gate the node runtime applies) is
-// a compatibility filter, not a trust root — an attacker advertising a role
-// must never become a secret recipient or an accepted observer through it.
+// RoleTable.IsAnchorWithPubKey reads a role any peer can advertise and is not
+// a trust root — an attacker advertising a role must never become a secret
+// recipient or an accepted observer through it. node's InitSwarm gates
+// observer attestations on AuthorizeObserver instead.
 //
 // Every method returns nil to allow and a non-nil error to deny; ambiguity
 // (unknown key, unknown partition, missing entitlement data) DENIES.

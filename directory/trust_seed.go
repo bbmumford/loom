@@ -6,6 +6,7 @@
 package directory
 
 import (
+	"crypto/ed25519"
 	"strings"
 
 	"github.com/bbmumford/loom/ports"
@@ -42,7 +43,7 @@ var SelfOwnedPublishPrefixes = []string{
 
 // BaselinePolicyConfig returns a PolicyConfig pre-seeded with
 // SelfOwnedPublishPrefixes as open-publish rules, so a node can always publish
-// its own records. It leaves Partitions, Observers, RoleEntitlements, and the
+// its own records. It leaves Partitions, Observers, AnchorKeys, RoleEntitlements, and the
 // restricted PublishPrefixes for the caller to fill from configured
 // identity/partition/role roots — those cannot be derived from the topic namespace.
 //
@@ -100,6 +101,12 @@ func (c PolicyConfig) Clone() PolicyConfig {
 		Partitions:          append([]string(nil), c.Partitions...),
 		Observers:           append([]ports.NodeID(nil), c.Observers...),
 		OpenPublishPrefixes: append([]string(nil), c.OpenPublishPrefixes...),
+	}
+	if c.AnchorKeys != nil {
+		out.AnchorKeys = make([]ed25519.PublicKey, len(c.AnchorKeys))
+		for i, k := range c.AnchorKeys {
+			out.AnchorKeys[i] = append(ed25519.PublicKey(nil), k...)
+		}
 	}
 	if c.RoleEntitlements != nil {
 		out.RoleEntitlements = make(map[string][]ports.NodeID, len(c.RoleEntitlements))

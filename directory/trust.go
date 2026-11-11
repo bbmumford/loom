@@ -6,8 +6,10 @@
 package directory
 
 import (
+	"bytes"
 	"context"
 	"crypto/ed25519"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -22,10 +24,11 @@ import (
 // explicitly allowed is denied; every deny returns an error naming the
 // failed check so operators can diagnose without code-diving.
 //
-// It replaces RoleTable.IsAnchorWithPubKey as the observer/secret-recipient
-// fence (that check verifies against self-advertised swarm state — an
-// attacker advertising the anchor role passes it; nothing passes here
-// without configured entitlement).
+// It is the observer fence node's InitSwarm wires (anchorObserverPolicy) and
+// the secret-recipient fence node's role takeover asks, never
+// RoleTable.IsAnchorWithPubKey, which reads the anchor role an attacker can
+// advertise; nothing passes here without configured entitlement or an
+// endorsement under a configured anchor key.
 type Policy struct {
 	mu sync.RWMutex
 
@@ -39,6 +42,13 @@ type Policy struct {
 	// observers = NodeIDs authorized to attest about other nodes
 	// (death tombstones, liveness).
 	observers map[ports.NodeID]bool
+
+	// anchorKeys holds the anchor public keys the signed mesh document
+	// lists, one per anchor-key holder, keyed by the raw key bytes.
+	// AuthorizeObserver admits a node whose fleet.peer record carries an
+	// endorsement one of them signed (endorsements supplies the records).
+	anchorKeys   map[string]bool
+	endorsements AnchorEndorsements
 
 	// publishPrefixes[rule] = set of NodeIDs allowed to publish the topics
 	// that restricted rule covers (ruleCovers); the empty rule is the
@@ -64,8 +74,13 @@ type Policy struct {
 // that dimension — construction is where openness is granted, never at
 // check time.
 type PolicyConfig struct {
-	Partitions       []string
-	Observers        []ports.NodeID
+	Partitions []string
+	Observers  []ports.NodeID
+	// AnchorKeys are the anchor public keys the signed mesh document lists,
+	// one per anchor-key holder. A node is an observer when its fleet.peer
+	// record carries an endorsement one of them signed (SetAnchorEndorsements
+	// supplies the records); each key counts once toward a K-of-N quorum.
+	AnchorKeys       []ed25519.PublicKey
 	RoleEntitlements map[string][]ports.NodeID
 	// OpenPublishPrefixes lists the rules whose topics ANY key-bound node
 	// may publish (self-owned records like fleet.peer). A rule covers topics
@@ -88,6 +103,7 @@ func NewPolicy(cfg PolicyConfig) *Policy {
 		partitions:       map[string]bool{},
 		roleEntitlements: map[string]map[ports.NodeID]bool{},
 		observers:        map[ports.NodeID]bool{},
+		anchorKeys:       map[string]bool{},
 		publishPrefixes:  map[string]map[ports.NodeID]bool{},
 		openPublish:      map[string]bool{},
 		revoked:          map[string]bool{},
@@ -97,6 +113,11 @@ func NewPolicy(cfg PolicyConfig) *Policy {
 	}
 	for _, o := range cfg.Observers {
 		p.observers[o] = true
+	}
+	for _, k := range cfg.AnchorKeys {
+		if len(k) == ed25519.PublicKeySize {
+			p.anchorKeys[string(k)] = true
+		}
 	}
 	for role, nodes := range cfg.RoleEntitlements {
 		set := map[ports.NodeID]bool{}
@@ -241,7 +262,27 @@ func (p *Policy) AuthorizeRoleEntitlement(_ context.Context, pr ports.Principal,
 	return nil
 }
 
-// AuthorizeObserver implements ports.TrustPolicy.
+// SetAnchorEndorsements names where AuthorizeObserver reads each peer's
+// fleet.peer endorsement. node's InitSwarm passes its RoleTable. Unset, only
+// the configured Observers are admitted.
+func (p *Policy) SetAnchorEndorsements(src AnchorEndorsements) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.endorsements = src
+}
+
+// AuthorizeObserver implements ports.TrustPolicy. After the key bind and the
+// self-attestation refusal it admits a configured observer, or a node whose
+// latest fleet.peer record carries an endorsement that verifies under one of
+// the configured anchor keys, provided no node with a lower NodeID also holds
+// a valid endorsement under the same key.
+//
+// The lowest-NodeID rule is what makes the K-of-N quorum count distinct anchor
+// keys: swarm's attestation accumulator keys its set by ObserverNodeID and
+// asks this check one attestation at a time, so admitting one node per anchor
+// key is the only way a holder running several machines, or minting several
+// node keys, counts once. The choice is stable while the holder's records
+// are: every node reading the same records admits the same one.
 func (p *Policy) AuthorizeObserver(_ context.Context, pr ports.Principal, subject ports.NodeID) error {
 	if err := p.VerifyNodeKey(pr.NodeID, pr.PubKey); err != nil {
 		return err
@@ -250,11 +291,58 @@ func (p *Policy) AuthorizeObserver(_ context.Context, pr ports.Principal, subjec
 		return fmt.Errorf("trust: self-attestation is the owner-tombstone path, not observation")
 	}
 	p.mu.RLock()
-	defer p.mu.RUnlock()
-	if !p.observers[pr.NodeID] {
+	configured := p.observers[pr.NodeID]
+	src := p.endorsements
+	keys := len(p.anchorKeys)
+	p.mu.RUnlock()
+	if configured {
+		return nil
+	}
+	if src == nil || keys == 0 {
 		return fmt.Errorf("trust: node %s is not an authorized observer", short(pr.NodeID))
 	}
+	records := src.AnchorEndorsements()
+	own, ok := records[pr.NodeID]
+	if !ok {
+		return fmt.Errorf("trust: node %s is not an authorized observer: its fleet.peer record carries no anchor endorsement", short(pr.NodeID))
+	}
+	if !bytes.Equal(own.NodeKey, pr.PubKey) {
+		return fmt.Errorf("trust: node %s is not an authorized observer: its fleet.peer record is signed by another key", short(pr.NodeID))
+	}
+	anchorKey, err := p.endorsedKey(pr.NodeID, own)
+	if err != nil {
+		return fmt.Errorf("trust: node %s is not an authorized observer: %w", short(pr.NodeID), err)
+	}
+	for id, rec := range records {
+		if id >= pr.NodeID || !bytes.Equal(rec.Endorsement.AnchorKey, anchorKey) {
+			continue
+		}
+		if _, err := p.endorsedKey(id, rec); err == nil {
+			return fmt.Errorf("trust: node %s is not counted as an observer: its anchor key already counts through node %s",
+				short(pr.NodeID), short(id))
+		}
+	}
 	return nil
+}
+
+// endorsedKey returns the anchor key under which rec's endorsement admits id:
+// id binds to rec's identity key and is not revoked (VerifyNodeKey), the
+// endorsement's key is a configured anchor key, and its signature verifies
+// over (id, the identity key, the record's IssuedAt).
+func (p *Policy) endorsedKey(id ports.NodeID, rec EndorsedRecord) (ed25519.PublicKey, error) {
+	if err := p.VerifyNodeKey(id, rec.NodeKey); err != nil {
+		return nil, err
+	}
+	p.mu.RLock()
+	listed := p.anchorKeys[string(rec.Endorsement.AnchorKey)]
+	p.mu.RUnlock()
+	if !listed {
+		return nil, errors.New("its endorsement is signed by an anchor key the mesh document does not list")
+	}
+	if !rec.Endorsement.verify(id, rec.NodeKey, rec.IssuedAt) {
+		return nil, errors.New("its anchor endorsement does not verify")
+	}
+	return rec.Endorsement.AnchorKey, nil
 }
 
 // AuthorizeSecretRecipient implements ports.TrustPolicy: recipients must be
