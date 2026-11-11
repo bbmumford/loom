@@ -200,15 +200,15 @@ type RPCResponse struct {
 	Denied error `json:"-"`
 
 	// Conflict is the handler's conflict with the state it holds behind a
-	// failed response, an error wrapping dispatch.ErrConflict and not
+	// failed response, an error wrapping scope.ErrConflict and not
 	// scope.ErrDenied whose text is Error, and nil for every other outcome
-	// (dispatch.Conflict). pkg/rpc's registryShim sets it for a Func's; a
-	// handler building its own response sets it. RPCServer.executeLocal stamps
-	// it on the wire response (dispatch.StampConflict), and node's local
-	// dispatcher and dispatch.LocalCaller wrap it, so an HTTP bridge answers it
-	// 409 whichever of them carried it. It is its own field beside Denied
-	// because this package cannot import pkg/dispatch, which imports it, to
-	// test for dispatch.ErrConflict.
+	// (see Conflict). dispatchRPC sets it for a middleware's refusal, pkg/rpc's
+	// registryShim for a Func's, and a handler building its own response sets
+	// it. RPCServer.executeLocal stamps it on the wire response
+	// (dispatch.StampConflict), and node's local dispatcher and
+	// dispatch.LocalCaller wrap it, so an HTTP bridge answers it 409 whichever
+	// of them carried it. It is its own field beside Denied because a response
+	// carries one kind and each reader hands on the one that is set.
 	Conflict error `json:"-"`
 }
 
@@ -216,6 +216,21 @@ type RPCResponse struct {
 // scope.ErrDenied), and nil otherwise: the value RPCResponse.Denied holds.
 func Denial(err error) error {
 	if errors.Is(err, scope.ErrDenied) {
+		return err
+	}
+	return nil
+}
+
+// Conflict returns err when it is a conflict with the state a handler holds
+// (it wraps scope.ErrConflict) and not also a refusal of the caller's
+// authority (scope.ErrDenied), and nil otherwise: the value
+// RPCResponse.Conflict holds. An error wrapping both is a denial (Denial), so
+// a caller refused authority over a record is not told how its stored state
+// stands. dispatchRPC reads a middleware's refusal with it, and
+// dispatch.Conflict is this function, so every surface judges a conflict by
+// one body.
+func Conflict(err error) error {
+	if errors.Is(err, scope.ErrConflict) && !errors.Is(err, scope.ErrDenied) {
 		return err
 	}
 	return nil
@@ -1161,7 +1176,7 @@ func (h ResolvedHandler) dispatchRPC(
 			// order) for the middlewares whose Before already completed so any
 			// resource they acquired in Before (span, semaphore, tx, counter) is
 			// released; returning straight away would leak them.
-			rejection := &RPCResponse{Success: false, Error: err.Error(), Denied: Denial(err)}
+			rejection := &RPCResponse{Success: false, Error: err.Error(), Denied: Denial(err), Conflict: Conflict(err)}
 			rr, re := rejection, err
 			for i := idx - 1; i >= 0; i-- {
 				rr, re = middleware[i].After(ctx, h.meta.Name(), rr, re)
