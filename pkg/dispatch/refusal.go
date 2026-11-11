@@ -14,6 +14,7 @@ import (
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/bbmumford/loom/grade"
+	"github.com/bbmumford/loom/node/handlers"
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 )
 
@@ -346,28 +347,26 @@ type deniedAnswer struct{ text string }
 func (e *deniedAnswer) Error() string   { return e.text }
 func (e *deniedAnswer) Unwrap() []error { return []error{rpcscope.ErrDenied, ErrHandlerError} }
 
-// ErrConflict is what a handler's conflict with the state it holds unwraps to:
-// the write names a revision older than the stored one, would duplicate a
-// record that must be unique, would pass a limit the stored state has reached,
-// or meets a change of the same record already in flight. It refuses nothing
-// about the caller's authority, so it is distinct from scope.ErrDenied: a
+// ErrConflict is what a handler's conflict with the state it holds unwraps to
+// (scope.ErrConflict, this exact value): a stale revision, a duplicate, a limit
+// reached or a change already in flight, distinct from scope.ErrDenied. A
 // handler returns an error wrapping it, StampConflict carries it on the
 // response a node answers over the mesh, and responseError hands HWPCaller's
 // caller an error that errors.Is matches to it, which a caller answering HTTP
 // maps to 409 where it maps scope.ErrDenied to 403.
-var ErrConflict = errors.New("rpc: the request conflicts with the stored state")
+var ErrConflict = rpcscope.ErrConflict
 
 // Conflict returns err when it is a handler's conflict (it wraps ErrConflict)
 // and not also a refusal of the caller's authority (scope.ErrDenied), and nil
 // otherwise: the one error StampConflict stamps. A response carries one kind,
 // which responseError reads, and an error wrapping both is a denial, which
 // StampDenial stamps, so a caller refused authority over a record is not told
-// how the record's stored state stands.
+// how the record's stored state stands. It is node/handlers' Conflict, the
+// predicate RPCResponse.Conflict is read by, so a Func's error (pkg/rpc's
+// registryShim), a middleware's refusal (dispatchRPC) and an error this
+// package stamps are judged by one body.
 func Conflict(err error) error {
-	if errors.Is(err, ErrConflict) && !errors.Is(err, rpcscope.ErrDenied) {
-		return err
-	}
-	return nil
+	return handlers.Conflict(err)
 }
 
 // StampConflict records err on resp when err is a handler's conflict
