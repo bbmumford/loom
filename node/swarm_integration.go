@@ -364,11 +364,11 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	//
 	// Every observer-tombstone emit path gates on SelfRole() == RoleAnchor: the
 	// zombie-session sweep (peer_connections.shouldEmitObserverTombstone) and
-	// the two staleness sweeps below. With the enum unset ALL of them return on
-	// their first line, so no node emits an observer attestation and the K-of-N
-	// quorum cannot fire however completely the rest of it is wired. That gate,
-	// not session-blindness in the sweeps, is what keeps departed nodes
-	// resident.
+	// the directory cache's liveness sweep below. With the enum unset both
+	// return before publishing, so no node emits an observer attestation and
+	// the K-of-N quorum cannot fire however completely the rest of it is
+	// wired. That gate, not session-blindness in the sweeps, is what keeps
+	// departed nodes resident.
 	//
 	// isAnchorCapable() is the same predicate that makes PeerPublisher advertise
 	// the "anchor" string role, so the enum and the advertised role agree by
@@ -381,36 +381,38 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 		}
 	}
 
-	// Wire the LAD liveness sweep to attest, so a node that dies abruptly can
-	// finally be forgotten by the whole mesh rather than by one node at a time.
+	// Wire the LAD liveness sweep to attest, so a node that dies abruptly is
+	// forgotten by the whole mesh rather than by one node at a time.
 	//
 	// PublishObserverTombstone's other caller is
-	// ConnectionManager.sweepZombieSessions, which reaps dead SESSIONS. A node
-	// that vanishes without ever holding a session here — every machine
-	// replaced by a deploy — is invisible to that sweep: nothing to sweep, so
-	// nothing attested, so the corpse is never collectively forgotten. The
-	// directory's 16-minute liveness sweep is the one place that DOES see it,
-	// and its verdict is local-only ("liveness-local" is deliberately not
-	// gossiped), so without this wiring every peer re-gossips the corpse back
-	// to whoever just evicted it — 11 machines carrying 40 identities, ghosts
-	// surviving 15+ hours, one node holding 3 anchor identities for 1 machine.
+	// ConnectionManager.sweepZombieSessions (through emitPeerTombstone), which
+	// reaps dead SESSIONS. A node that vanishes without ever holding a session
+	// here — every machine replaced by a deploy — is invisible to that sweep:
+	// nothing to sweep, so nothing attested. The directory cache's liveness
+	// sweep (DirectoryCache.EvictExpired, after lad's GossipLivenessTimeout of
+	// 16 minutes) is the one place that DOES see it, and its verdict is
+	// local-only: emitTombstone stores it as "liveness-local", which is not
+	// gossiped, so without this wiring any peer whose own sweep has not fired
+	// gossips the record back to the node that just evicted it.
 	//
 	// This is what joins the sweep that sees the departure to the attestation
 	// that propagates it.
 	//
 	// Safety is the quorum's job, not ours: this publishes ONE witness. It
-	// becomes a real propagating death only once K distinct anchors
-	// independently reach the same verdict within the corroboration window, so
-	// a node that merely blips cannot be evicted by whichever peer noticed
-	// first. We gate on the anchor role only because a non-anchor's attestation
-	// is dropped by the role check above and would be pure wire noise.
+	// becomes a propagating death only once K distinct anchor keys reach the
+	// same verdict within swarm's corroboration window, so a node that merely
+	// blips cannot be evicted by whichever peer noticed first. The callback
+	// publishes only while this node's swarm role is anchor (SelfRole, set
+	// above from isAnchorCapable): every receiver's observer gate
+	// (observerCheck, wired above) refuses an attestation from a node no
+	// listed anchor key endorses, so any other node's would be wire noise.
 	//
 	// Deliberately NOT reusing ConnectionManager.shouldEmitObserverTombstone:
 	// its LastGossipSeen check is the right gate for the session sweep, but the
-	// liveness sweep has already DELETED that entry by the time it reports —
-	// the check would read zero and refuse every attestation. Crossing the
+	// liveness sweep deletes that entry (DeleteGossipSeen) before it reports,
+	// so the check would read zero and refuse every attestation. Crossing the
 	// 16-minute liveness timeout IS the evidence here, and it clears that
-	// gate's 60-second silence bar by 16x.
+	// gate's observerSilenceThreshold of 60 seconds by 16x.
 	if rt.cache != nil {
 		rt.cache.SetOnLivenessEvict(func(nodeID string) {
 			if nodeID == "" || nodeID == string(rt.identity.NodeID) {
