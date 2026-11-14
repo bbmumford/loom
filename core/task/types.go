@@ -101,8 +101,14 @@ type TaskOffer struct {
 }
 
 // Bid encapsulates an executor's interest in handling a task.
+//
+// OfferToken names the offer the bid answers. The gateway drops a bid whose
+// token names another offer of the same task, so a bid sent for an offer that
+// lapsed cannot win the task's next offer; a bid with no token answers whichever
+// offer of the task is open.
 type Bid struct {
 	TaskID        string            `json:"taskId"`
+	OfferToken    string            `json:"offerToken,omitempty"`
 	NodeID        string            `json:"nodeId"`
 	Score         float64           `json:"score"`
 	ETA           time.Duration     `json:"eta"`

@@ -50,6 +50,11 @@ type GatewayConfig struct {
 	MaxAttempts                int
 	RequeueDelay               time.Duration
 	LeaseCheckInterval         time.Duration
+	// BidWindow is how long an open offer collects bids before its award rule
+	// decides over all of them. Zero decides on each bid as it arrives. A window
+	// longer than OfferTTL is cut to it, since an offer takes no bid after it
+	// expires.
+	BidWindow time.Duration
 }
 
 // Gateway coordinates task scheduling for a mesh role.
@@ -60,6 +65,11 @@ type Gateway struct {
 	clock      Clock
 	limiter    PartitionLimiter
 	principals ports.ExecutionPrincipalReader
+	// award decides an offer's winner (WithAwardRule; bidding.ScoreRule over
+	// the config's BidPolicy when none is given), and recordAward, when set,
+	// receives every decision it makes.
+	award       bidding.AwardRule
+	recordAward AwardRecorder
 
 	offers      chan task.TaskOffer
 	assignments chan task.Assignment
@@ -89,7 +99,18 @@ type offerState struct {
 	offer     task.TaskOffer
 	createdAt time.Time
 	deadline  time.Time
+	// windowEnd is when the award rule first decides; bids holds the latest bid
+	// from each node, in the order the nodes first bid; undecided is set when a
+	// bid arrived since the rule last decided.
+	windowEnd time.Time
+	bids      []task.Bid
+	undecided bool
 }
+
+// AwardRecorder receives each award decision the gateway's rule makes, with the
+// offer it decided, after the gateway's own state reflects it. It runs on the
+// gateway's goroutine and must not block.
+type AwardRecorder func(offer task.TaskOffer, decision bidding.AwardDecision)
 
 type assignmentState struct {
 	task       *task.Task
@@ -118,6 +139,20 @@ func WithLimiter(l PartitionLimiter) GatewayOption {
 // WithClock injects a custom clock implementation.
 func WithClock(clock Clock) GatewayOption {
 	return func(g *Gateway) { g.clock = clock }
+}
+
+// WithAwardRule injects the rule that decides an offer's winner over the bids
+// its window collected. A job kind supplies its own; without one the gateway
+// uses bidding.ScoreRule over the config's BidPolicy.
+func WithAwardRule(rule bidding.AwardRule) GatewayOption {
+	return func(g *Gateway) { g.award = rule }
+}
+
+// WithAwardRecorder injects the recipient of every award decision, so the
+// winner, the rule, the candidates and the ambiguity of each award are kept by
+// the consumer that answers for the award.
+func WithAwardRecorder(record AwardRecorder) GatewayOption {
+	return func(g *Gateway) { g.recordAward = record }
 }
 
 // WithExecutionPrincipalReader injects the product-owned authority seam used
@@ -163,6 +198,12 @@ func NewGateway(cfg GatewayConfig, opts ...GatewayOption) (*Gateway, error) {
 	if cfg.ID == "" {
 		cfg.ID = uuid.NewString()
 	}
+	if cfg.BidWindow < 0 {
+		cfg.BidWindow = 0
+	}
+	if cfg.BidWindow > cfg.OfferTTL {
+		cfg.BidWindow = cfg.OfferTTL
+	}
 
 	g := &Gateway{
 		id:                    cfg.ID,
@@ -193,6 +234,9 @@ func NewGateway(cfg GatewayConfig, opts ...GatewayOption) (*Gateway, error) {
 	}
 	if g.limiter == nil {
 		g.limiter = noopLimiter{}
+	}
+	if g.award == nil {
+		g.award = bidding.ScoreRule{Policy: cfg.BidPolicy}
 	}
 	g.queue.SetMaxDepth(cfg.MaxQueueDepth)
 	return g, nil
@@ -490,8 +534,12 @@ func (g *Gateway) runOfferPump(ctx context.Context) {
 }
 
 func (g *Gateway) produceOffers() {
+	var decided []awardNotice
 	g.mu.Lock()
-	defer g.mu.Unlock()
+	defer func() {
+		g.mu.Unlock()
+		g.notifyAwards(decided)
+	}()
 
 	for len(g.open) < g.config.MaxInFlightOffers {
 		t := g.queue.Pop()
@@ -514,6 +562,7 @@ func (g *Gateway) produceOffers() {
 			offer:     offer,
 			createdAt: now,
 			deadline:  offer.ExpiresAt,
+			windowEnd: now.Add(g.config.BidWindow),
 		}
 		select {
 		case g.offers <- offer:
@@ -527,14 +576,81 @@ func (g *Gateway) produceOffers() {
 			return
 		}
 	}
-	// Re-enqueue expired offers
+	// Re-enqueue expired offers; decide the offers whose bid window has closed
+	// over bids the rule has not yet seen.
 	now := g.clock.Now()
 	for id, state := range g.open {
 		if now.After(state.deadline) {
 			delete(g.open, id)
 			g.scheduleRetryLocked(state.task)
+			continue
+		}
+		if state.undecided && !now.Before(state.windowEnd) {
+			decided = append(decided, g.decideLocked(state, now))
 		}
 	}
+}
+
+// awardNotice is one decision for the recorder, taken under the gateway's lock
+// and delivered after it is released.
+type awardNotice struct {
+	offer    task.TaskOffer
+	decision bidding.AwardDecision
+}
+
+// notifyAwards hands each decision to the recorder, outside the gateway's lock.
+func (g *Gateway) notifyAwards(notices []awardNotice) {
+	if g.recordAward == nil {
+		return
+	}
+	for _, n := range notices {
+		g.recordAward(n.offer, n.decision)
+	}
+}
+
+// decideLocked asks the award rule over state's bids and, when it names a
+// winner that bid on the offer, issues that winner's assignment. A rule error
+// or a winner the window never collected leaves the offer open, to be decided
+// again when another bid arrives and to lapse at its deadline otherwise.
+func (g *Gateway) decideLocked(state *offerState, now time.Time) awardNotice {
+	state.undecided = false
+	bids := append([]task.Bid(nil), state.bids...)
+	decision, err := g.award.Award(state.offer, bids, bidding.AwardContext{
+		Now: now,
+		RecentWinner: func(node string) bool {
+			ts, ok := g.lastWin[node]
+			return ok && now.Sub(ts) < g.config.BidPolicy.MaxRecentWindow
+		},
+	})
+	if decision.Candidates == nil {
+		decision.Candidates = bids
+	}
+	switch {
+	case err != nil:
+		decision.Winner = nil
+		decision.Reason = err.Error()
+	case decision.Winner != nil:
+		winner, ok := collectedBid(bids, *decision.Winner)
+		if !ok {
+			decision.Winner = nil
+			decision.Reason = "the award rule named a bid the offer did not collect"
+			break
+		}
+		g.issueAssignmentLocked(state, &winner)
+	}
+	return awardNotice{offer: state.offer, decision: decision}
+}
+
+// collectedBid is the bid in bids from want's node. The gateway assigns that
+// collected bid rather than the rule's copy, so a rule cannot award a node, a
+// task or terms no bid in the window carried.
+func collectedBid(bids []task.Bid, want task.Bid) (task.Bid, bool) {
+	for _, b := range bids {
+		if b.NodeID == want.NodeID && b.TaskID == want.TaskID {
+			return b, true
+		}
+	}
+	return task.Bid{}, false
 }
 
 func (g *Gateway) runBidLoop(ctx context.Context) {
@@ -550,27 +666,46 @@ func (g *Gateway) runBidLoop(ctx context.Context) {
 	}
 }
 
+// handleBid records bid on its task's open offer, the latest bid from each node
+// replacing that node's earlier one. A bid for no open offer, from no node, or
+// naming another offer of the task is dropped. Once the offer's window has
+// closed, each new bid is decided at once over everything collected.
 func (g *Gateway) handleBid(bid task.Bid) {
+	var decided []awardNotice
 	g.mu.Lock()
-	defer g.mu.Unlock()
+	defer func() {
+		g.mu.Unlock()
+		g.notifyAwards(decided)
+	}()
 	state, ok := g.open[bid.TaskID]
-	if !ok {
+	if !ok || bid.NodeID == "" {
+		return
+	}
+	if bid.OfferToken != "" && bid.OfferToken != state.offer.OfferToken {
 		return
 	}
 	now := g.clock.Now()
-	recentWin := false
-	if ts, ok := g.lastWin[bid.NodeID]; ok {
-		recentWin = now.Sub(ts) < g.config.BidPolicy.MaxRecentWindow
+	if now.After(state.deadline) {
+		return
 	}
 	if bid.ReceivedAt.IsZero() {
 		bid.ReceivedAt = now
 	}
-	score := g.config.BidPolicy.Evaluate(bid, now, recentWin)
-	if score < g.config.BidPolicy.MinScore {
-		return
+	replaced := false
+	for i := range state.bids {
+		if state.bids[i].NodeID == bid.NodeID {
+			state.bids[i] = bid
+			replaced = true
+			break
+		}
 	}
-	// First sufficient bid wins immediately.
-	g.issueAssignmentLocked(state, &bid)
+	if !replaced {
+		state.bids = append(state.bids, bid)
+	}
+	state.undecided = true
+	if !now.Before(state.windowEnd) {
+		decided = append(decided, g.decideLocked(state, now))
+	}
 }
 
 func (g *Gateway) issueAssignmentLocked(state *offerState, bid *task.Bid) {
