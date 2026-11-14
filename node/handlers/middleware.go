@@ -25,5 +25,13 @@ type Middleware interface {
 	Before(ctx context.Context, handlerName string, req *RPCRequest) (context.Context, error)
 
 	// After is called after handler execution. Can inspect or modify the response.
+	//
+	// It is also handed a refusal: the handler's own, or the rejection
+	// dispatchRPC built for a later middleware's Before. When that refusal is
+	// of a kind (RPCResponse.Denied, RPCResponse.Conflict, or an error Denial
+	// or Conflict matches) and After answers it with a failure naming neither,
+	// dispatchRPC carries the refusal's kind on that answer (keepRefusalKind),
+	// so the readers of the kind still answer the caller 403 or 409. An After
+	// that means another outcome sets the kind itself or answers a success.
 	After(ctx context.Context, handlerName string, resp *RPCResponse, err error) (*RPCResponse, error)
 }
