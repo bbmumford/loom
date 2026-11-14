@@ -218,7 +218,12 @@ func (b *Bridge) dispatch(w http.ResponseWriter, r *http.Request, h *rpc.Handler
 		inj(r, req)
 	}
 
-	// 4. Execute local or proxy
+	// 4. A streamed operation answers a stream (stream.go); otherwise execute
+	//    local or proxy.
+	if h.Stream != nil {
+		b.serveStream(w, r, h, req)
+		return
+	}
 	var out []byte
 	if h.Func != nil {
 		out, err = b.executeLocal(r, h, req)
