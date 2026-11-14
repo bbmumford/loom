@@ -20,7 +20,7 @@ service TransportService {
 // Frame represents a single transport frame.
 message Frame {
   // Unique frame identifier for acknowledgment tracking
-  uint64 frame_id = 1;
+  uint64 frameId = 1;
   
   // Encrypted payload data
   bytes data = 2;
@@ -29,7 +29,7 @@ message Frame {
   FrameType type = 3;
   
   // Optional acknowledgment of received frames
-  repeated uint64 acked_frames = 4;
+  repeated uint64 ackedFrames = 4;
 }
 
 // FrameType identifies the purpose of a frame.
@@ -45,28 +45,28 @@ enum FrameType {
 // PingRequest checks connectivity.
 message PingRequest {
   // Client timestamp for RTT calculation
-  int64 timestamp_ns = 1;
+  int64 timestampNs = 1;
   
   // Client's NodeID
-  string node_id = 2;
+  string nodeId = 2;
 }
 
 // PingResponse returns pong with timestamps.
 message PingResponse {
   // Echoed client timestamp
-  int64 client_timestamp_ns = 1;
+  int64 clientTimestampNs = 1;
   
   // Server timestamp for clock skew detection
-  int64 server_timestamp_ns = 2;
+  int64 serverTimestampNs = 2;
   
   // Server's NodeID
-  string node_id = 3;
+  string nodeId = 3;
 }
 
 // Handshake initiates a secure connection.
 message Handshake {
   // Client's Ed25519 public key (NodeID)
-  bytes public_key = 1;
+  bytes publicKey = 1;
   
   // Signature over the challenge nonce
   bytes signature = 2;

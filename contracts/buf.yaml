@@ -1,2 +1,9 @@
 version: v1
 name: buf.build/bbmumford/mesh-contracts
+lint:
+  use:
+    - STANDARD
+  except:
+    # Field names are lowerCamelCase, each the JSON name protojson writes for it,
+    # so mesh_transport.proto and the pb package generated from it carry one name.
+    - FIELD_LOWER_SNAKE_CASE
