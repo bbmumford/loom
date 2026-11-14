@@ -16,6 +16,7 @@ import (
 	task "github.com/bbmumford/loom/core/task"
 	bidding "github.com/bbmumford/loom/core/task/bidding"
 	queue "github.com/bbmumford/loom/core/task/queue"
+	taskstore "github.com/bbmumford/loom/core/task/store"
 	"github.com/bbmumford/loom/ports"
 )
 
@@ -55,6 +56,19 @@ type GatewayConfig struct {
 	// longer than OfferTTL is cut to it, since an offer takes no bid after it
 	// expires.
 	BidWindow time.Duration
+	// TakeoverWindow is how long after a lease expires unrenewed its task is
+	// offered again for a takeover: each lease version's TakeoverUntil is its
+	// expiry plus this window, a winner inside it takes the task over under
+	// the store's Award with Supersedes, and a task no takeover won by then
+	// ends as OutcomeReaped. Zero releases an expired lease at once and
+	// retries the task as a new attempt.
+	TakeoverWindow time.Duration
+	// MaxWait ends a task still waiting for an award this long after its
+	// admission (OutcomeAbandoned, CauseMaxWaitElapsed). Zero sets no limit.
+	MaxWait time.Duration
+	// WaitSweepInterval is how often every waiting task is swept: MaxWait is
+	// checked and the store's KeepWaiting called. Zero takes LeaseCheckInterval.
+	WaitSweepInterval time.Duration
 }
 
 // Gateway coordinates task scheduling for a mesh role.
@@ -70,8 +84,19 @@ type Gateway struct {
 	// receives every decision it makes.
 	award       bidding.AwardRule
 	recordAward AwardRecorder
+	// store owns every admission, award, lease version and outcome
+	// (WithStore; a MemoryStore when none is given); signer signs each lease
+	// version inside the store's transaction and verifier admits a completion's
+	// receipt (WithLeaseSigner, WithReceiptVerifier; either may be nil).
+	store    taskstore.Store
+	signer   taskstore.LeaseSigner
+	verifier taskstore.ReceiptVerifier
+	// storeCtx is the context every store call runs under: Start's context,
+	// or Background before Start.
+	storeCtx context.Context
 
 	offers      chan task.TaskOffer
+	renewals    chan task.Renewal
 	assignments chan task.Assignment
 	bids        chan task.Bid
 	progress    chan task.Progress
@@ -112,13 +137,20 @@ type offerState struct {
 // gateway's goroutine and must not block.
 type AwardRecorder func(offer task.TaskOffer, decision bidding.AwardDecision)
 
+// assignmentState is a task under lease: lease is the current version the
+// store committed (nil only for a state built without the store), and
+// deadline its expiry.
 type assignmentState struct {
 	task       *task.Task
 	assignment task.Assignment
 	deadline   time.Time
 	attempt    int
+	lease      *task.Lease
 }
 
+// taskAdmission is the gateway's record of one admitted task. admittedAt
+// starts its MaxWait. supersedes, while set, is the lapsed lease a takeover
+// must replace, and takeoverUntil the end of that lease's window.
 type taskAdmission struct {
 	submitted         *task.Task
 	current           *task.Task
@@ -126,6 +158,9 @@ type taskAdmission struct {
 	partitionKey      ports.ExecutionPartitionKey
 	pinnedID          string
 	pinnedPartitionID string
+	admittedAt        time.Time
+	supersedes        *task.LeaseIdentity
+	takeoverUntil     time.Time
 }
 
 // GatewayOption allows optional configuration injection.
@@ -153,6 +188,28 @@ func WithAwardRule(rule bidding.AwardRule) GatewayOption {
 // the consumer that answers for the award.
 func WithAwardRecorder(record AwardRecorder) GatewayOption {
 	return func(g *Gateway) { g.recordAward = record }
+}
+
+// WithStore makes store the gateway's durable state. A nil store keeps the
+// MemoryStore the gateway builds.
+func WithStore(store taskstore.Store) GatewayOption {
+	return func(g *Gateway) {
+		if store != nil {
+			g.store = store
+		}
+	}
+}
+
+// WithLeaseSigner sets the signer each lease version is signed by inside the
+// store's Award and Renew.
+func WithLeaseSigner(signer taskstore.LeaseSigner) GatewayOption {
+	return func(g *Gateway) { g.signer = signer }
+}
+
+// WithReceiptVerifier sets the verifier an OK result's receipt must pass
+// before the task completes; a refused receipt fails the attempt.
+func WithReceiptVerifier(verifier taskstore.ReceiptVerifier) GatewayOption {
+	return func(g *Gateway) { g.verifier = verifier }
 }
 
 // WithExecutionPrincipalReader injects the product-owned authority seam used
@@ -204,6 +261,15 @@ func NewGateway(cfg GatewayConfig, opts ...GatewayOption) (*Gateway, error) {
 	if cfg.BidWindow > cfg.OfferTTL {
 		cfg.BidWindow = cfg.OfferTTL
 	}
+	if cfg.TakeoverWindow < 0 {
+		cfg.TakeoverWindow = 0
+	}
+	if cfg.MaxWait < 0 {
+		cfg.MaxWait = 0
+	}
+	if cfg.WaitSweepInterval <= 0 {
+		cfg.WaitSweepInterval = cfg.LeaseCheckInterval
+	}
 
 	g := &Gateway{
 		id:                    cfg.ID,
@@ -211,7 +277,10 @@ func NewGateway(cfg GatewayConfig, opts ...GatewayOption) (*Gateway, error) {
 		config:                cfg,
 		clock:                 realClock{},
 		limiter:               noopLimiter{},
+		store:                 taskstore.NewMemoryStore(),
+		storeCtx:              context.Background(),
 		offers:                make(chan task.TaskOffer, cfg.MaxInFlightOffers),
+		renewals:              make(chan task.Renewal, 128),
 		assignments:           make(chan task.Assignment, cfg.MaxInFlightOffers),
 		bids:                  make(chan task.Bid, 128),
 		progress:              make(chan task.Progress, 128),
@@ -243,11 +312,26 @@ func NewGateway(cfg GatewayConfig, opts ...GatewayOption) (*Gateway, error) {
 }
 
 // Start launches background workers that manage offers, leases, bids, and results.
-func (g *Gateway) Start(ctx context.Context) {
+//
+// Start first rehydrates from the store's Load: a waiting task is queued for
+// its next offer, a task holding an unexpired lease is held in flight to that
+// lease's expiry and not awarded again, a lapsed lease inside its takeover
+// window is offered for a takeover, and one past it ends as OutcomeReaped. A
+// Load failure is returned and starts nothing.
+func (g *Gateway) Start(ctx context.Context) error {
+	g.mu.Lock()
+	g.storeCtx = ctx
+	err := g.rehydrateLocked(ctx)
+	g.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	g.signalOfferPump()
 	go g.runOfferPump(ctx)
 	go g.runBidLoop(ctx)
 	go g.runResultLoop(ctx)
 	go g.runLeaseWatcher(ctx)
+	go g.runWaitSweeper(ctx)
 	go func() {
 		select {
 		case <-ctx.Done():
@@ -255,6 +339,116 @@ func (g *Gateway) Start(ctx context.Context) {
 		case <-g.closing:
 		}
 	}()
+	return nil
+}
+
+// rehydrateLocked admits into the gateway's memory every task the store holds
+// unended that the gateway does not already hold (a task enqueued before
+// Start is in both).
+func (g *Gateway) rehydrateLocked(ctx context.Context) error {
+	records, err := g.store.Load(ctx)
+	if err != nil {
+		return fmt.Errorf("task: rehydrate from the store: %w", err)
+	}
+	now := g.clock.Now()
+	for _, rec := range records {
+		if rec.Task == nil || rec.Task.ID == "" {
+			continue
+		}
+		if _, held := g.admissionsByID[rec.Task.ID]; held {
+			continue
+		}
+		owned := rec.Task.Clone()
+		admission := &taskAdmission{
+			current:           owned,
+			principal:         rec.Principal,
+			pinnedID:          owned.ID,
+			pinnedPartitionID: owned.Partition,
+			admittedAt:        rec.AdmittedAt,
+		}
+		if rec.Principal != nil {
+			admission.partitionKey = rec.Principal.PartitionKey()
+			g.partitionOutstanding[admission.partitionKey]++
+		}
+		g.admissionsByTask[owned] = admission
+		g.admissionsByID[owned.ID] = admission
+		switch {
+		case rec.State == taskstore.StateLeased && rec.Lease != nil && !now.After(rec.Lease.Terms.ExpiresAt):
+			owned.Status = task.TaskStatusAssigned
+			g.inFlight[owned.ID] = &assignmentState{
+				task:       owned,
+				assignment: g.assignmentFor(owned, rec.Lease),
+				deadline:   rec.Lease.Terms.ExpiresAt,
+				attempt:    owned.Attempt,
+				lease:      rec.Lease,
+			}
+		case rec.State == taskstore.StateLeased && rec.Lease != nil:
+			id := rec.Lease.Identity()
+			if now.After(rec.Lease.Terms.TakeoverUntil) {
+				g.finishLocked(owned, &id, taskstore.OutcomeReaped, taskstore.CauseTakeoverWindowElapsed, nil)
+				continue
+			}
+			admission.supersedes, admission.takeoverUntil = &id, rec.Lease.Terms.TakeoverUntil
+			g.requeueLocked(owned)
+		default:
+			g.requeueLocked(owned)
+		}
+	}
+	return nil
+}
+
+// requeueLocked puts an admitted task back on the queue for its next offer,
+// or ends it as cancelled when the queue refuses it.
+func (g *Gateway) requeueLocked(t *task.Task) {
+	t.EnqueuedAt = g.clock.Now()
+	t.Status = task.TaskStatusQueued
+	if _, accepted := g.queue.Enqueue(t); !accepted {
+		g.finishLocked(t, g.currentLeaseLocked(t), taskstore.OutcomeCancelled, taskstore.CauseQueueFull, nil)
+	}
+}
+
+// currentLeaseLocked is the identity of the lease t's admission must replace
+// on a takeover, the one Finish of a task between leases names.
+func (g *Gateway) currentLeaseLocked(t *task.Task) *task.LeaseIdentity {
+	if a, ok := g.admissionsByTask[t]; ok && a.supersedes != nil {
+		id := *a.supersedes
+		return &id
+	}
+	return nil
+}
+
+// finishLocked records t's terminal outcome in the store and releases its
+// admission. The store refusing it (a lost compare-and-set) still releases
+// the gateway's admission: the store's own record is the outcome that stands.
+func (g *Gateway) finishLocked(t *task.Task, lease *task.LeaseIdentity, outcome taskstore.Outcome, cause string, receipt []byte) {
+	_ = g.store.Finish(g.storeCtx, taskstore.Terminal{
+		TaskID: t.ID, Lease: lease, Outcome: outcome, Cause: cause, Receipt: receipt, At: g.clock.Now(),
+	})
+	switch outcome {
+	case taskstore.OutcomeCompleted:
+		t.Status = task.TaskStatusCompleted
+	case taskstore.OutcomeCancelled:
+		t.Status = task.TaskStatusCanceled
+	default:
+		t.Status = task.TaskStatusFailed
+	}
+	if state, ok := g.open[t.ID]; ok && state.task == t {
+		delete(g.open, t.ID)
+	}
+	g.releaseAdmissionLocked(t)
+}
+
+// assignmentFor is the assignment that carries lease to its holder.
+func (g *Gateway) assignmentFor(t *task.Task, lease *task.Lease) task.Assignment {
+	return task.Assignment{
+		Task:          t,
+		TaskID:        t.ID,
+		Primary:       lease.Terms.NodeID,
+		Fence:         lease.Identity().Fence(),
+		Lease:         lease.Clone(),
+		LeaseDuration: lease.Terms.ExpiresAt.Sub(lease.Terms.IssuedAt),
+		IssuedAt:      lease.Terms.IssuedAt,
+	}
 }
 
 // Stop closes internal channels once workers drain. Idempotent: stopOnce
@@ -353,6 +547,24 @@ func (g *Gateway) enqueue(t *task.Task, principal ports.ExecutionPrincipal, bind
 				partitionKey.Fingerprint(),
 			)
 		}
+	}
+	// The queue is checked before the store admits anything, so a refused
+	// producer leaves no durable admission and may enqueue the same id again.
+	if g.queue.Len() >= g.config.MaxQueueDepth {
+		g.mu.Unlock()
+		return errors.New("task: gateway queue is full")
+	}
+	var stored ports.ExecutionPrincipal
+	if bind {
+		stored = principal
+	}
+	if err := g.store.Admit(g.storeCtx, taskstore.Record{
+		Task: owned, Principal: stored, AdmittedAt: now, State: taskstore.StateWaiting,
+	}); err != nil {
+		g.mu.Unlock()
+		return fmt.Errorf("task: admit: %w", err)
+	}
+	if bind {
 		g.partitionOutstanding[partitionKey]++
 	}
 
@@ -363,11 +575,14 @@ func (g *Gateway) enqueue(t *task.Task, principal ports.ExecutionPrincipal, bind
 		partitionKey:      partitionKey,
 		pinnedID:          owned.ID,
 		pinnedPartitionID: owned.Partition,
+		admittedAt:        now,
 	}
 	g.admissionsBySubmitted[t] = admission
 	g.admissionsByTask[owned] = admission
 	g.admissionsByID[owned.ID] = admission
 	if _, accepted := g.queue.Enqueue(owned); !accepted {
+		_ = g.store.Finish(g.storeCtx, taskstore.Terminal{TaskID: owned.ID, Outcome: taskstore.OutcomeCancelled,
+			Cause: taskstore.CauseQueueFull, At: now})
 		owned.Status = task.TaskStatusFailed
 		g.releaseAdmissionLocked(owned)
 		g.mu.Unlock()
@@ -546,6 +761,11 @@ func (g *Gateway) produceOffers() {
 		if t == nil {
 			break
 		}
+		if _, admitted := g.admissionsByTask[t]; !admitted {
+			// ended while it waited in the queue (MaxWait, a takeover window,
+			// the store ending its wait)
+			continue
+		}
 		now := g.clock.Now()
 		offer := task.TaskOffer{
 			// Offer consumers need the immutable ID and body to decide whether
@@ -581,8 +801,10 @@ func (g *Gateway) produceOffers() {
 	now := g.clock.Now()
 	for id, state := range g.open {
 		if now.After(state.deadline) {
+			// No award: the offer lapses and the task waits for its next
+			// offer, bounded by MaxWait and the store's KeepWaiting.
 			delete(g.open, id)
-			g.scheduleRetryLocked(state.task)
+			g.requeueLocked(state.task)
 			continue
 		}
 		if state.undecided && !now.Before(state.windowEnd) {
@@ -712,21 +934,36 @@ func (g *Gateway) issueAssignmentLocked(state *offerState, bid *task.Bid) {
 	t := state.task
 	delete(g.open, t.ID)
 	now := g.clock.Now()
-	fence := uuid.NewString()
-	assignment := task.Assignment{
-		Task:          t,
-		TaskID:        t.ID,
-		Primary:       bid.NodeID,
-		Fence:         fence,
-		LeaseDuration: g.config.LeaseDuration,
-		IssuedAt:      now,
+	admission, admitted := g.admissionsByTask[t]
+	if !admitted {
+		return
 	}
+	expires := now.Add(g.config.LeaseDuration)
+	lease, err := g.store.Award(g.storeCtx, taskstore.Award{
+		TaskID: t.ID, NodeID: bid.NodeID, Attempt: t.Attempt, At: now, ExpiresAt: expires,
+		TakeoverUntil: expires.Add(g.config.TakeoverWindow), Supersedes: admission.supersedes,
+	}, g.signer)
+	if err != nil {
+		// The award committed nothing. A store that answers the task ended,
+		// unknown, or a takeover stale ends the gateway's admission; any other
+		// failure (a signing failure among them) offers the task again.
+		if errors.Is(err, taskstore.ErrEnded) || errors.Is(err, taskstore.ErrUnknownTask) || errors.Is(err, taskstore.ErrStale) {
+			t.Status = task.TaskStatusFailed
+			g.releaseAdmissionLocked(t)
+			return
+		}
+		g.requeueLocked(t)
+		return
+	}
+	admission.supersedes, admission.takeoverUntil = nil, time.Time{}
+	assignment := g.assignmentFor(t, lease)
 	state.task.Status = task.TaskStatusAssigned
 	g.inFlight[t.ID] = &assignmentState{
 		task:       t,
 		assignment: assignment,
-		deadline:   now.Add(g.config.LeaseDuration),
+		deadline:   lease.Terms.ExpiresAt,
 		attempt:    t.Attempt,
+		lease:      lease,
 	}
 	g.lastWin[bid.NodeID] = now
 	// Prune lastWin entries older than the recent-win window so the map
@@ -742,10 +979,63 @@ func (g *Gateway) issueAssignmentLocked(state *offerState, bid *task.Bid) {
 	select {
 	case g.assignments <- assignment:
 	default:
-		// If assignments channel is blocked, requeue task to avoid starvation.
+		// The assignments channel is blocked, so the winner never receives its
+		// lease: the lease is released in the store and the task offered again.
 		delete(g.inFlight, t.ID)
-		g.scheduleRetryLocked(t)
+		id := lease.Identity()
+		if err := g.store.Release(g.storeCtx, taskstore.Release{TaskID: t.ID, Lease: &id, At: now,
+			Cause: taskstore.CauseLeaseExpired}); err != nil {
+			t.Status = task.TaskStatusFailed
+			g.releaseAdmissionLocked(t)
+			return
+		}
+		g.requeueLocked(t)
 	}
+}
+
+// RenewalSink accepts lease holders' renewals.
+func (g *Gateway) RenewalSink() chan<- task.Renewal { return g.renewals }
+
+// handleRenewal renews the lease version a holder names through the store,
+// to a fresh expiry and takeover window, and sends the new version on the
+// assignments channel. A renewal from another node, of a superseded version,
+// or of an expired lease changes nothing.
+func (g *Gateway) handleRenewal(rn task.Renewal) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	state, ok := g.inFlight[rn.TaskID]
+	if !ok || state.lease == nil || rn.Fence != state.assignment.Fence || rn.NodeID != state.assignment.Primary {
+		return
+	}
+	now := g.clock.Now()
+	if now.After(state.deadline) {
+		return
+	}
+	expires := now.Add(g.config.LeaseDuration)
+	lease, err := g.store.Renew(g.storeCtx, taskstore.Renewal{
+		Lease: state.lease.Identity(), At: now, ExpiresAt: expires, TakeoverUntil: expires.Add(g.config.TakeoverWindow),
+	}, g.signer)
+	if err != nil {
+		return
+	}
+	state.lease = lease
+	state.deadline = lease.Terms.ExpiresAt
+	state.assignment = g.assignmentFor(state.task, lease)
+	select {
+	case g.assignments <- state.assignment:
+	default:
+		// The holder keeps the previous version until its next renewal.
+	}
+}
+
+// leaseOf is the identity of the lease version state holds, nil for a state
+// built without the store.
+func leaseOf(state *assignmentState) *task.LeaseIdentity {
+	if state.lease == nil {
+		return nil
+	}
+	id := state.lease.Identity()
+	return &id
 }
 
 func (g *Gateway) runResultLoop(ctx context.Context) {
@@ -757,6 +1047,8 @@ func (g *Gateway) runResultLoop(ctx context.Context) {
 			return
 		case res := <-g.results:
 			g.handleResult(res.Result)
+		case rn := <-g.renewals:
+			g.handleRenewal(rn)
 		case <-g.progress:
 			// Progress currently advisory; hook for future metrics sink.
 		}
@@ -773,30 +1065,46 @@ func (g *Gateway) handleResult(result task.Result) {
 	if result.Fence != state.assignment.Fence {
 		return
 	}
+	if result.NodeID != "" && result.NodeID != state.assignment.Primary {
+		return
+	}
+	lease := leaseOf(state)
 	delete(g.inFlight, result.TaskID)
 	switch result.Status {
 	case task.ResultStatusOK:
-		state.task.Status = task.TaskStatusCompleted
-		g.releaseAdmissionLocked(state.task)
+		if g.verifier != nil {
+			if state.lease == nil || g.verifier.VerifyReceipt(g.storeCtx, *state.lease, result) != nil {
+				g.failAttemptLocked(state, lease, taskstore.CauseReceiptRefused)
+				return
+			}
+		}
+		g.finishLocked(state.task, lease, taskstore.OutcomeCompleted, "", result.Receipt)
 	case task.ResultStatusRejected:
 		// Authorization and partition failures are deterministic for this admitted
 		// object. Retrying them cannot create authority and only amplifies load.
-		state.task.Status = task.TaskStatusFailed
-		g.releaseAdmissionLocked(state.task)
+		g.finishLocked(state.task, lease, taskstore.OutcomeRejected, taskstore.CauseExecutorRejected, nil)
 	default:
-		state.task.Status = task.TaskStatusFailed
-		// Use the same retry budget as produceOffers / expireLeases
-		// (clone.Attempt <= MaxAttempts). state.task.Attempt+1 is what
-		// CloneForRetry sets clone.Attempt to, so `+1 <= MaxAttempts` matches;
-		// `+1 < MaxAttempts` would stop one attempt early, so a task would get
-		// a different number of retries depending on whether it failed (here)
-		// or timed out (expireLeases).
-		if state.task.Attempt+1 <= g.config.MaxAttempts {
-			g.scheduleRetryLocked(state.task)
-		} else {
-			g.releaseAdmissionLocked(state.task)
-		}
+		g.failAttemptLocked(state, lease, taskstore.CauseAttemptFailed)
 	}
+}
+
+// failAttemptLocked ends one attempt: the lease is released in the store and
+// the task retried as its next attempt while MaxAttempts allows, and finished
+// as OutcomeFailed once it does not. state.task.Attempt+1 is what
+// CloneForRetry sets the retry's Attempt to, so the bound is the one
+// scheduleRetryLocked applies.
+func (g *Gateway) failAttemptLocked(state *assignmentState, lease *task.LeaseIdentity, cause string) {
+	if state.task.Attempt+1 > g.config.MaxAttempts {
+		g.finishLocked(state.task, lease, taskstore.OutcomeFailed, taskstore.CauseAttemptsExhausted, nil)
+		return
+	}
+	state.task.Status = task.TaskStatusFailed
+	if err := g.store.Release(g.storeCtx, taskstore.Release{TaskID: state.task.ID, Lease: lease,
+		At: g.clock.Now(), Cause: cause}); err != nil {
+		g.releaseAdmissionLocked(state.task)
+		return
+	}
+	g.scheduleRetryLocked(state.task)
 }
 
 func (g *Gateway) runLeaseWatcher(ctx context.Context) {
@@ -819,9 +1127,88 @@ func (g *Gateway) expireLeases() {
 	defer g.mu.Unlock()
 	now := g.clock.Now()
 	for id, state := range g.inFlight {
-		if now.After(state.deadline) {
-			delete(g.inFlight, id)
-			g.scheduleRetryLocked(state.task)
+		if !now.After(state.deadline) {
+			continue
+		}
+		delete(g.inFlight, id)
+		lease := leaseOf(state)
+		if lease != nil && g.config.TakeoverWindow > 0 {
+			// The holder stopped renewing: the task is offered again for a
+			// takeover of this lease until its TakeoverUntil.
+			admission, ok := g.admissionsByTask[state.task]
+			if !ok {
+				continue
+			}
+			admission.supersedes, admission.takeoverUntil = lease, state.lease.Terms.TakeoverUntil
+			g.requeueLocked(state.task)
+			continue
+		}
+		if err := g.store.Release(g.storeCtx, taskstore.Release{TaskID: state.task.ID, Lease: lease, At: now,
+			Cause: taskstore.CauseLeaseExpired}); err != nil {
+			state.task.Status = task.TaskStatusFailed
+			g.releaseAdmissionLocked(state.task)
+			continue
+		}
+		g.scheduleRetryLocked(state.task)
+	}
+	for t, admission := range g.admissionsByTask {
+		if admission.supersedes == nil || !now.After(admission.takeoverUntil) {
+			continue
+		}
+		if _, leased := g.inFlight[t.ID]; leased {
+			continue
+		}
+		lapsed := *admission.supersedes
+		g.finishLocked(t, &lapsed, taskstore.OutcomeReaped, taskstore.CauseTakeoverWindowElapsed, nil)
+	}
+}
+
+func (g *Gateway) runWaitSweeper(ctx context.Context) {
+	ticker := time.NewTicker(g.config.WaitSweepInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-g.closing:
+			return
+		case <-ticker.C:
+			g.sweepWaiting()
+		}
+	}
+}
+
+// sweepWaiting visits every admitted task that holds no lease and is not
+// awaiting a takeover: one waiting past MaxWait ends as OutcomeAbandoned
+// with CauseMaxWaitElapsed; every other is put to the store's KeepWaiting,
+// which keeps it (renewing what the job kind holds for it) or ends the wait
+// with its own cause. The sweep runs on its own ticker, so a waiting task is
+// visited whether or not an offer of it is open.
+func (g *Gateway) sweepWaiting() {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	now := g.clock.Now()
+	for t, admission := range g.admissionsByTask {
+		if admission.supersedes != nil {
+			continue
+		}
+		if _, leased := g.inFlight[t.ID]; leased {
+			continue
+		}
+		if g.config.MaxWait > 0 && now.Sub(admission.admittedAt) > g.config.MaxWait {
+			g.finishLocked(t, nil, taskstore.OutcomeAbandoned, taskstore.CauseMaxWaitElapsed, nil)
+			continue
+		}
+		verdict, err := g.store.KeepWaiting(g.storeCtx, t.ID, now)
+		if err != nil {
+			if errors.Is(err, taskstore.ErrEnded) || errors.Is(err, taskstore.ErrUnknownTask) {
+				t.Status = task.TaskStatusFailed
+				g.releaseAdmissionLocked(t)
+			}
+			continue
+		}
+		if !verdict.Keep {
+			g.finishLocked(t, nil, taskstore.OutcomeAbandoned, verdict.Cause, nil)
 		}
 	}
 }
@@ -832,7 +1219,7 @@ func (g *Gateway) expireLeases() {
 func (g *Gateway) scheduleRetryLocked(original *task.Task) {
 	clone := original.CloneForRetry()
 	if clone == nil || clone.Attempt > g.config.MaxAttempts {
-		g.releaseAdmissionLocked(original)
+		g.finishLocked(original, nil, taskstore.OutcomeFailed, taskstore.CauseAttemptsExhausted, nil)
 		return
 	}
 	admission, ok := g.admissionsByTask[original]
@@ -852,13 +1239,10 @@ func (g *Gateway) scheduleRetryLocked(original *task.Task) {
 			g.releaseAdmissionLocked(clone)
 			return
 		}
-		clone.EnqueuedAt = g.clock.Now()
-		clone.Status = task.TaskStatusQueued
-		if _, accepted := g.queue.Enqueue(clone); !accepted {
-			clone.Status = task.TaskStatusFailed
-			g.releaseAdmissionLocked(clone)
+		if _, admitted := g.admissionsByTask[clone]; !admitted {
 			return
 		}
+		g.requeueLocked(clone)
 		g.signalOfferPump()
 	})
 }

@@ -128,12 +128,16 @@ const (
 )
 
 // Assignment contains the lease and fencing tokens required to execute a task.
+// Lease is the signed lease version the gateway's store committed for it and
+// Fence that version's LeaseIdentity.Fence; a renewal answers a later version
+// of the same lease on the same channel.
 type Assignment struct {
 	Task          *Task         `json:"task"`
 	TaskID        string        `json:"taskId"`
 	Primary       string        `json:"primary"`
 	Standby       []string      `json:"standby,omitempty"`
 	Fence         string        `json:"fence"`
+	Lease         *Lease        `json:"lease,omitempty"`
 	LeaseDuration time.Duration `json:"leaseDuration"`
 	Keys          []byte        `json:"keys,omitempty"`
 	IssuedAt      time.Time     `json:"issuedAt"`
@@ -149,7 +153,9 @@ type Progress struct {
 	At      time.Time `json:"at"`
 }
 
-// Result captures the terminal outcome of a task execution.
+// Result captures the terminal outcome of a task execution. Receipt is the
+// executor's signed completion of the lease Fence names; the gateway's receipt
+// verifier admits it before an OK result completes the task.
 type Result struct {
 	TaskID    string               `json:"taskId"`
 	NodeID    string               `json:"nodeId"`
@@ -158,6 +164,7 @@ type Result struct {
 	Output    []byte               `json:"output,omitempty"`
 	Error     string               `json:"error,omitempty"`
 	Artifacts []artifacts.Artifact `json:"artifacts,omitempty"`
+	Receipt   []byte               `json:"receipt,omitempty"`
 	At        time.Time            `json:"at"`
 }
 
