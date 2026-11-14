@@ -33,5 +33,10 @@ type Middleware interface {
 	// dispatchRPC carries the refusal's kind on that answer (keepRefusalKind),
 	// so the readers of the kind still answer the caller 403 or 409. An After
 	// that means another outcome sets the kind itself or answers a success.
+	//
+	// A handler that answered no response and no error reaches After as the
+	// failure dispatchRPC answers in its place (ErrNoResponse), and an After
+	// chain that answers no response and no error leaves the answer it was
+	// handed standing, so a dispatch never returns nothing.
 	After(ctx context.Context, handlerName string, resp *RPCResponse, err error) (*RPCResponse, error)
 }

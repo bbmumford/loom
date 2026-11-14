@@ -8,7 +8,6 @@ package node
 import (
 	"context"
 	"errors"
-	"fmt"
 
 	"github.com/bbmumford/loom/node/handlers"
 	"github.com/bbmumford/loom/pkg/rpc"
@@ -61,30 +60,14 @@ func (a *localDispatcherAdapter) DispatchBytes(ctx context.Context, name string,
 		Handler: name,
 		Payload: payload,
 	}
-	resp, err := a.registry.Dispatch(ctx, req)
-	if err != nil {
-		return nil, err
-	}
-	if resp == nil {
-		return nil, errors.New("localDispatcherAdapter: nil response from registry")
-	}
-	if !resp.Success {
-		// Mirror the wire-format semantics: a handler that returned
-		// Success=false should bubble up as an error to the caller. A refusal
-		// of the caller's authority is returned as the error itself, so the
-		// HTTP bridge proxying an operation this process hosts answers it 403
-		// (pkg/rpc/http classifyMeshError), as it does one from another node,
-		// and a handler's conflict with its stored state likewise, which it
-		// answers 409.
-		if resp.Denied != nil {
-			return nil, resp.Denied
-		}
-		if resp.Conflict != nil {
-			return nil, resp.Conflict
-		}
-		return nil, fmt.Errorf("%s", resp.Error)
-	}
-	return resp.Payload, nil
+	// handlers.Outcome reads the result as the node's RPC server and
+	// dispatch.LocalCaller read it: a failed response comes back as an error,
+	// a refusal of the caller's authority as the refusal itself, so the HTTP
+	// bridge proxying an operation this process hosts answers it 403
+	// (pkg/rpc/http classifyMeshError) as it does one from another node, a
+	// handler's conflict with its stored state likewise, which it answers 409,
+	// and a result with no response as handlers.ErrNoResponse.
+	return handlers.Outcome(a.registry.Dispatch(ctx, req))
 }
 
 // installLocalDispatcher wires rpc.SetLocalDispatcher to this runtime's

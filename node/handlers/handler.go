@@ -193,12 +193,12 @@ type RPCResponse struct {
 	// refusal (executionAuthRefusal), its scope gate and a middleware's refusal,
 	// and pkg/rpc's registryShim for a Func's; dispatchRPC also sets it on a
 	// failed response an After hook answered such a refusal with
-	// (keepRefusalKind). Error alone
-	// would reach every reader as a plain string, so the readers that hand a
-	// failed response on as an error return Denied instead: RPCServer.executeLocal
-	// stamps it on the wire response (dispatch.StampDenial), and node's local
-	// dispatcher and dispatch.LocalCaller wrap it. An HTTP bridge then answers
-	// the refusal 403 whichever of them carried it.
+	// (keepRefusalKind). Error alone would reach every reader as a plain
+	// string, so Outcome, the one reading of a dispatch result, hands Denied on
+	// as the failure: RPCServer.executeLocal stamps it on the wire response
+	// (dispatch.StampDenial), and node's local dispatcher and
+	// dispatch.LocalCaller return it. An HTTP bridge then answers the refusal
+	// 403 whichever of them carried it.
 	Denied error `json:"-"`
 
 	// Conflict is the handler's conflict with the state it holds behind a
@@ -207,12 +207,12 @@ type RPCResponse struct {
 	// (see Conflict). dispatchRPC sets it for a middleware's refusal, pkg/rpc's
 	// registryShim for a Func's, and a handler building its own response sets
 	// it; dispatchRPC also sets it on a failed response an After hook answered
-	// such a conflict with (keepRefusalKind). RPCServer.executeLocal stamps it
-	// on the wire response
-	// (dispatch.StampConflict), and node's local dispatcher and
-	// dispatch.LocalCaller wrap it, so an HTTP bridge answers it 409 whichever
-	// of them carried it. It is its own field beside Denied because a response
-	// carries one kind and each reader hands on the one that is set.
+	// such a conflict with (keepRefusalKind). Outcome hands it on as the
+	// failure when Denied is unset: RPCServer.executeLocal stamps it on the
+	// wire response (dispatch.StampConflict), and node's local dispatcher and
+	// dispatch.LocalCaller return it, so an HTTP bridge answers it 409
+	// whichever of them carried it. It is its own field beside Denied because a
+	// response carries one kind and Outcome hands on the one that is set.
 	Conflict error `json:"-"`
 }
 
@@ -240,10 +240,52 @@ func Conflict(err error) error {
 	return nil
 }
 
+// ErrNoResponse is the failure of a dispatch whose handler answered no
+// response and no error. dispatchRPC answers it, wrapped and naming the
+// handler, in place of that answer, and Outcome answers it for a result with
+// neither, so no reader is handed nothing to read. It names neither kind of
+// refusal. compose's reading of an RPC function (Runtime.composeInvoke in
+// node) takes it as a function that ran with nothing to return; every caller
+// expecting a payload hands it on as a failure.
+var ErrNoResponse = errors.New("answered no response and no error")
+
+// Outcome reads one dispatch result, the response and error that Dispatch,
+// DispatchRPCWithAuth or a handler's ExecuteRPC returns, into what a caller
+// hands on: the payload of a success, or the failure in its place. The error
+// comes first when there is one, whatever response stands beside it; a result
+// with no response is ErrNoResponse; a failed response is its Denied, else its
+// Conflict, else an error of its Error text. A failure therefore wraps
+// scope.ErrDenied or scope.ErrConflict exactly when the result named that
+// kind, under the words the result carried.
+//
+// It is the one reading of a dispatch result: RPCServer.executeLocal stamps
+// the failure it returns on the wire response, node's local dispatcher returns
+// it, dispatch.LocalCaller returns it under its own prefix, compose's reading
+// of an RPC function maps it to compose's result kinds, and dispatchRPC reads
+// the handler's own refusal from it before the After hooks run. Each caller
+// adds its own words around the failure and none reads the response itself,
+// so a refusal reaches an HTTP bridge as the same 403 or 409, and a result
+// with no response as the same failure, whichever of them carried it.
+func Outcome(resp *RPCResponse, err error) ([]byte, error) {
+	switch {
+	case err != nil:
+		return nil, err
+	case resp == nil:
+		return nil, ErrNoResponse
+	case resp.Success:
+		return resp.Payload, nil
+	case resp.Denied != nil:
+		return nil, resp.Denied
+	case resp.Conflict != nil:
+		return nil, resp.Conflict
+	}
+	return nil, errors.New(resp.Error)
+}
+
 // namesKind reports whether err is a refusal of one of the two kinds a
 // response carries: a refusal of the caller's authority (Denial) or a conflict
-// with the state a handler holds (Conflict). keepRefusalKind and
-// answeredRefusal judge an answer by it.
+// with the state a handler holds (Conflict). keepRefusalKind and dispatchRPC's
+// reading of the handler's own answer judge an answer by it.
 func namesKind(err error) bool {
 	return Denial(err) != nil || Conflict(err) != nil
 }
@@ -253,9 +295,9 @@ func namesKind(err error) bool {
 // neither kind. dispatchRPC calls it once the chain has run, on both of its
 // paths: over a Before hook's refusal, where refusal is the hook's error and
 // the answer is the rejection resp alone (dispatchRPC returns no error
-// there), and over the handler's own answer, where refusal is what
-// answeredRefusal read from it and the answer is the error the chain ended
-// with (after) when there is one and resp otherwise.
+// there), and over the handler's own answer, where refusal is the failure
+// Outcome read from it when that names a kind, and the answer is the error
+// the chain ended with (after) when there is one and resp otherwise.
 //
 // The kind is Denied or Conflict as after carries it, or else as refusal
 // does. A failed resp naming neither is given it under resp's own text. An
@@ -266,9 +308,10 @@ func namesKind(err error) bool {
 //
 // Without it an outer After rewriting the refusal's text drops its kind:
 // RPCServer.executeLocal, node's local dispatcher and dispatch.LocalCaller
-// read the kind from the error dispatchRPC returns or, when it returns none,
-// from Denied and Conflict alone, and would hand the refusal on as a handler
-// failure that an HTTP bridge answers 400 rather than 403 or 409.
+// read the result through Outcome, which takes the kind from the error
+// dispatchRPC returns or, when it returns none, from Denied and Conflict
+// alone, and would hand the refusal on as a handler failure that an HTTP
+// bridge answers 400 rather than 403 or 409.
 func keepRefusalKind(resp *RPCResponse, after, refusal error) error {
 	cause, restate := after, false
 	if !namesKind(cause) {
@@ -288,27 +331,6 @@ func keepRefusalKind(resp *RPCResponse, after, refusal error) error {
 		return &restatedRefusal{text: after.Error(), cause: errors.Join(cause, after)}
 	}
 	return after
-}
-
-// answeredRefusal returns the refusal of a kind that a handler's own answer
-// is, read as the readers of dispatchRPC's result read an answer: the error
-// when the handler returned one, otherwise its failed response's Denied and
-// then its Conflict. It returns nil for a success and for a failure of
-// neither kind. dispatchRPC calls it before the After hooks run and hands the
-// result to keepRefusalKind after them, so a hook that answers with a
-// response of its own, or rewrites the handler's in place, does not take the
-// kind with it.
-func answeredRefusal(resp *RPCResponse, err error) error {
-	refusal := err
-	if err == nil && resp != nil && !resp.Success {
-		if refusal = resp.Denied; refusal == nil {
-			refusal = resp.Conflict
-		}
-	}
-	if !namesKind(refusal) {
-		return nil
-	}
-	return refusal
 }
 
 // restatedRefusal is a refusal carried under the text of the answer that
@@ -1136,7 +1158,9 @@ func injectRPCContext(ctx context.Context, reqCtx map[string]interface{}) contex
 // AuthValidator's ValidateExecutionAuth check. Its callers are
 // RPCServer.executeLocal (reached from RPCServer.handleRequest), the node's
 // local dispatch adapter (node/rpc_local_dispatch.go) and
-// dispatch.LocalCaller. An entry point that
+// dispatch.LocalCaller, each reading the result through Outcome. It never
+// returns no response and no error together: a handler that answers nothing
+// is answered with ErrNoResponse. An entry point that
 // must judge the caller's authentication type and required scopes calls
 // [HandlerRegistry.DispatchRPCWithAuth], which runs that check first.
 func (r *HandlerRegistry) Dispatch(ctx context.Context, req *RPCRequest) (*RPCResponse, error) {
@@ -1283,10 +1307,20 @@ func (h ResolvedHandler) dispatchRPC(
 
 	// Dispatch based on interface
 	resp, err := rpc.ExecuteRPC(ctx, req)
+	if resp == nil && err == nil {
+		// A handler answering nothing has given its caller nothing to hand
+		// on: the After hooks and every reader of the result see this failure
+		// in its place, so dispatchRPC never returns no response and no error.
+		err = fmt.Errorf("%s %w", h.name, ErrNoResponse)
+	}
 
-	// The handler's own refusal of a kind, read before an After hook can
-	// answer it with a failure of its own, and the answer it was read from.
-	refusal := answeredRefusal(resp, err)
+	// The handler's own refusal of a kind, read as every reader of the result
+	// reads it (Outcome) before an After hook can answer it with a failure of
+	// its own, and the answer it was read from.
+	var refusal error
+	if _, failure := Outcome(resp, err); namesKind(failure) {
+		refusal = failure
+	}
 	answered, answeredErr := resp, err
 
 	// Run middleware After hooks (reverse order)
@@ -1294,14 +1328,14 @@ func (h ResolvedHandler) dispatchRPC(
 		resp, err = middleware[i].After(ctx, h.meta.Name(), resp, err)
 	}
 
+	// A chain that answered no response and no error leaves the handler's
+	// answer standing, whatever it was, as a Before refusal's rejection stands
+	// above when the chain answers no response; a failure it did answer over a
+	// refusal keeps the refusal's kind.
+	if resp == nil && err == nil {
+		resp, err = answered, answeredErr
+	}
 	if refusal != nil {
-		// A chain that answered no response and no error leaves the handler's
-		// refusal standing, as a Before refusal's rejection stands above when
-		// the chain answers no response; a failure it did answer keeps the
-		// refusal's kind.
-		if resp == nil && err == nil {
-			resp, err = answered, answeredErr
-		}
 		err = keepRefusalKind(resp, err, refusal)
 	}
 

@@ -922,14 +922,15 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 
 // executeLocal dispatches an RPC to the local HandlerRegistry with active handler tracking.
 //
-// A refusal of the caller's authority, an error Dispatch returns or the Denied
-// of the response it gives, is stamped on the failed response
-// (dispatch.StampDenial), and a handler's conflict with the state it holds,
-// such an error or the response's Conflict, likewise (dispatch.StampConflict,
-// which leaves a response StampDenial stamped): the Error text alone reaches
-// dispatch.HWPCaller at the origin as a handler failure, which the HTTP bridge
-// proxying the call would answer 400 where it answers the same refusal in its
-// own process 403, or the same conflict 409.
+// The result is read by handlers.Outcome. A refusal of the caller's
+// authority, an error Dispatch returns or the Denied of the response it gives,
+// is stamped on the failed response (dispatch.StampDenial), and a handler's
+// conflict with the state it holds, such an error or the response's Conflict,
+// likewise (dispatch.StampConflict, which leaves a response StampDenial
+// stamped): the Error text alone reaches dispatch.HWPCaller at the origin as a
+// handler failure, which the HTTP bridge proxying the call would answer 400
+// where it answers the same refusal in its own process 403, or the same
+// conflict 409.
 func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startTime time.Time) *pb.RPCResponse {
 	atomic.AddInt32(&s.activeHandlers, 1)
 	defer atomic.AddInt32(&s.activeHandlers, -1)
@@ -958,40 +959,37 @@ func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startT
 	// through server.handleRequest) terminate here.
 	t0 := time.Now()
 	resp, err := s.registry.Dispatch(ctx, handlerReq)
-	s.dispatchLatency.Record(req.Handler, time.Since(t0), err == nil && resp != nil && resp.Success)
-	if err != nil {
+	// handlers.Outcome reads the result as the node's local dispatcher and
+	// dispatch.LocalCaller read it, and never reads a response that is not
+	// there: the raw ServeSession path runs this in a bare goroutine with no
+	// recover, so a read of a missing response would stop the process.
+	payload, failure := handlers.Outcome(resp, err)
+	s.dispatchLatency.Record(req.Handler, time.Since(t0), failure == nil)
+	if failure != nil {
+		// The failure's words are the response's Error text when the handler
+		// answered a failed response, and its kind is stamped for the
+		// origin's HWPCaller to read back as the same refusal or conflict.
+		latency := time.Since(startTime)
+		if err == nil && resp != nil {
+			latency = resp.Latency
+		}
 		failed := &pb.RPCResponse{
 			Id:        req.Id,
 			Success:   false,
-			Error:     err.Error(),
-			LatencyNs: int64(time.Since(startTime)),
+			Error:     failure.Error(),
+			LatencyNs: int64(latency),
 		}
-		dispatch.StampDenial(failed, err)
-		dispatch.StampConflict(failed, err)
+		dispatch.StampDenial(failed, failure)
+		dispatch.StampConflict(failed, failure)
 		return failed
 	}
-	// Dispatch can return (nil, nil) — e.g. a custom RPCHandler or an
-	// After middleware that returns no response and no error. The raw
-	// ServeSession path (a bare goroutine with no recover) would then panic on
-	// the resp.* dereferences below and crash the process. Fail closed instead.
-	if resp == nil {
-		return &pb.RPCResponse{
-			Id:        req.Id,
-			Success:   false,
-			Error:     "nil dispatch response",
-			LatencyNs: int64(time.Since(startTime)),
-		}
-	}
-	out := &pb.RPCResponse{
+	return &pb.RPCResponse{
 		Id:        req.Id,
-		Success:   resp.Success,
-		Payload:   resp.Payload,
+		Success:   true,
+		Payload:   payload,
 		Error:     resp.Error,
 		LatencyNs: int64(resp.Latency),
 	}
-	dispatch.StampDenial(out, resp.Denied)
-	dispatch.StampConflict(out, resp.Conflict)
-	return out
 }
 
 // forwardOnward sends req on through the forwarder, as a relay hop or for a

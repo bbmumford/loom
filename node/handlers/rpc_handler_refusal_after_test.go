@@ -61,12 +61,12 @@ func answeredKind(resp *RPCResponse, err error) (kind, text string) {
 // After answers it with a failure naming neither kind, as a Before refusal
 // does: a failed response of the After's own carries the kind under its own
 // text, an error of the After's own carries it under the error's text, and an
-// After chain answering nothing at all leaves the handler's answer standing.
-// The kind is read from the error the chain ended with or, when that names
-// none, from the handler's answer, whether the handler answered a failed
-// response naming its kind or an error. A kind the After set itself, a success
-// it answered, and a handler failure of neither kind are left as the After
-// answered.
+// After chain answering nothing at all leaves the handler's answer standing,
+// whatever it was. The kind is read from the error the chain ended with or,
+// when that names none, from the handler's answer: its error when it returned
+// one, even beside a failed response naming a kind, otherwise that response's
+// kind. A kind the After set itself, a success it answered, and a handler
+// failure of neither kind are left as the After answered.
 func TestAnOuterAfterAnsweringAHandlersRefusalKeepsItsKind(t *testing.T) {
 	stale := fmt.Errorf("%w: host: role revision 3 is stale", rpcscope.ErrConflict)
 	denied := fmt.Errorf("%w: host: the caller holds no grant", rpcscope.ErrDenied)
@@ -142,7 +142,13 @@ func TestAnOuterAfterAnsweringAHandlersRefusalKeepsItsKind(t *testing.T) {
 		}, []after{restatedWithItsError}, "neither", "the record is not found"},
 		{"a failure of neither kind answered with nothing", func() (*RPCResponse, error) {
 			return &RPCResponse{Success: false, Error: "the record is not found"}, nil
-		}, []after{func(*RPCResponse, error) (*RPCResponse, error) { return nil, nil }}, "no answer", ""},
+		}, []after{func(*RPCResponse, error) (*RPCResponse, error) { return nil, nil }}, "neither", "the record is not found"},
+		{"a denied response beside a plain error is read by its error", func() (*RPCResponse, error) {
+			return &RPCResponse{Success: false, Error: denied.Error(), Denied: denied}, errors.New("the handler failed")
+		}, []after{restated}, "neither", "masked: " + denied.Error()},
+		{"a denial the After answered as a conflict on its response", deniedResponse, []after{func(*RPCResponse, error) (*RPCResponse, error) {
+			return &RPCResponse{Success: false, Error: stale.Error(), Conflict: stale}, nil
+		}}, "conflict", stale.Error()},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := NewHandlerRegistry()
@@ -180,8 +186,8 @@ func TestAnOuterAfterAnsweringAHandlersRefusalKeepsItsKind(t *testing.T) {
 	}
 }
 
-// A handler's refusal the After chain answered with nothing is handed on as
-// the handler answered it: the same response, or the same error.
+// Whatever a handler answered, an After chain answering nothing over it hands
+// it on as the handler answered it: the same response, or the same error.
 func TestAnAfterChainAnsweringNothingOverAHandlersRefusalLeavesItsAnswer(t *testing.T) {
 	stale := fmt.Errorf("%w: host: role revision 3 is stale", rpcscope.ErrConflict)
 	refused := &RPCResponse{Success: false, Error: stale.Error(), Conflict: stale}
@@ -192,6 +198,9 @@ func TestAnAfterChainAnsweringNothingOverAHandlersRefusalLeavesItsAnswer(t *test
 	}{
 		{"a failed response naming its kind", refused, nil},
 		{"an error", nil, stale},
+		{"a success", &RPCResponse{Success: true, Payload: []byte("answered")}, nil},
+		{"a failed response of neither kind", &RPCResponse{Success: false, Error: "the record is not found"}, nil},
+		{"an error of neither kind", nil, errors.New("the record is not found")},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			reg := NewHandlerRegistry()

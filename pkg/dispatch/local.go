@@ -50,26 +50,18 @@ func (c *LocalCaller) Call(ctx context.Context, role, method string, payload []b
 		TraceID: trace.FromContext(ctx),
 	}
 
-	resp, err := c.registry.Dispatch(ctx, req)
+	// The registry's result is read by handlers.Outcome, as the node's RPC
+	// server and its local dispatcher read it: a refusal of the caller's
+	// authority stays one (errors.Is matches scope.ErrDenied), a handler's
+	// conflict with its stored state stays one (ErrConflict), as HWPCaller
+	// returns each for a handler on another node, and a result with no
+	// response is a failure (handlers.ErrNoResponse) rather than a response
+	// read that is not there.
+	payload, err := handlers.Outcome(c.registry.Dispatch(ctx, req))
 	if err != nil {
 		return nil, fmt.Errorf("local dispatch %s: %w", method, err)
 	}
-
-	// A refusal of the caller's authority stays one (errors.Is matches
-	// scope.ErrDenied), and a handler's conflict with its stored state stays
-	// one (ErrConflict), as HWPCaller returns each for a handler on another
-	// node.
-	if !resp.Success {
-		if resp.Denied != nil {
-			return nil, fmt.Errorf("local dispatch %s: %w", method, resp.Denied)
-		}
-		if resp.Conflict != nil {
-			return nil, fmt.Errorf("local dispatch %s: %w", method, resp.Conflict)
-		}
-		return nil, fmt.Errorf("local dispatch %s: %s", method, resp.Error)
-	}
-
-	return resp.Payload, nil
+	return payload, nil
 }
 
 // Close is a no-op for LocalCaller (no connections to close).

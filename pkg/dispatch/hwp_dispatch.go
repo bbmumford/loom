@@ -208,6 +208,11 @@ type SessionFinder interface {
 	// sees it, so the finder runs the grade gate on that session
 	// (CheckRouteGrade with req.Context["opClass"]) and returns the refusal as
 	// (nil, true, err). CallNode has no other gate on its route's grade.
+	//
+	// A handled call (ok) answers a response or an error. HWPCaller reads
+	// (nil, true, nil), which breaks that, as a send that left with no answer
+	// (errNilBidiResponse) on every path, and never reads the missing
+	// response.
 	CallViaBidi(ctx context.Context, nodeID string, req *pb.RPCRequest) (*pb.RPCResponse, bool, error)
 	// FindRoutes computes up to 3 routes to a handler's role.
 	// Each route has a first-hop session + remaining route list.
@@ -218,6 +223,15 @@ type SessionFinder interface {
 	// dispatch picks the upgraded one.
 	IsSupersededByUpgrade(session aether.Session) bool
 }
+
+// errNilBidiResponse is what HWPCaller reads in place of a bidi answer that
+// was handled (ok) with no response and no error. Call's probes, sendOnRoute
+// and callOnce each take it as a send that left and was not answered, by the
+// rule they apply to any such send: an operation that is not Repeatable ends
+// ambiguous, since the peer may have run it, and none is sent again over a
+// dynamic stream; each reads the response's Success next and would otherwise
+// stop the process on the missing response.
+var errNilBidiResponse = errors.New("nil response")
 
 const (
 	callerMaxIdle      = 5 * time.Minute  // session cache TTL
@@ -693,6 +707,9 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 			bidiCtx, bidiCancel := context.WithTimeout(probeCtx, bidiProbeTimeout)
 			resp, ok, err := c.finder.CallViaBidi(bidiCtx, r.NodeID, req)
 			bidiCancel()
+			if ok && err == nil && resp == nil {
+				err = fmt.Errorf("bidi: %w", errNilBidiResponse)
+			}
 			if ok {
 				if err != nil {
 					// The finder refused the session it would have sent on.
@@ -878,7 +895,7 @@ func (c *HWPCaller) sendOnRoute(ctx, probeCtx context.Context, method string, ba
 		case err == nil && resp != nil:
 			return answered(resp)
 		case err == nil:
-			return nil, ambiguous(fmt.Errorf("bidi: nil response"))
+			return nil, ambiguous(fmt.Errorf("bidi: %w", errNilBidiResponse))
 		case errors.Is(err, ErrGradeTooLow):
 			cb.Release()
 			return nil, err
@@ -1030,6 +1047,9 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 		bidiReq := buildRPCRequestCtx(bidiCtx, role, method, payload, remaining, gradeTimeout)
 		logicalID = bidiReq.Id
 		if resp, ok, err := c.finder.CallViaBidi(bidiCtx, nodeID, bidiReq); ok {
+			if err == nil && resp == nil {
+				err = errNilBidiResponse
+			}
 			if errors.Is(err, ErrGradeTooLow) {
 				// The finder refused the session it would have sent on: a
 				// refusal, not the path's availability.

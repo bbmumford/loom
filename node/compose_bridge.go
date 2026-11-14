@@ -92,7 +92,8 @@ type ComposeTriggerPrincipalProvider interface {
 // ComposeInvoke dispatches one FunctionID with an opaque event payload and
 // maps the outcome onto compose.FunctionResult:
 //
-//	RPC handler   → Success/Failure (payload/error)
+//	RPC handler   → Success/Failure (payload/error), or NoResult when it
+//	                answered nothing (handlers.ErrNoResponse)
 //	Task handler  → Deferred (accepted for async execution)
 //	no handler    → Failure (ErrHandlerNotFound text)
 func (rt *Runtime) ComposeInvoke(ctx context.Context, fn compose.FunctionID, event []byte) compose.FunctionResult {
@@ -135,15 +136,17 @@ func (rt *Runtime) composeInvoke(
 			Payload: event,
 			Context: map[string]interface{}{},
 		}, auth)
+		// handlers.Outcome reads the result as every caller of the registry
+		// reads it; a handler that answered nothing (handlers.ErrNoResponse)
+		// ran with nothing to return, which is compose's ResultNoResult.
+		payload, failure := handlers.Outcome(resp, err)
 		switch {
-		case err != nil:
-			return compose.FunctionResult{Kind: compose.ResultFailure, Err: err.Error()}
-		case resp == nil:
+		case errors.Is(failure, handlers.ErrNoResponse):
 			return compose.FunctionResult{Kind: compose.ResultNoResult}
-		case !resp.Success:
-			return compose.FunctionResult{Kind: compose.ResultFailure, Err: resp.Error}
+		case failure != nil:
+			return compose.FunctionResult{Kind: compose.ResultFailure, Err: failure.Error()}
 		default:
-			return compose.FunctionResult{Kind: compose.ResultSuccess, Payload: resp.Payload}
+			return compose.FunctionResult{Kind: compose.ResultSuccess, Payload: payload}
 		}
 	}
 
