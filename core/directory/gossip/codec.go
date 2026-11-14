@@ -43,8 +43,8 @@ const corruptRecordLogThrottleNs int64 = int64(5 * time.Second)
 // unmarshal calls without a dedicated mutex.
 var lastCorruptLogUnixNano atomic.Int64
 
-// ErrEnvelopeVersion is the refusal of an envelope whose codec_version and
-// schema_version are not the pair the session's negotiated gossip.codec writes.
+// ErrEnvelopeVersion is the refusal of an envelope whose codecVersion and
+// schemaVersion are not the pair the session's negotiated gossip.codec writes.
 // errors.Is matches it on an *EnvelopeVersionError.
 var ErrEnvelopeVersion = errors.New("gossip: envelope version not supported")
 
@@ -64,11 +64,11 @@ func (e *EnvelopeVersionError) Error() string {
 func (e *EnvelopeVersionError) Is(target error) bool { return target == ErrEnvelopeVersion }
 
 // envelopeCodecField and envelopeSchemaField are the field numbers of
-// GossipEnvelope's codec_version and schema_version, read from the generated
+// GossipEnvelope's codecVersion and schemaVersion, read from the generated
 // descriptor so checkEnvelopeVersions and the .proto cannot disagree.
 var (
-	envelopeCodecField  = envelopeField("codec_version")
-	envelopeSchemaField = envelopeField("schema_version")
+	envelopeCodecField  = envelopeField("codecVersion")
+	envelopeSchemaField = envelopeField("schemaVersion")
 )
 
 func envelopeField(name string) protowire.Number {
@@ -79,7 +79,7 @@ func envelopeField(name string) protowire.Number {
 	return f.Number()
 }
 
-// checkEnvelopeVersions reads the codec_version and schema_version of an
+// checkEnvelopeVersions reads the codecVersion and schemaVersion of an
 // encoded GossipEnvelope by scanning its top-level fields, without decoding
 // meta or any record, and refuses with an *EnvelopeVersionError a pair p does
 // not write. A later occurrence of a field wins, as it does for
@@ -124,7 +124,7 @@ func checkEnvelopeVersions(p Profile, data []byte) error {
 const gossipEnvelopeRecordsField protowire.Number = 2
 
 // marshalEnvelope serialises a gossip envelope to protobuf, stamped with the
-// codec_version and schema_version p's codec writes.
+// codecVersion and schemaVersion p's codec writes.
 func marshalEnvelope(p Profile, meta *ExchangeMeta, records []lad.Record) ([]byte, error) {
 	env := &gossippb.GossipEnvelope{}
 	env.CodecVersion, env.SchemaVersion = p.envelope()
@@ -320,7 +320,7 @@ func metaToProto(m *ExchangeMeta) *gossippb.ExchangeMeta {
 		pb.Offer = &gossippb.ConnectionOffer{
 			FromNodeId: m.Offer.SenderNodeID,
 			Transport:  strings.Join(m.Offer.OfferedTransports, ","),
-			// to_node_id, addresses, timestamp_unix, signature are not populated
+			// toNodeId, addresses, timestampUnix, signature are not populated
 			// because the Go ConnectionOffer struct doesn't carry them.
 			// TODO: populate these proto fields once ConnectionOffer carries
 			// them and peer_connections.go sends it.

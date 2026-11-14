@@ -27,7 +27,7 @@ const (
 // own record proto; LADRecord below is the directory's, and the envelope
 // does not depend on it.
 //
-// codec_version and schema_version name the encoding of the envelope and of
+// codecVersion and schemaVersion name the encoding of the envelope and of
 // its records. The sender writes the pair its session's negotiated
 // gossip.codec version maps to, and the receiver reads the two fields before it
 // decodes meta or any record, refusing a pair that version does not write
@@ -36,8 +36,8 @@ type GossipEnvelope struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Meta          *ExchangeMeta          `protobuf:"bytes,1,opt,name=meta,proto3" json:"meta,omitempty"`
 	Records       [][]byte               `protobuf:"bytes,2,rep,name=records,proto3" json:"records,omitempty"` // opaque serialised records
-	CodecVersion  uint32                 `protobuf:"varint,3,opt,name=codec_version,json=codecVersion,proto3" json:"codec_version,omitempty"`
-	SchemaVersion uint32                 `protobuf:"varint,4,opt,name=schema_version,json=schemaVersion,proto3" json:"schema_version,omitempty"`
+	CodecVersion  uint32                 `protobuf:"varint,3,opt,name=codecVersion,proto3" json:"codecVersion,omitempty"`
+	SchemaVersion uint32                 `protobuf:"varint,4,opt,name=schemaVersion,proto3" json:"schemaVersion,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -103,13 +103,13 @@ func (x *GossipEnvelope) GetSchemaVersion() uint32 {
 // ExchangeMeta carries per-exchange metadata piggybacked on gossip frames.
 type ExchangeMeta struct {
 	state              protoimpl.MessageState `protogen:"open.v1"`
-	CacheFingerprint   uint64                 `protobuf:"varint,1,opt,name=cache_fingerprint,json=cacheFingerprint,proto3" json:"cache_fingerprint,omitempty"`
+	CacheFingerprint   uint64                 `protobuf:"varint,1,opt,name=cacheFingerprint,proto3" json:"cacheFingerprint,omitempty"`
 	Region             string                 `protobuf:"bytes,2,opt,name=region,proto3" json:"region,omitempty"`
-	BackpressureSignal bool                   `protobuf:"varint,3,opt,name=backpressure_signal,json=backpressureSignal,proto3" json:"backpressure_signal,omitempty"`
+	BackpressureSignal bool                   `protobuf:"varint,3,opt,name=backpressureSignal,proto3" json:"backpressureSignal,omitempty"`
 	// PEX entries piggybacked on gossip
-	PexEntries []*PEXEntry `protobuf:"bytes,4,rep,name=pex_entries,json=pexEntries,proto3" json:"pex_entries,omitempty"`
+	PexEntries []*PEXEntry `protobuf:"bytes,4,rep,name=pexEntries,proto3" json:"pexEntries,omitempty"`
 	// Connection counts for load balancing
-	ConnectionCounts map[string]int32 `protobuf:"bytes,5,rep,name=connection_counts,json=connectionCounts,proto3" json:"connection_counts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
+	ConnectionCounts map[string]int32 `protobuf:"bytes,5,rep,name=connectionCounts,proto3" json:"connectionCounts,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
 	// Connection offer for NAT traversal signaling
 	Offer         *ConnectionOffer `protobuf:"bytes,6,opt,name=offer,proto3" json:"offer,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -197,9 +197,9 @@ func (x *ExchangeMeta) GetOffer() *ConnectionOffer {
 // for direct LADRecord messages.
 type PEXEntry struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	NodeId        string                 `protobuf:"bytes,1,opt,name=nodeId,proto3" json:"nodeId,omitempty"`
 	Addresses     []string               `protobuf:"bytes,2,rep,name=addresses,proto3" json:"addresses,omitempty"`
-	TimestampUnix int64                  `protobuf:"varint,3,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
+	TimestampUnix int64                  `protobuf:"varint,3,opt,name=timestampUnix,proto3" json:"timestampUnix,omitempty"`
 	Signature     []byte                 `protobuf:"bytes,4,opt,name=signature,proto3" json:"signature,omitempty"`
 	Region        string                 `protobuf:"bytes,5,opt,name=region,proto3" json:"region,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -274,11 +274,11 @@ func (x *PEXEntry) GetRegion() string {
 // ConnectionOffer signals desire for a direct connection.
 type ConnectionOffer struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	FromNodeId    string                 `protobuf:"bytes,1,opt,name=from_node_id,json=fromNodeId,proto3" json:"from_node_id,omitempty"`
-	ToNodeId      string                 `protobuf:"bytes,2,opt,name=to_node_id,json=toNodeId,proto3" json:"to_node_id,omitempty"`
+	FromNodeId    string                 `protobuf:"bytes,1,opt,name=fromNodeId,proto3" json:"fromNodeId,omitempty"`
+	ToNodeId      string                 `protobuf:"bytes,2,opt,name=toNodeId,proto3" json:"toNodeId,omitempty"`
 	Addresses     []string               `protobuf:"bytes,3,rep,name=addresses,proto3" json:"addresses,omitempty"`
 	Transport     string                 `protobuf:"bytes,4,opt,name=transport,proto3" json:"transport,omitempty"`
-	TimestampUnix int64                  `protobuf:"varint,5,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
+	TimestampUnix int64                  `protobuf:"varint,5,opt,name=timestampUnix,proto3" json:"timestampUnix,omitempty"`
 	Signature     []byte                 `protobuf:"bytes,6,opt,name=signature,proto3" json:"signature,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -361,36 +361,36 @@ func (x *ConnectionOffer) GetSignature() []byte {
 //
 // Fields 12-15 let receiving peers reconstruct the full lad.Record state
 // from a gossip exchange:
-//   - hlc_timestamp: HLC tie-breaker for IBLT reconcile and snapshot
+//   - hlcTimestamp: HLC tie-breaker for IBLT reconcile and snapshot
 //     manifest HLC; without it, every peer interprets the record at
 //     HLC=0 and stale records win on equal lamport clocks.
-//   - expires_at_unix: TTL for tombstone pruning; without it the
+//   - expiresAtUnix: TTL for tombstone pruning; without it the
 //     receiver treats every record as never-expires.
-//   - author_pubkey: signed-topic enforcement — verifiers need the
+//   - authorPubkey: signed-topic enforcement — verifiers need the
 //     pubkey alongside the signature.
-//   - blob_cid: content-addressed reference for off-record blobs
+//   - blobCid: content-addressed reference for off-record blobs
 //     (snapshot manifest payloads).
 //
-// All four use the zero-check pattern from `deleted_at_unix`
+// All four use the zero-check pattern from `deletedAtUnix`
 // so unset fields round-trip cleanly without surprise default-zero
 // effects.
 type LADRecord struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Topic           string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`
-	NodeId          string                 `protobuf:"bytes,2,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	NodeId          string                 `protobuf:"bytes,2,opt,name=nodeId,proto3" json:"nodeId,omitempty"`
 	Partition       string                 `protobuf:"bytes,3,opt,name=partition,proto3" json:"partition,omitempty"`
 	Body            []byte                 `protobuf:"bytes,4,opt,name=body,proto3" json:"body,omitempty"` // opaque sub-document (roles, reach, member JSON)
-	TimestampUnix   int64                  `protobuf:"varint,5,opt,name=timestamp_unix,json=timestampUnix,proto3" json:"timestamp_unix,omitempty"`
-	LamportClock    uint64                 `protobuf:"varint,6,opt,name=lamport_clock,json=lamportClock,proto3" json:"lamport_clock,omitempty"`
+	TimestampUnix   int64                  `protobuf:"varint,5,opt,name=timestampUnix,proto3" json:"timestampUnix,omitempty"`
+	LamportClock    uint64                 `protobuf:"varint,6,opt,name=lamportClock,proto3" json:"lamportClock,omitempty"`
 	Seq             uint64                 `protobuf:"varint,7,opt,name=seq,proto3" json:"seq,omitempty"`
 	Tombstone       bool                   `protobuf:"varint,8,opt,name=tombstone,proto3" json:"tombstone,omitempty"`
-	DeletedAtUnix   int64                  `protobuf:"varint,9,opt,name=deleted_at_unix,json=deletedAtUnix,proto3" json:"deleted_at_unix,omitempty"`
-	TombstoneReason string                 `protobuf:"bytes,10,opt,name=tombstone_reason,json=tombstoneReason,proto3" json:"tombstone_reason,omitempty"`
+	DeletedAtUnix   int64                  `protobuf:"varint,9,opt,name=deletedAtUnix,proto3" json:"deletedAtUnix,omitempty"`
+	TombstoneReason string                 `protobuf:"bytes,10,opt,name=tombstoneReason,proto3" json:"tombstoneReason,omitempty"`
 	Signature       []byte                 `protobuf:"bytes,11,opt,name=signature,proto3" json:"signature,omitempty"`
-	HlcTimestamp    uint64                 `protobuf:"varint,12,opt,name=hlc_timestamp,json=hlcTimestamp,proto3" json:"hlc_timestamp,omitempty"`
-	ExpiresAtUnix   int64                  `protobuf:"varint,13,opt,name=expires_at_unix,json=expiresAtUnix,proto3" json:"expires_at_unix,omitempty"`
-	AuthorPubkey    []byte                 `protobuf:"bytes,14,opt,name=author_pubkey,json=authorPubkey,proto3" json:"author_pubkey,omitempty"`
-	BlobCid         string                 `protobuf:"bytes,15,opt,name=blob_cid,json=blobCid,proto3" json:"blob_cid,omitempty"`
+	HlcTimestamp    uint64                 `protobuf:"varint,12,opt,name=hlcTimestamp,proto3" json:"hlcTimestamp,omitempty"`
+	ExpiresAtUnix   int64                  `protobuf:"varint,13,opt,name=expiresAtUnix,proto3" json:"expiresAtUnix,omitempty"`
+	AuthorPubkey    []byte                 `protobuf:"bytes,14,opt,name=authorPubkey,proto3" json:"authorPubkey,omitempty"`
+	BlobCid         string                 `protobuf:"bytes,15,opt,name=blobCid,proto3" json:"blobCid,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -534,55 +534,56 @@ var File_gossip_proto protoreflect.FileDescriptor
 
 const file_gossip_proto_rawDesc = "" +
 	"\n" +
-	"\fgossip.proto\x12\x13loom.mesh.gossip.v1\"\xad\x01\n" +
+	"\fgossip.proto\x12\x13loom.mesh.gossip.v1\"\xab\x01\n" +
 	"\x0eGossipEnvelope\x125\n" +
 	"\x04meta\x18\x01 \x01(\v2!.loom.mesh.gossip.v1.ExchangeMetaR\x04meta\x12\x18\n" +
-	"\arecords\x18\x02 \x03(\fR\arecords\x12#\n" +
-	"\rcodec_version\x18\x03 \x01(\rR\fcodecVersion\x12%\n" +
-	"\x0eschema_version\x18\x04 \x01(\rR\rschemaVersion\"\xab\x03\n" +
-	"\fExchangeMeta\x12+\n" +
-	"\x11cache_fingerprint\x18\x01 \x01(\x04R\x10cacheFingerprint\x12\x16\n" +
-	"\x06region\x18\x02 \x01(\tR\x06region\x12/\n" +
-	"\x13backpressure_signal\x18\x03 \x01(\bR\x12backpressureSignal\x12>\n" +
-	"\vpex_entries\x18\x04 \x03(\v2\x1d.loom.mesh.gossip.v1.PEXEntryR\n" +
-	"pexEntries\x12d\n" +
-	"\x11connection_counts\x18\x05 \x03(\v27.loom.mesh.gossip.v1.ExchangeMeta.ConnectionCountsEntryR\x10connectionCounts\x12:\n" +
+	"\arecords\x18\x02 \x03(\fR\arecords\x12\"\n" +
+	"\fcodecVersion\x18\x03 \x01(\rR\fcodecVersion\x12$\n" +
+	"\rschemaVersion\x18\x04 \x01(\rR\rschemaVersion\"\xa7\x03\n" +
+	"\fExchangeMeta\x12*\n" +
+	"\x10cacheFingerprint\x18\x01 \x01(\x04R\x10cacheFingerprint\x12\x16\n" +
+	"\x06region\x18\x02 \x01(\tR\x06region\x12.\n" +
+	"\x12backpressureSignal\x18\x03 \x01(\bR\x12backpressureSignal\x12=\n" +
+	"\n" +
+	"pexEntries\x18\x04 \x03(\v2\x1d.loom.mesh.gossip.v1.PEXEntryR\n" +
+	"pexEntries\x12c\n" +
+	"\x10connectionCounts\x18\x05 \x03(\v27.loom.mesh.gossip.v1.ExchangeMeta.ConnectionCountsEntryR\x10connectionCounts\x12:\n" +
 	"\x05offer\x18\x06 \x01(\v2$.loom.mesh.gossip.v1.ConnectionOfferR\x05offer\x1aC\n" +
 	"\x15ConnectionCountsEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\x9e\x01\n" +
-	"\bPEXEntry\x12\x17\n" +
-	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12\x1c\n" +
-	"\taddresses\x18\x02 \x03(\tR\taddresses\x12%\n" +
-	"\x0etimestamp_unix\x18\x03 \x01(\x03R\rtimestampUnix\x12\x1c\n" +
+	"\x05value\x18\x02 \x01(\x05R\x05value:\x028\x01\"\x9c\x01\n" +
+	"\bPEXEntry\x12\x16\n" +
+	"\x06nodeId\x18\x01 \x01(\tR\x06nodeId\x12\x1c\n" +
+	"\taddresses\x18\x02 \x03(\tR\taddresses\x12$\n" +
+	"\rtimestampUnix\x18\x03 \x01(\x03R\rtimestampUnix\x12\x1c\n" +
 	"\tsignature\x18\x04 \x01(\fR\tsignature\x12\x16\n" +
-	"\x06region\x18\x05 \x01(\tR\x06region\"\xd2\x01\n" +
-	"\x0fConnectionOffer\x12 \n" +
-	"\ffrom_node_id\x18\x01 \x01(\tR\n" +
-	"fromNodeId\x12\x1c\n" +
+	"\x06region\x18\x05 \x01(\tR\x06region\"\xcd\x01\n" +
+	"\x0fConnectionOffer\x12\x1e\n" +
 	"\n" +
-	"to_node_id\x18\x02 \x01(\tR\btoNodeId\x12\x1c\n" +
+	"fromNodeId\x18\x01 \x01(\tR\n" +
+	"fromNodeId\x12\x1a\n" +
+	"\btoNodeId\x18\x02 \x01(\tR\btoNodeId\x12\x1c\n" +
 	"\taddresses\x18\x03 \x03(\tR\taddresses\x12\x1c\n" +
-	"\ttransport\x18\x04 \x01(\tR\ttransport\x12%\n" +
-	"\x0etimestamp_unix\x18\x05 \x01(\x03R\rtimestampUnix\x12\x1c\n" +
-	"\tsignature\x18\x06 \x01(\fR\tsignature\"\xe6\x03\n" +
+	"\ttransport\x18\x04 \x01(\tR\ttransport\x12$\n" +
+	"\rtimestampUnix\x18\x05 \x01(\x03R\rtimestampUnix\x12\x1c\n" +
+	"\tsignature\x18\x06 \x01(\fR\tsignature\"\xdb\x03\n" +
 	"\tLADRecord\x12\x14\n" +
-	"\x05topic\x18\x01 \x01(\tR\x05topic\x12\x17\n" +
-	"\anode_id\x18\x02 \x01(\tR\x06nodeId\x12\x1c\n" +
+	"\x05topic\x18\x01 \x01(\tR\x05topic\x12\x16\n" +
+	"\x06nodeId\x18\x02 \x01(\tR\x06nodeId\x12\x1c\n" +
 	"\tpartition\x18\x03 \x01(\tR\tpartition\x12\x12\n" +
-	"\x04body\x18\x04 \x01(\fR\x04body\x12%\n" +
-	"\x0etimestamp_unix\x18\x05 \x01(\x03R\rtimestampUnix\x12#\n" +
-	"\rlamport_clock\x18\x06 \x01(\x04R\flamportClock\x12\x10\n" +
+	"\x04body\x18\x04 \x01(\fR\x04body\x12$\n" +
+	"\rtimestampUnix\x18\x05 \x01(\x03R\rtimestampUnix\x12\"\n" +
+	"\flamportClock\x18\x06 \x01(\x04R\flamportClock\x12\x10\n" +
 	"\x03seq\x18\a \x01(\x04R\x03seq\x12\x1c\n" +
-	"\ttombstone\x18\b \x01(\bR\ttombstone\x12&\n" +
-	"\x0fdeleted_at_unix\x18\t \x01(\x03R\rdeletedAtUnix\x12)\n" +
-	"\x10tombstone_reason\x18\n" +
+	"\ttombstone\x18\b \x01(\bR\ttombstone\x12$\n" +
+	"\rdeletedAtUnix\x18\t \x01(\x03R\rdeletedAtUnix\x12(\n" +
+	"\x0ftombstoneReason\x18\n" +
 	" \x01(\tR\x0ftombstoneReason\x12\x1c\n" +
-	"\tsignature\x18\v \x01(\fR\tsignature\x12#\n" +
-	"\rhlc_timestamp\x18\f \x01(\x04R\fhlcTimestamp\x12&\n" +
-	"\x0fexpires_at_unix\x18\r \x01(\x03R\rexpiresAtUnix\x12#\n" +
-	"\rauthor_pubkey\x18\x0e \x01(\fR\fauthorPubkey\x12\x19\n" +
-	"\bblob_cid\x18\x0f \x01(\tR\ablobCidB4Z2github.com/bbmumford/loom/core/directory/gossip/pbb\x06proto3"
+	"\tsignature\x18\v \x01(\fR\tsignature\x12\"\n" +
+	"\fhlcTimestamp\x18\f \x01(\x04R\fhlcTimestamp\x12$\n" +
+	"\rexpiresAtUnix\x18\r \x01(\x03R\rexpiresAtUnix\x12\"\n" +
+	"\fauthorPubkey\x18\x0e \x01(\fR\fauthorPubkey\x12\x18\n" +
+	"\ablobCid\x18\x0f \x01(\tR\ablobCidB4Z2github.com/bbmumford/loom/core/directory/gossip/pbb\x06proto3"
 
 var (
 	file_gossip_proto_rawDescOnce sync.Once
@@ -607,8 +608,8 @@ var file_gossip_proto_goTypes = []any{
 }
 var file_gossip_proto_depIdxs = []int32{
 	1, // 0: loom.mesh.gossip.v1.GossipEnvelope.meta:type_name -> loom.mesh.gossip.v1.ExchangeMeta
-	2, // 1: loom.mesh.gossip.v1.ExchangeMeta.pex_entries:type_name -> loom.mesh.gossip.v1.PEXEntry
-	5, // 2: loom.mesh.gossip.v1.ExchangeMeta.connection_counts:type_name -> loom.mesh.gossip.v1.ExchangeMeta.ConnectionCountsEntry
+	2, // 1: loom.mesh.gossip.v1.ExchangeMeta.pexEntries:type_name -> loom.mesh.gossip.v1.PEXEntry
+	5, // 2: loom.mesh.gossip.v1.ExchangeMeta.connectionCounts:type_name -> loom.mesh.gossip.v1.ExchangeMeta.ConnectionCountsEntry
 	3, // 3: loom.mesh.gossip.v1.ExchangeMeta.offer:type_name -> loom.mesh.gossip.v1.ConnectionOffer
 	4, // [4:4] is the sub-list for method output_type
 	4, // [4:4] is the sub-list for method input_type

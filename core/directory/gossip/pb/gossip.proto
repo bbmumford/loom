@@ -10,7 +10,7 @@ option go_package = "github.com/bbmumford/loom/core/directory/gossip/pb";
 // own record proto; LADRecord below is the directory's, and the envelope
 // does not depend on it.
 //
-// codec_version and schema_version name the encoding of the envelope and of
+// codecVersion and schemaVersion name the encoding of the envelope and of
 // its records. The sender writes the pair its session's negotiated
 // gossip.codec version maps to, and the receiver reads the two fields before it
 // decodes meta or any record, refusing a pair that version does not write
@@ -18,21 +18,21 @@ option go_package = "github.com/bbmumford/loom/core/directory/gossip/pb";
 message GossipEnvelope {
     ExchangeMeta meta = 1;
     repeated bytes records = 2;  // opaque serialised records
-    uint32 codec_version = 3;
-    uint32 schema_version = 4;
+    uint32 codecVersion = 3;
+    uint32 schemaVersion = 4;
 }
 
 // ExchangeMeta carries per-exchange metadata piggybacked on gossip frames.
 message ExchangeMeta {
-    uint64 cache_fingerprint = 1;
+    uint64 cacheFingerprint = 1;
     string region = 2;
-    bool backpressure_signal = 3;
+    bool backpressureSignal = 3;
 
     // PEX entries piggybacked on gossip
-    repeated PEXEntry pex_entries = 4;
+    repeated PEXEntry pexEntries = 4;
 
     // Connection counts for load balancing
-    map<string, int32> connection_counts = 5;
+    map<string, int32> connectionCounts = 5;
 
     // Connection offer for NAT traversal signaling
     ConnectionOffer offer = 6;
@@ -46,20 +46,20 @@ message ExchangeMeta {
 // take effect. Mirrors the lad.Record.Region carried in the body
 // for direct LADRecord messages.
 message PEXEntry {
-    string node_id = 1;
+    string nodeId = 1;
     repeated string addresses = 2;
-    int64 timestamp_unix = 3;
+    int64 timestampUnix = 3;
     bytes signature = 4;
     string region = 5;
 }
 
 // ConnectionOffer signals desire for a direct connection.
 message ConnectionOffer {
-    string from_node_id = 1;
-    string to_node_id = 2;
+    string fromNodeId = 1;
+    string toNodeId = 2;
     repeated string addresses = 3;
     string transport = 4;
-    int64 timestamp_unix = 5;
+    int64 timestampUnix = 5;
     bytes signature = 6;
 }
 
@@ -68,33 +68,33 @@ message ConnectionOffer {
 //
 // Fields 12-15 let receiving peers reconstruct the full lad.Record state
 // from a gossip exchange:
-//   - hlc_timestamp: HLC tie-breaker for IBLT reconcile and snapshot
+//   - hlcTimestamp: HLC tie-breaker for IBLT reconcile and snapshot
 //     manifest HLC; without it, every peer interprets the record at
 //     HLC=0 and stale records win on equal lamport clocks.
-//   - expires_at_unix: TTL for tombstone pruning; without it the
+//   - expiresAtUnix: TTL for tombstone pruning; without it the
 //     receiver treats every record as never-expires.
-//   - author_pubkey: signed-topic enforcement — verifiers need the
+//   - authorPubkey: signed-topic enforcement — verifiers need the
 //     pubkey alongside the signature.
-//   - blob_cid: content-addressed reference for off-record blobs
+//   - blobCid: content-addressed reference for off-record blobs
 //     (snapshot manifest payloads).
 //
-// All four use the zero-check pattern from `deleted_at_unix`
+// All four use the zero-check pattern from `deletedAtUnix`
 // so unset fields round-trip cleanly without surprise default-zero
 // effects.
 message LADRecord {
     string topic = 1;
-    string node_id = 2;
+    string nodeId = 2;
     string partition = 3;
     bytes body = 4;             // opaque sub-document (roles, reach, member JSON)
-    int64 timestamp_unix = 5;
-    uint64 lamport_clock = 6;
+    int64 timestampUnix = 5;
+    uint64 lamportClock = 6;
     uint64 seq = 7;
     bool tombstone = 8;
-    int64 deleted_at_unix = 9;
-    string tombstone_reason = 10;
+    int64 deletedAtUnix = 9;
+    string tombstoneReason = 10;
     bytes signature = 11;
-    uint64 hlc_timestamp = 12;
-    int64 expires_at_unix = 13;
-    bytes author_pubkey = 14;
-    string blob_cid = 15;
+    uint64 hlcTimestamp = 12;
+    int64 expiresAtUnix = 13;
+    bytes authorPubkey = 14;
+    string blobCid = 15;
 }
