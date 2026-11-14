@@ -37,10 +37,10 @@ type Policy struct {
 // outside the required prefix.
 func (p Policy) Verify(req *pb.VerifyBootstrapRequest) *pb.VerifyBootstrapResponse {
 	if req.GetNodeId() == "" {
-		return &pb.VerifyBootstrapResponse{Allowed: false, Reason: "missing node_id"}
+		return &pb.VerifyBootstrapResponse{Allowed: false, Reason: "missing nodeId"}
 	}
 	if req.GetServiceName() == "" {
-		return &pb.VerifyBootstrapResponse{Allowed: false, Reason: "missing service_name"}
+		return &pb.VerifyBootstrapResponse{Allowed: false, Reason: "missing serviceName"}
 	}
 	prefix := p.NodeIDPrefix
 	if prefix == "" {
@@ -50,13 +50,13 @@ func (p Policy) Verify(req *pb.VerifyBootstrapRequest) *pb.VerifyBootstrapRespon
 		id := req.GetNodeId()
 		return &pb.VerifyBootstrapResponse{
 			Allowed: false,
-			Reason:  fmt.Sprintf("invalid node_id format: %s", id[:min(len(id), 20)]),
+			Reason:  fmt.Sprintf("invalid nodeId format: %s", id[:min(len(id), 20)]),
 		}
 	}
 	if p.PrivateAddressPrefix != "" && req.GetPrivateIp() != "" && !strings.HasPrefix(req.GetPrivateIp(), p.PrivateAddressPrefix) {
 		return &pb.VerifyBootstrapResponse{
 			Allowed: false,
-			Reason:  fmt.Sprintf("private_ip must start with %s", p.PrivateAddressPrefix),
+			Reason:  fmt.Sprintf("privateIp must start with %s", p.PrivateAddressPrefix),
 		}
 	}
 	return &pb.VerifyBootstrapResponse{Allowed: true}
