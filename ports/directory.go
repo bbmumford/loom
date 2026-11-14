@@ -259,6 +259,12 @@ type DirectorySnapshot struct {
 // passing it explicitly keeps that choice visible at each call site.
 type Partition string
 
+// RoleAdvertPartition is the bucket role and member records sit in: node's
+// fleet.peer bridge (node/lad_reach_bridge.go) writes them with no partition,
+// and a partition is a literal bucket key, so a reader of those records names
+// this bucket and any other value reads an empty mesh.
+const RoleAdvertPartition = Partition("")
+
 // LiveDirectory is the single typed read surface for live replicated state,
 // so a consumer need not read a DirectoryCache or Ledger directly.
 //

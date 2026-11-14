@@ -143,7 +143,7 @@ func (s *TrustShadow) Stats() (checked, rejected, dropped uint64) {
 // literal bucket key, not a wildcard), and the role list bounds the per-role
 // NodesByRole comparison to roles this node actually participates in.
 func (rt *Runtime) shadowParityScope() (ports.Partition, []string) {
-	partition := ports.Partition("")
+	partition := ports.RoleAdvertPartition
 	for _, tc := range rt.cfg.Partitions {
 		if tc.PartitionID != "" {
 			partition = ports.Partition(tc.PartitionID)
