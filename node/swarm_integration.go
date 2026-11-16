@@ -716,8 +716,9 @@ func (s *SwarmIntegration) AdvertiseLocalAddress(transport swarmpb.Address_Trans
 // What gets advertised:
 // - noise-UDP @ cfg.VL1.UDPPort on cfg.PublicDomain (scope=public) —
 // the Grade-A target for cross-fabric / cross-origin peers
-// - noise-UDP @ cfg.VL1.UDPPort on the platform private IP
-// (scope=private) when the platform exposes one — same-origin peers
+// - noise-UDP @ cfg.VL1.UDPPort on discoverPrivateIP's address and on
+// the platform private IP when the platform exposes one
+// (scope=private) — same-origin peers
 // prefer this entry, skipping the public LB and routing direct
 // over the private fabric (Fly 6PN, GCP VPC, etc.). Uses the SAME
 // listener socket as the public entry — single UDP port, two
@@ -761,12 +762,23 @@ func (rt *Runtime) advertiseSwarmListeners(si *SwarmIntegration) {
 		// see Scope:"private" and an origin-matching prefix dial the
 		// private host instead of the public one — direct noise-UDP
 		// over the private fabric, bypassing the anycast LB.
+		//
+		// The address is discoverPrivateIP's, the one the bootstrap headers
+		// and the cross-origin forwarder read, so Config.PrivateIP and the
+		// filtered discovery tiers reach the advert too. The platform's own
+		// answer is advertised beside it, because Config.PrivateIP takes
+		// precedence in discoverPrivateIP and a containerised runtime hides
+		// the NICs advertiseLocalInterfaces would otherwise find the
+		// platform address on; an equal host is one entry.
+		if privIP := rt.discoverPrivateIP(); privIP != "" {
+			si.AdvertiseLocalAddress(swarmpb.Address_NOISE_UDP, privIP, uint32(udpPort), "", "private")
+		}
 		if rt.cfg.Platform != nil {
-			if privIP := rt.cfg.Platform.PrivateIP(); privIP != "" {
-				si.AdvertiseLocalAddress(swarmpb.Address_NOISE_UDP, privIP, uint32(udpPort), "", "private")
+			if platformIP := rt.cfg.Platform.PrivateIP(); platformIP != "" {
+				si.AdvertiseLocalAddress(swarmpb.Address_NOISE_UDP, platformIP, uint32(udpPort), "", "private")
 			}
 		}
-		// Multi-NIC enumeration: the platform-reported PrivateIP is one
+		// Multi-NIC enumeration: the private entry above is one
 		// address; a host with multiple NICs (dual VPNs, multiple 6PN
 		// families, private LAN plus Fly 6PN, etc.) has more dial
 		// targets that same-origin peers may need. AdvertiseLocalAddress

@@ -39,22 +39,15 @@ func (devPlatform) MachineID() string {
 func (devPlatform) AppName() string  { return "" }
 func (devPlatform) PublicIP() string { return "" } // callers fall back to STUN
 
-// PrivateIP returns the first non-loopback unicast interface address,
-// matching the host package's dev/bare-metal behaviour.
-func (devPlatform) PrivateIP() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return ""
-	}
-	for _, a := range addrs {
-		ipnet, ok := a.(*net.IPNet)
-		if !ok || ipnet.IP.IsLoopback() || !ipnet.IP.IsGlobalUnicast() {
-			continue
-		}
-		return ipnet.IP.String()
-	}
-	return ""
-}
+// PrivateIP returns "": the dev platform has no authoritative source for the
+// private mesh address, so node.Runtime's discoverPrivateIP answers from its
+// own tiers (hostname, interfaces, .internal DNS, outbound probe), each
+// filtered to routable private addresses with Docker bridges excluded, as it
+// does for atlas's dev platform. Its tier 0 returns this answer unfiltered
+// whenever it is non-empty, so an interface walk here would hand a public or
+// Docker-bridge address to the bootstrap headers, the cross-origin
+// forwarder's origin and the private swarm entry.
+func (devPlatform) PrivateIP() string { return "" }
 
 func (devPlatform) ResolveUDPBind(port int) string {
 	return ":" + itoa(port)

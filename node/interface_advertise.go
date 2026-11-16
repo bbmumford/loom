@@ -34,11 +34,12 @@ func swarmpbAddressNoiseUDP() swarmpb.Address_Transport {
 
 // localInterfaceAddresses enumerates every routable interface address on
 // the host so a multi-homed node advertises every plausible private dial
-// target instead of just the one Platform.PrivateIP() reports.
+// target instead of just the one private entry advertiseSwarmListeners
+// writes.
 //
 // A node with multiple NICs (several 6PN families, dual VPNs, a private LAN
-// plus a Fly 6PN ULA) is reduced to a single private address by a lone
-// Platform.PrivateIP() call. Same-origin peers that happen to share a
+// plus a Fly 6PN ULA) is reduced to a single private address by that one
+// entry alone. Same-origin peers that happen to share a
 // different prefix then see no reachable private candidate and degrade to
 // the public anycast path, which carries the cross-region UDP
 // unreliability the connection log shows.
@@ -60,12 +61,13 @@ func swarmpbAddressNoiseUDP() swarmpb.Address_Transport {
 // 6PN ULA / RFC1918 / IPv6 ULA → "private"; everything else
 // → "public".
 //
-// This enumeration does NOT include the platform-reported PrivateIP. That
-// defensive fallback — for containerised runtimes that hide the host's
-// NICs — is emitted by the caller, advertiseSwarmListeners in
-// swarm_integration.go, two statements before it calls
-// advertiseLocalInterfaces. An enumeration failure is therefore survivable
-// only because of that separate call, not because of anything in this file.
+// This enumeration does NOT include the node's private entry. That
+// defensive fallback — discoverPrivateIP's answer and the platform-reported
+// PrivateIP, for containerised runtimes that hide the host's NICs — is
+// emitted by the caller, advertiseSwarmListeners in swarm_integration.go,
+// just before it calls advertiseLocalInterfaces. An enumeration failure is
+// therefore survivable only because of that separate entry, not because of
+// anything in this file.
 type localInterfaceAddress struct {
 	Host  string
 	Scope string
@@ -76,8 +78,8 @@ type localInterfaceAddress struct {
 // is stable-sorted by (scope, host) so the resulting PeerRecord doesn't
 // flap between publishes solely due to OS-level interface ordering.
 //
-// On error (interface enumeration failed) returns nil; caller must fall
-// back to the platform-reported PrivateIP.
+// On error (interface enumeration failed) returns nil; the caller's
+// private entry is then the node's only private candidate.
 func enumerateLocalInterfaces() []localInterfaceAddress {
 	ifaces, err := netInterfaces()
 	if err != nil {
@@ -142,7 +144,7 @@ func enumerateLocalInterfaces() []localInterfaceAddress {
 }
 
 // advertiseLocalInterfaces emits a noise-UDP candidate per interface
-// address discovered. The platform-reported PrivateIP is advertised by the
+// address discovered. The node's private entry is advertised by the
 // caller (advertiseSwarmListeners in swarm_integration.go), not here — so if enumeration
 // returns nothing this function advertises nothing and logs nothing, and
 // the private candidate a peer needs comes from that separate call.

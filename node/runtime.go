@@ -4287,19 +4287,37 @@ func isRoutablePrivateIP(ip net.IP) bool {
 	return true
 }
 
+// privateIPHostname, privateIPLookupHost and privateIPInterfaceAddrs are the
+// host lookups discoverPrivateIP's tiers read. Production uses os.Hostname,
+// net.LookupHost and net.InterfaceAddrs; tests replace them, because each
+// tier's filter is otherwise checked only against whatever names and NICs the
+// machine running the test has.
+var (
+	privateIPHostname       = os.Hostname
+	privateIPLookupHost     = net.LookupHost
+	privateIPInterfaceAddrs = net.InterfaceAddrs
+)
+
 // discoverPrivateIP returns the node's private IP for internal mesh networking.
-// Uses a tiered discovery chain — first valid routable private IP wins:
+// The bootstrap X-VL1-Private-IP headers, the cross-origin forwarder's origin
+// (NewConnectionManager) and the private swarm entry (advertiseSwarmListeners)
+// all read it, so a node states one private address everywhere.
+// Config.PrivateIP, when set, is returned before any tier. Otherwise a tiered
+// discovery chain runs — first valid routable private IP wins:
 //  0. PlatformInfo.PrivateIP() — authoritative on cloud (FLY_PRIVATE_IP
 //     on Fly, IMDS local-ipv4 on AWS, metadata internal-ip on GCP,
 //     POD_IP on k8s). Synchronous, single-shot, provider-agnostic via
-//     the platform abstraction.
+//     the platform abstraction. Returned unfiltered; the dev platforms
+//     answer "" so the filtered tiers below decide.
 //  1. Hostname resolution (os.Hostname → net.LookupHost)
-//  2. Interface enumeration (fd00::/8 ULA preferred)
+//  2. Interface enumeration, IPv6 ULA (fd00::/8) only
 //  3. .internal DNS lookup
 //  4. Outbound route probe (dial bootstrap host, check local addr)
+//  5. Interface enumeration, the first routable private address of any
+//     family
 //
-// Filters out Docker bridge IPs (172.16-31.x.x). Prefers IPv6 ULA (fdaa:).
-// Falls back to PrivateIP config field if all tiers fail.
+// Tiers 1-5 filter out Docker bridge IPs (172.16-31.x.x) through
+// isRoutablePrivateIP. Returns "" when every tier is silent.
 func (rt *Runtime) discoverPrivateIP() string {
 	// Config override takes priority
 	if rt.cfg.PrivateIP != "" {
@@ -4317,8 +4335,8 @@ func (rt *Runtime) discoverPrivateIP() string {
 	}
 
 	// Tier 1: Hostname resolution — prefer IPv6 ULA over IPv4
-	if hostname, err := os.Hostname(); err == nil && hostname != "" {
-		if ips, err := net.LookupHost(hostname); err == nil {
+	if hostname, err := privateIPHostname(); err == nil && hostname != "" {
+		if ips, err := privateIPLookupHost(hostname); err == nil {
 			var bestIPv4 string
 			for _, ip := range ips {
 				parsed := net.ParseIP(ip)
@@ -4341,7 +4359,7 @@ func (rt *Runtime) discoverPrivateIP() string {
 
 	// Tier 2: Interface addresses — look for IPv6 ULA (fd00::/8, includes fdaa:)
 	// These are overlay/mesh network IPs that route between hosts.
-	if addrs, err := net.InterfaceAddrs(); err == nil {
+	if addrs, err := privateIPInterfaceAddrs(); err == nil {
 		for _, addr := range addrs {
 			if ipnet, ok := addr.(*net.IPNet); ok && isRoutablePrivateIP(ipnet.IP) {
 				// Prefer IPv6 ULA (fdaa:, fd00:) — overlay networks
@@ -4354,9 +4372,9 @@ func (rt *Runtime) discoverPrivateIP() string {
 
 	// Tier 3: .internal DNS lookup — some platforms (e.g., overlay networks)
 	// provide internal DNS that resolves to the node's private mesh address
-	if hostname, err := os.Hostname(); err == nil && hostname != "" {
+	if hostname, err := privateIPHostname(); err == nil && hostname != "" {
 		internalName := hostname + ".internal"
-		if ips, err := net.LookupHost(internalName); err == nil {
+		if ips, err := privateIPLookupHost(internalName); err == nil {
 			for _, ip := range ips {
 				parsed := net.ParseIP(ip)
 				if isRoutablePrivateIP(parsed) {
@@ -4388,6 +4406,21 @@ func (rt *Runtime) discoverPrivateIP() string {
 			conn.Close()
 			if isRoutablePrivateIP(localAddr.IP) {
 				return localAddr.IP.String()
+			}
+		}
+	}
+
+	// Tier 5: Interface addresses of any family — the first routable private
+	// address, for a host whose private network is an IPv4 LAN or VPC, whose
+	// hostname resolves to no private address, and whose outbound probe, if
+	// it has bootstrap hosts, found none. It runs after tier 4 because the
+	// probe reads the route the OS takes toward the mesh, which picks the
+	// right address on a multi-homed host where the first interface would
+	// not.
+	if addrs, err := privateIPInterfaceAddrs(); err == nil {
+		for _, addr := range addrs {
+			if ipnet, ok := addr.(*net.IPNet); ok && isRoutablePrivateIP(ipnet.IP) {
+				return ipnet.IP.String()
 			}
 		}
 	}
@@ -4533,8 +4566,8 @@ func (rt *Runtime) NATBehaviour() nat.NATBehaviour {
 // No-op when the swarm subsystem hasn't been wired yet (early-boot path
 // before PublishRPCHandlersToLAD has been called). Re-runs
 // advertiseSwarmListeners first so the publisher's address set reflects
-// the latest rt.publicIP / Platform.PrivateIP() / interface enumeration,
-// then PublishNow forces the broadcast.
+// the latest rt.publicIP / discoverPrivateIP() and Platform.PrivateIP() /
+// interface enumeration, then PublishNow forces the broadcast.
 func (rt *Runtime) republishWithPublicIP() {
 	if rt == nil || rt.swarm == nil || rt.swarm.Publisher == nil {
 		return
