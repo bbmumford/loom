@@ -5,6 +5,7 @@
 package capabilities
 
 import (
+	"log"
 	"os"
 	"runtime"
 	"strconv"
@@ -194,6 +195,36 @@ func (r *SystemResources) GetRecommendedRoles() int {
 		recommended = 1
 	}
 	return recommended
+}
+
+// probeVirtualMemory and probeCPUCounts make the gopsutil calls detectMemory
+// and detectCPU try first, answering only whether each works on this host.
+// reportDetectorDegradation reads them when the package loads; tests replace
+// them, because whether gopsutil works is otherwise a property of the machine
+// running the test.
+var (
+	probeVirtualMemory = func() error { _, err := mem.VirtualMemory(); return err }
+	probeCPUCounts     = func() error { _, err := cpu.Counts(true); return err }
+)
+
+// reportDetectorDegradation writes one warning per failing gopsutil probe, so
+// the process log says at start that DetectSystemResources, which SelectRoles
+// calls for the role budget, will size from MEMORY_LIMIT_MB, CPU_CORES or the
+// Go runtime instead of the host's own counts.
+// The warning goes to logf, which init passes as log.Printf, and not to
+// dbgCapabilities: the fallback lines inside detectMemory and detectCPU are
+// written there, and that namespace is silent unless DEBUG names it.
+func reportDetectorDegradation(logf func(format string, args ...any)) {
+	if err := probeVirtualMemory(); err != nil {
+		logf("Warning: gopsutil memory detection unavailable, falling back to env vars/runtime: %v", err)
+	}
+	if err := probeCPUCounts(); err != nil {
+		logf("Warning: gopsutil CPU detection unavailable, falling back to env vars/runtime: %v", err)
+	}
+}
+
+func init() {
+	reportDetectorDegradation(log.Printf)
 }
 
 // ParseResourceString parses a resource string like "512MB" or "2cores" into components
