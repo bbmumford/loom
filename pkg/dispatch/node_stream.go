@@ -62,7 +62,8 @@ func (c *HWPCaller) OpenNodeStream(ctx context.Context, nodeID, role, handler st
 	if !ok {
 		return nil, fmt.Errorf("stream %s: the finder names no session by node: %w", handler, ErrNoRouteToNode)
 	}
-	if err := c.checkAnswerers(role, handler, nodeID); err != nil {
+	// The pre-send check every send entry makes; an open frame carries no payload.
+	if _, err := c.preSend(ctx, role, handler, nodeID, nil); err != nil {
 		return nil, fmt.Errorf("stream %s to node %s: %w", handler, nodeID, err)
 	}
 	session, ok := finder.MeshSessionForNode(nodeID)
@@ -73,8 +74,14 @@ func (c *HWPCaller) OpenNodeStream(ctx context.Context, nodeID, role, handler st
 }
 
 // OpenHandlerStream opens one stream of the handler-stream band on session,
-// sends req as its open frame and waits for the far side's answer.
+// sends req as its open frame and waits for the far side's answer. The
+// process's admission is asked first, with the role req's context names, its
+// handler and its payload, because a caller holding a session reaches this
+// without HWPCaller: a refused stream is never opened.
 func OpenHandlerStream(ctx context.Context, session aether.Session, req *pb.RPCRequest) (NodeStream, error) {
+	if err := Admit(ctx, req.GetContext()["role"], req.GetHandler(), req.GetPayload()); err != nil {
+		return nil, fmt.Errorf("stream %s: %w", req.GetHandler(), err)
+	}
 	open, err := pb.MarshalRequest(req)
 	if err != nil {
 		return nil, fmt.Errorf("stream %s: marshal open: %w", req.Handler, err)

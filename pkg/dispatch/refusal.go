@@ -235,10 +235,12 @@ func routeGrade(r aether.ProbeRoute) grade.Grade {
 }
 
 // isRouteRefusal reports whether err is one of the typed route refusals, which
-// Call returns wrapped so the caller can still test them with errors.Is.
+// Call returns wrapped so the caller can still test them with errors.Is. The
+// outbound admission's refusal (ErrNotAdmitted) is one: nothing left the node.
 func isRouteRefusal(err error) bool {
 	return errors.Is(err, ErrGradeTooLow) || errors.Is(err, ErrRouteDeadline) ||
-		errors.Is(err, ErrAnswerersDisagree) || errors.Is(err, ErrNoAnswerer)
+		errors.Is(err, ErrAnswerersDisagree) || errors.Is(err, ErrNoAnswerer) ||
+		errors.Is(err, ErrNotAdmitted)
 }
 
 // A refusal made by a later hop reaches the origin as a failed RPCResponse.

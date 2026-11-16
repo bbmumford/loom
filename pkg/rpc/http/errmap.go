@@ -20,6 +20,9 @@ import (
 //   - dispatch.ErrAnswerersDisagree → 503, NOT retried: the adverts of the
 //     operation disagree on what it requires, nothing left this node, and no
 //     resend changes that until the fleet's adverts do
+//   - dispatch.ErrNotAdmitted      → 403, NOT retried: the process's outbound
+//     admission (dispatch.InstallAdmission) refused the proxied call and
+//     nothing left this node
 //   - rpc.ErrScopeDenied           → 403, NOT retried: the handler, or its
 //     registry's scope gate, refused the caller's authority, or the serving
 //     node refused the principal the caller sent, on another node
@@ -66,6 +69,11 @@ func classifyMeshError(err error) (status int, retryAfter string, retryEligible 
 	}
 	if errors.Is(err, dispatch.ErrAnswerersDisagree) {
 		return 503, "", false
+	}
+	// This process's own outbound admission refused the proxied call before
+	// anything was sent; a resend is refused the same way.
+	if errors.Is(err, dispatch.ErrNotAdmitted) {
+		return 403, "", false
 	}
 	// A refusal of the caller's authority is checked before HandlerError,
 	// because the one a handler on another node made is a HandlerError too.

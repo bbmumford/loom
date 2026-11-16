@@ -119,10 +119,19 @@ func (m *ConnectionManager) MeshSessionForNode(nodeID string) (aether.Session, b
 // dispatch.ErrChannelClosed: HWPCaller resends it over a dynamic stream only for
 // an effect.Class.Repeatable operation, and CallNode returns it.
 //
+// The process's outbound admission (dispatch.Admit) is asked first, with the
+// role the request's context names, its handler and its payload: this method is
+// exported, so a caller outside dispatch reaches the bidi channel without
+// HWPCaller's own check. Its refusal is reported as handled (ok=true) with
+// nothing sent, as the grade gate's is.
+//
 // Implements dispatch.SessionFinder.CallViaBidi.
 func (m *ConnectionManager) CallViaBidi(ctx context.Context, nodeID string, req *pb.RPCRequest) (*pb.RPCResponse, bool, error) {
 	if m == nil {
 		return nil, false, nil
+	}
+	if err := dispatch.Admit(ctx, req.GetContext()["role"], req.GetHandler(), req.GetPayload()); err != nil {
+		return nil, true, err
 	}
 	// Resolve the active session first so we can scope dead-bidi
 	// eviction precisely to that session (sibling sessions for the
@@ -151,7 +160,7 @@ func (m *ConnectionManager) CallViaBidi(ctx context.Context, nodeID string, req 
 	if err := dispatch.CheckRouteGrade(req.Handler, req.Context["opClass"], sess); err != nil {
 		return nil, true, err
 	}
-	resp, err := bidi.Call(ctx, req)
+	resp, err := bidi.call(ctx, req)
 	if err != nil && !bidi.IsAlive() {
 		// Bidi died DURING the call (stream closed under us).
 		m.evictDeadBidiForSession(sess, bidi)

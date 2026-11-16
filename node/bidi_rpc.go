@@ -232,7 +232,22 @@ func (b *BidiRPC) nextWireID() string {
 	return b.wireIDPrefix + strconv.FormatUint(n, 36)
 }
 
-// Call sends an RPC request and waits for the correlated response.
+// Call sends a request this process originates on the bidi channel and waits
+// for the correlated response. It asks the process's outbound admission
+// (dispatch.Admit) first, with the role the request's context names, its
+// handler and its payload, because GetBidiRPC hands any holder of the
+// connection manager this channel with no dispatch entry in between; a refusal
+// returns with nothing sent. The forwarder relays other nodes' requests through
+// call, which no admission of this process judges, and CallViaBidi, which has
+// already asked, sends through call too.
+func (b *BidiRPC) Call(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse, error) {
+	if err := dispatch.Admit(ctx, req.GetContext()["role"], req.GetHandler(), req.GetPayload()); err != nil {
+		return nil, err
+	}
+	return b.call(ctx, req)
+}
+
+// call sends an RPC request and waits for the correlated response.
 // Uses Stream 1's bidirectional channel — no dynamic stream opened.
 //
 // The caller's req.Id (if any) is preserved on the wire by the
@@ -241,7 +256,7 @@ func (b *BidiRPC) nextWireID() string {
 // requests (which reuse the caller's id across hops) from per-bidi
 // pending-channel correlation — no two probes can collide on the same
 // pending slot regardless of what the caller's req.Id was.
-func (b *BidiRPC) Call(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse, error) {
+func (b *BidiRPC) call(ctx context.Context, req *pb.RPCRequest) (*pb.RPCResponse, error) {
 	// bidirpc_inflight_gauge: track how many outbound Call()
 	// invocations are currently waiting for a response. The gauge is
 	// an atomic int64 — increment on entry, decrement when the call

@@ -553,24 +553,21 @@ func (c *HWPCaller) refillPools() {
 // The call leaves only on a first hop that grades at or above the floor of
 // its operation class (the WithOpClass hint; none is Standard). With no such
 // hop, or with a class the gate does not declare, it returns a
-// *GradeTooLowError before anything is sent.
+// *GradeTooLowError before anything is sent. A call the process's installed
+// Admission refuses returns that refusal (ErrNotAdmitted) before the cache is
+// read or anything is sent.
 func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byte) ([]byte, error) {
 	start := time.Now()
 
-	// The grade gate, before any path and before the result cache: the class
-	// this call names sets the lowest grade it may leave on, and a class the
-	// gate does not declare is refused whatever is cached or connected.
+	// The pre-send check, before any path and before the result cache: the
+	// process's admission, the grade floor of the class this call names (a class
+	// the gate does not declare is refused whatever is cached or connected), and
+	// the adverts of method, which must agree on what it requires before any
+	// holder is reached. A cached answer is one a holder gave, so it is held to
+	// the same check as a fresh one.
 	opClass := opClassFromContext(ctx)
-	floor, err := classFloor(method, opClass)
+	floor, err := c.preSend(ctx, role, method, "", payload)
 	if err != nil {
-		c.metrics.RecordCall(role, time.Since(start), false)
-		return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, err)
-	}
-
-	// The adverts of method must agree on what it requires before any holder is
-	// reached, and a cached answer is one a holder gave: it is held to the same
-	// check as a fresh one.
-	if err := c.checkAnswerers(role, method, ""); err != nil {
 		c.metrics.RecordCall(role, time.Since(start), false)
 		return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, err)
 	}
@@ -716,7 +713,7 @@ func (c *HWPCaller) Call(ctx context.Context, role, method string, payload []byt
 					// A refusal is not the path's availability, so the
 					// circuit gets no verdict, and the dynamic stream below
 					// is not tried for a route the gate just refused.
-					if errors.Is(err, ErrGradeTooLow) {
+					if refusedBeforeSend(err) {
 						cb.Release()
 						resultCh <- probeResult{nodeID: r.NodeID, err: err}
 						return
@@ -896,7 +893,7 @@ func (c *HWPCaller) sendOnRoute(ctx, probeCtx context.Context, method string, ba
 			return answered(resp)
 		case err == nil:
 			return nil, ambiguous(fmt.Errorf("bidi: %w", errNilBidiResponse))
-		case errors.Is(err, ErrGradeTooLow):
+		case refusedBeforeSend(err):
 			cb.Release()
 			return nil, err
 		case !errors.Is(err, ErrNotSent):
@@ -952,16 +949,12 @@ func (c *HWPCaller) sendOnRoute(ctx, probeCtx context.Context, method string, ba
 // know a method is non-idempotent must use Call directly so retries
 // don't return stale data.
 //
-// A call naming a class the gate does not declare is refused before the
-// cache is read, as Call refuses it: a hit here returns without reaching
+// A call the process's admission refuses, one naming a class the gate does
+// not declare, and one whose adverts disagree are refused before the cache is
+// read, as Call refuses them (preSend): a hit here returns without reaching
 // Call, so Call's own check would never run for it.
 func (c *HWPCaller) CallCacheable(ctx context.Context, role, method string, payload []byte, ttl time.Duration) ([]byte, error) {
-	if _, err := classFloor(method, opClassFromContext(ctx)); err != nil {
-		c.metrics.RecordCall(role, 0, false)
-		return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, err)
-	}
-	// Refused here for the same reason: a hit returns without reaching Call.
-	if err := c.checkAnswerers(role, method, ""); err != nil {
+	if _, err := c.preSend(ctx, role, method, "", payload); err != nil {
 		c.metrics.RecordCall(role, 0, false)
 		return nil, fmt.Errorf("dispatch %s/%s: %w", role, method, err)
 	}
@@ -1050,7 +1043,7 @@ func (c *HWPCaller) callOnce(ctx context.Context, role, method string, payload [
 			if err == nil && resp == nil {
 				err = errNilBidiResponse
 			}
-			if errors.Is(err, ErrGradeTooLow) {
+			if refusedBeforeSend(err) {
 				// The finder refused the session it would have sent on: a
 				// refusal, not the path's availability.
 				cb.Release()
@@ -1251,15 +1244,12 @@ func (c *HWPCaller) CallNode(ctx context.Context, nodeID, role, method string, p
 	if nodeID == "" {
 		return nil, fmt.Errorf("dispatch %s/%s: empty nodeID: %w", role, method, ErrNoRouteToNode)
 	}
-	// An undeclared class is refused here, before the finder is asked. The
-	// floor itself is the finder's to hold, in CallViaBidi, because only it
-	// knows which session the named node is reached on.
-	if _, err := classFloor(method, opClassFromContext(ctx)); err != nil {
-		return nil, fmt.Errorf("dispatch %s/%s to node %s: %w", role, method, nodeID, err)
-	}
-	// Naming the node does not change what it must hold: the placement that chose
-	// it read the same adverts.
-	if err := c.checkAnswerers(role, method, nodeID); err != nil {
+	// The pre-send check, before the finder is asked: the process's admission,
+	// an undeclared class, and the adverts, which naming the node does not
+	// change (the placement that chose it read the same ones). The floor itself
+	// is the finder's to hold, in CallViaBidi, because only it knows which
+	// session the named node is reached on.
+	if _, err := c.preSend(ctx, role, method, nodeID, payload); err != nil {
 		return nil, fmt.Errorf("dispatch %s/%s to node %s: %w", role, method, nodeID, err)
 	}
 

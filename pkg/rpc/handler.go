@@ -57,6 +57,13 @@ var ErrAnswerersDisagree = sharedDispatch.ErrAnswerersDisagree
 // sentinel under this package's name.
 var ErrNoAnswerer = sharedDispatch.ErrNoAnswerer
 
+// ErrNotAdmitted is returned when the process's outbound admission (the function
+// the endpoint spine installs with dispatch.InstallAdmission) refuses a call, before
+// anything is sent; the function's own error is wrapped beside it. The HTTP bridge
+// answers it with a 403 it marks not retryable. It is dispatch's sentinel under
+// this package's name.
+var ErrNotAdmitted = sharedDispatch.ErrNotAdmitted
+
 // ErrConflict is what a handler's conflict with the state it holds unwraps to
 // (a stale revision, a duplicate, a limit reached, a change already in
 // flight), which refuses nothing about the caller's authority. A Func chooses

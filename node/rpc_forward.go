@@ -544,7 +544,9 @@ func (f *runtimeForwarder) callOverMeshSession(ctx context.Context, session aeth
 
 	if f.rt.connMgr != nil {
 		if bidi, ok := f.rt.connMgr.GetBidiRPC(remoteID); ok {
-			resp, err := bidi.Call(ctx, req)
+			// call, not Call: a relayed request is another node's, which this
+			// process's outbound admission does not judge.
+			resp, err := bidi.call(ctx, req)
 			// A bidi reopening Stream 1 took nothing, so the dynamic stream below is
 			// this request's first send.
 			if !dispatch.Unsent(err) {

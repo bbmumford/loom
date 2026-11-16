@@ -16,6 +16,7 @@ package dispatch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 )
 
@@ -70,11 +71,25 @@ var (
 	globalMu     sync.RWMutex
 )
 
-// SetCaller sets the global dispatch caller (HWPCaller or LocalCaller).
-func SetCaller(c Caller) {
+// SetCaller sets the global dispatch caller (HWPCaller or LocalCaller). Once an
+// outbound admission is installed (InstallAdmission) the caller is sealed: it
+// accepts one *HWPCaller, the type whose every send entry asks the admission, and
+// refuses any other caller and any replacement with ErrCallerSealed, leaving the
+// one in force. Without an admission it replaces the caller and returns nil, which
+// endpoints that declare none (help.orbtr.io's standalone swap) and tests rely on.
+func SetCaller(c Caller) error {
 	globalMu.Lock()
 	defer globalMu.Unlock()
+	if admission != nil {
+		if globalCaller != nil {
+			return fmt.Errorf("%w: a caller is already in force", ErrCallerSealed)
+		}
+		if hc, ok := c.(*HWPCaller); !ok || hc == nil {
+			return fmt.Errorf("%w: %T does not ask the admission before it sends", ErrCallerSealed, c)
+		}
+	}
 	globalCaller = c
+	return nil
 }
 
 // GetCaller returns the global dispatch caller.
