@@ -107,6 +107,11 @@ func OpClassFromContext(ctx context.Context) string {
 // offending fields for diagnostic logging.
 var ErrScopeDenied = rpcscope.ErrDenied
 
+// ErrRefusalUnrecorded is what Enforce fails a call with when the registry's
+// refusal recorder could not record its refusal; it does not unwrap to
+// ErrScopeDenied. It is rpcscope's sentinel under this package's name.
+var ErrRefusalUnrecorded = rpcscope.ErrRefusalUnrecorded
+
 // EnforceScope rejects calls whose ctx fails the handler's declared
 // Scope. loom itself decides only three things and delegates the rest:
 //
@@ -129,6 +134,29 @@ var ErrScopeDenied = rpcscope.ErrDenied
 // supplies none, or a nil one, fails a Requirement-bearing handler CLOSED
 // (symmetric to a nil PresencePolicy).
 func EnforceScope(ctx context.Context, h *Handler, policy rpcscope.PresencePolicy, authz ...*rpcscope.Policy) error {
+	return enforceScope(ctx, h, policy, authz...)
+}
+
+// Enforce is this registry's check point: EnforceScope under its presence and
+// authorization policies, and for a refusal of h the registered refusal
+// recorder called with ctx, the caller and the permission h asks before the
+// refusal returns (rpcscope.RecordRefusal). A recorder's failure fails the call
+// with rpcscope.ErrRefusalUnrecorded. Dispatch and the HTTP bridge's local,
+// proxied and streamed calls judge through it.
+func (r *Registry) Enforce(ctx context.Context, h *Handler) error {
+	err := enforceScope(ctx, h, r.PresencePolicy(), r.AuthzPolicy())
+	if err == nil || h == nil {
+		return err
+	}
+	return rpcscope.RecordRefusal(ctx, r.RefusalRecorder(), rpcscope.Refusal{
+		Operation:   h.FQN(),
+		Caller:      rpcscope.AuthenticatedIdentityFromContext(ctx),
+		Requirement: h.Requirement,
+		Scope:       h.Scope,
+	}, err)
+}
+
+func enforceScope(ctx context.Context, h *Handler, policy rpcscope.PresencePolicy, authz ...*rpcscope.Policy) error {
 	if h == nil {
 		return fmt.Errorf("%w: nil handler", ErrScopeDenied)
 	}

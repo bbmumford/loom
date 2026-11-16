@@ -59,7 +59,7 @@ var streamKeepalive = 15 * time.Second
 
 // serveStream runs h's Stream for one HTTP request whose body parsed into req.
 func (b *Bridge) serveStream(w http.ResponseWriter, r *http.Request, h *rpc.Handler, req proto.Message) {
-	if err := rpc.EnforceScope(r.Context(), h, b.registry.PresencePolicy(), b.registry.AuthzPolicy()); err != nil {
+	if err := b.registry.Enforce(r.Context(), h); err != nil {
 		writeBridgeError(w, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()})
 		return
 	}

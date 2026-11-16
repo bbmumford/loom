@@ -16,6 +16,7 @@ type Registry struct {
 	byRole   map[string][]*Handler // "namespace.domain" → handlers
 	policy   scope.PresencePolicy  // consumer-supplied scope evaluator (nil fails closed)
 	authz    *scope.Policy         // two-arm op authorizer; EnforceScope consults it for a handler that declares a Requirement (nil → the Scope/PresencePolicy tier path)
+	refusals scope.RefusalRecorder // the server's refusal recorder; Enforce calls it for every refusal (nil returns the refusal unrecorded)
 }
 
 // NewRegistry creates an empty handler registry.
@@ -63,6 +64,24 @@ func (r *Registry) AuthzPolicy() *scope.Policy {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return r.authz
+}
+
+// SetRefusalRecorder registers the recorder Enforce calls for every call it
+// refuses, before the refusal returns: the HTTP bridge's local, proxied and
+// streamed calls and Dispatch all pass through Enforce. library endpoint
+// registers the audit host's recorder here and on the mesh HandlerRegistry.
+// Must be called before the registry accepts traffic.
+func (r *Registry) SetRefusalRecorder(rec scope.RefusalRecorder) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refusals = rec
+}
+
+// RefusalRecorder returns the registered refusal recorder (or nil).
+func (r *Registry) RefusalRecorder() scope.RefusalRecorder {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.refusals
 }
 
 // prepareStored validates the handler's scope tag and Requirement arm and returns

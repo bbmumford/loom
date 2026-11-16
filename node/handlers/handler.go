@@ -458,6 +458,7 @@ type HandlerRegistry struct {
 	globalMiddleware   []Middleware            // runs for all handlers
 	policy             scope.PresencePolicy    // consumer-supplied scope evaluator (nil fails closed)
 	authz              *scope.Policy           // judges a declared Requirement (nil fails such a handler closed)
+	refusals           scope.RefusalRecorder   // the server's refusal recorder; validateScope calls it for every refusal (nil returns the refusal unrecorded)
 	registrationScopes map[*registrationScopeToken]*registrationScopeState
 	pendingHandlers    map[string]*registrationEntry
 	nextScopeID        uint64
@@ -566,6 +567,24 @@ func (r *HandlerRegistry) presencePolicy() scope.PresencePolicy {
 // return proves that path still fails closed. Mirrors rpc.Registry.PresencePolicy.
 func (r *HandlerRegistry) PresencePolicy() scope.PresencePolicy {
 	return r.presencePolicy()
+}
+
+// SetRefusalRecorder registers the recorder validateScope calls for every call
+// it refuses, before the refusal returns: the mesh's RPC, task and stream
+// paths all judge through it. library endpoint registers the audit host's
+// recorder here and on the HTTP rpc.Registry. Mirrors
+// rpc.Registry.SetRefusalRecorder.
+func (r *HandlerRegistry) SetRefusalRecorder(rec scope.RefusalRecorder) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.refusals = rec
+}
+
+// RefusalRecorder returns the registered refusal recorder (or nil).
+func (r *HandlerRegistry) RefusalRecorder() scope.RefusalRecorder {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.refusals
 }
 
 // SetAuthzPolicy configures the policy that judges a handler's declared
@@ -1051,11 +1070,32 @@ func (r *HandlerRegistry) Count() int {
 // Dispatch — executes a handler with middleware
 // ---------------------------------------------------------------------------
 
-// validateScope checks that the trusted typed context satisfies the
+// validateScope is the mesh's check point: judgeScope, and for a refusal the
+// registered refusal recorder called with ctx, the caller and the permission h
+// asks before the refusal returns (scope.RecordRefusal). A recorder's failure
+// fails the call with scope.ErrRefusalUnrecorded, which Denial does not read as
+// a denial.
+func (r *HandlerRegistry) validateScope(ctx context.Context, h HandlerMeta) error {
+	err := r.judgeScope(ctx, h)
+	if err == nil {
+		return nil
+	}
+	refusal := scope.Refusal{
+		Operation: h.Name(),
+		Caller:    scope.AuthenticatedIdentityFromContext(ctx),
+		Scope:     h.Scope(),
+	}
+	if rd, ok := h.(RequirementDeclarer); ok {
+		refusal.Requirement = rd.Requirement()
+	}
+	return scope.RecordRefusal(ctx, r.RefusalRecorder(), refusal, err)
+}
+
+// judgeScope checks that the trusted typed context satisfies the
 // handler's declared Requirement or, when it declares none, its scope tag.
 // RPCRequest.Context and task Metadata are deliberately ignored here: both are
 // mutable request data and cannot establish any identity axis or the subject.
-func (r *HandlerRegistry) validateScope(ctx context.Context, h HandlerMeta) error {
+func (r *HandlerRegistry) judgeScope(ctx context.Context, h HandlerMeta) error {
 	identity := scope.AuthenticatedIdentityFromContext(ctx)
 
 	// A declared Requirement is judged only by the registry's authorization

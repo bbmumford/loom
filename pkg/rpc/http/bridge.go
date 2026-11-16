@@ -245,16 +245,17 @@ func (b *Bridge) dispatch(w http.ResponseWriter, r *http.Request, h *rpc.Handler
 // webhook and handler errors; 500 for a response marshal failure), for the
 // caller to write.
 //
-// Mirrors Registry.Dispatch's pre-handler guards (its EnforceScope call and
+// Mirrors Registry.Dispatch's pre-handler guards (its Enforce call and
 // its WebhookSignature check) so the HTTP bridge enforces the same security
 // surface as Registry.Dispatch:
 //
-//  1. EnforceScope fails closed on the handler's declared Scope or
+//  1. Registry.Enforce fails closed on the handler's declared Scope or
 //     Requirement when the authenticated principal on ctx does not
 //     satisfy it, so a handler reached through /rpc/{handler} or a
 //     per-FQN route is judged by the same presence and requirement checks
 //     the mesh registry runs (the mesh also reconciles the transport-pinned
-//     axis).
+//     axis), and records the refusal through the registry's refusal
+//     recorder before it returns.
 //  2. verifyWebhookSignature runs the webhook-class pre-dispatch hook
 //     before handler.Func sees an unauthenticated event. The bridge runs
 //     it on this local execution path only; executeProxy leaves it to the
@@ -264,7 +265,7 @@ func (b *Bridge) dispatch(w http.ResponseWriter, r *http.Request, h *rpc.Handler
 // ErrWebhookSignatureInvalid / ErrWebhookSecretUnset → 401, keeping
 // status-code shaping single-sourced.
 func (b *Bridge) executeLocal(r *http.Request, h *rpc.Handler, req proto.Message) ([]byte, error) {
-	if err := rpc.EnforceScope(r.Context(), h, b.registry.PresencePolicy(), b.registry.AuthzPolicy()); err != nil {
+	if err := b.registry.Enforce(r.Context(), h); err != nil {
 		return nil, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()}
 	}
 	if h.WebhookSignature != nil {
@@ -288,7 +289,7 @@ func (b *Bridge) executeLocal(r *http.Request, h *rpc.Handler, req proto.Message
 // route failures (only "session closed before send" qualifies — see
 // errmap.go for why other "all probes failed" returns can't safely retry).
 //
-// Scope enforcement fails CLOSED here for every non-nil handler: EnforceScope
+// Scope enforcement fails CLOSED here for every non-nil handler: Enforce
 // runs with this registry's PresencePolicy exactly as the local path does. A
 // gateway that proxies handlers declaring a scope MUST install a PresencePolicy
 // (typically one that defers the axis-bearing tags to the destination while
@@ -302,7 +303,7 @@ func (b *Bridge) executeLocal(r *http.Request, h *rpc.Handler, req proto.Message
 // before calling Func, as rpc.Registry.Dispatch and executeLocal do.
 func (b *Bridge) executeProxy(r *http.Request, h *rpc.Handler, req proto.Message) ([]byte, error) {
 	if h != nil {
-		if err := rpc.EnforceScope(r.Context(), h, b.registry.PresencePolicy(), b.registry.AuthzPolicy()); err != nil {
+		if err := b.registry.Enforce(r.Context(), h); err != nil {
 			return nil, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()}
 		}
 	}
@@ -343,6 +344,10 @@ unmarshal:
 // generic body. That keeps the classifier pure.
 func classifyHandlerStatus(err error) int {
 	switch {
+	case errors.Is(err, rpc.ErrRefusalUnrecorded):
+		// The refusal was not recorded, so the call fails as unavailable:
+		// a 403 would answer a refusal that is not on the record.
+		return http.StatusServiceUnavailable
 	case errors.Is(err, rpc.ErrScopeDenied):
 		return http.StatusForbidden
 	case errors.Is(err, rpc.ErrConflict):

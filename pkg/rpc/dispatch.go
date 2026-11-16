@@ -18,8 +18,9 @@ var ErrHandlerNotFound = errors.New("rpc: handler not found")
 var ErrProxyDispatchLocal = errors.New("rpc: proxy handler cannot dispatch locally")
 
 // Dispatch executes a handler from the registry against raw protobuf bytes.
-// Enforces Scope before invoking the handler; returns ErrScopeDenied
-// (wrapped) when the call fails the handler's declared scope tier.
+// Enforces Scope through Enforce before invoking the handler; returns
+// ErrScopeDenied (wrapped) when the call fails the handler's declared scope
+// tier, or rpcscope.ErrRefusalUnrecorded when that refusal was not recorded.
 //
 // Dispatch runs scope, unmarshal, the webhook check and the handler for an
 // in-process caller holding this Registry. The mesh RPC server does not call
@@ -43,7 +44,7 @@ func (r *Registry) Dispatch(ctx context.Context, fqn string, payload []byte) ([]
 	if fn == nil {
 		return nil, fmt.Errorf("%w: %s", ErrProxyDispatchLocal, fqn)
 	}
-	if err := EnforceScope(ctx, h, r.PresencePolicy(), r.AuthzPolicy()); err != nil {
+	if err := r.Enforce(ctx, h); err != nil {
 		return nil, err
 	}
 
