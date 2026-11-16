@@ -84,12 +84,48 @@ func (r *Registry) RefusalRecorder() scope.RefusalRecorder {
 	return r.refusals
 }
 
+// owned returns a copy of h that shares no memory a caller can write with h:
+// the Middleware and Tags slices, the Requirement and the WebhookSignature
+// configuration are copied. The Request and Response prototypes are typed nil
+// pointers and the functions are values, so they are shared as they are.
+// prepareStored stores such a copy, and every accessor that hands a handler
+// out (Get, All, ByRole, ByNamespace, MetadataFor) and the mesh export
+// (ExportToHandlerRegistry) take one from the stored handler, so the handler
+// the HTTP bridge, the mesh dispatch and the publication read changes only by
+// registration.
+func owned(h *Handler) *Handler {
+	c := *h
+	if len(h.Middleware) > 0 {
+		c.Middleware = append([]Middleware(nil), h.Middleware...)
+	}
+	if len(h.Tags) > 0 {
+		c.Tags = append([]string(nil), h.Tags...)
+	}
+	if h.Requirement != nil {
+		req := *h.Requirement
+		c.Requirement = &req
+	}
+	if h.WebhookSignature != nil {
+		sig := *h.WebhookSignature
+		c.WebhookSignature = &sig
+	}
+	return &c
+}
+
+// ownedAll is owned over a list, in its order.
+func ownedAll(list []*Handler) []*Handler {
+	out := make([]*Handler, len(list))
+	for i, h := range list {
+		out[i] = owned(h)
+	}
+	return out
+}
+
 // prepareStored validates the handler's scope tag and Requirement arm and returns
-// its FQN, role, and a defensively-copied stored Handler. It takes no lock and
+// its FQN, role, and the stored Handler, an owned copy of h. It takes no lock and
 // touches no map, so it is the shared lock-free half of Register and the atomic
-// batch core (RegisterAll and RegisterProxy): scope validation and the
-// Middleware/Tags copy live here once. Collision checks and the store happen
-// under the caller's lock.
+// batch core (RegisterAll and RegisterProxy): scope validation and the copy live
+// here once. Collision checks and the store happen under the caller's lock.
 func (r *Registry) prepareStored(h Handler) (fqn, role string, stored *Handler, err error) {
 	if !scope.IsDeclared(h.Scope) {
 		return "", "", nil, fmt.Errorf("handler %s has a non-declarable scope %q: declare a concrete scope tag (the ScopeUnset zero value and the ScopeUnknown proto-decay sentinel are refused)", h.FQN(), h.Scope)
@@ -97,22 +133,14 @@ func (r *Registry) prepareStored(h Handler) (fqn, role string, stored *Handler, 
 	if h.Requirement != nil && h.Requirement.Kind == scope.ArmUnset {
 		return "", "", nil, fmt.Errorf("handler %s declares a Requirement with no authorization arm: build it with scope.Open, scope.Capability or scope.Nexus", h.FQN())
 	}
-	s := h
-	if len(h.Middleware) > 0 {
-		s.Middleware = append([]Middleware(nil), h.Middleware...)
-	}
-	if len(h.Tags) > 0 {
-		s.Tags = append([]string(nil), h.Tags...)
-	}
-	return h.FQN(), h.Role(), &s, nil
+	return h.FQN(), h.Role(), owned(&h), nil
 }
 
 // Register adds a handler to the registry.
 //
-// Mutability defence: the Middleware and Tags slice headers on h alias the
-// caller's backing arrays. We copy them so a caller that later mutates
-// their own slice (e.g. `mw = append(mw, extra)`) cannot retroactively
-// modify what the registry hands out via Get/All/ByRole.
+// The registry stores an owned copy of h (owned), so a caller that later
+// changes its own Middleware or Tags slice, its Requirement or its
+// WebhookSignature configuration does not change what the registry serves.
 func (r *Registry) Register(h Handler) error {
 	fqn, role, stored, err := r.prepareStored(h)
 	if err != nil {
@@ -183,22 +211,26 @@ func (r *Registry) RegisterAll(handlers []Handler) error {
 	return r.registerAllAtomic(handlers, false)
 }
 
-// Get retrieves a handler by FQN.
+// Get retrieves a copy of the handler registered under fqn (owned): changing
+// it changes nothing the registry serves.
 func (r *Registry) Get(fqn string) (*Handler, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	h, ok := r.handlers[fqn]
-	return h, ok
+	if !ok {
+		return nil, false
+	}
+	return owned(h), true
 }
 
-// All returns all registered handlers sorted by FQN.
+// All returns a copy of every registered handler (owned), sorted by FQN.
 func (r *Registry) All() []*Handler {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
 	result := make([]*Handler, 0, len(r.handlers))
 	for _, h := range r.handlers {
-		result = append(result, h)
+		result = append(result, owned(h))
 	}
+	r.mu.RUnlock()
 	sort.Slice(result, func(i, j int) bool { return result[i].FQN() < result[j].FQN() })
 	return result
 }
@@ -215,7 +247,8 @@ func (r *Registry) Roles() []string {
 	return roles
 }
 
-// ByRole returns a copy of all handlers for a given namespace.domain.
+// ByRole returns a copy of every handler of a given namespace.domain (owned),
+// in registration order.
 func (r *Registry) ByRole(role string) []*Handler {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -223,12 +256,10 @@ func (r *Registry) ByRole(role string) []*Handler {
 	if src == nil {
 		return nil
 	}
-	out := make([]*Handler, len(src))
-	copy(out, src)
-	return out
+	return ownedAll(src)
 }
 
-// ByNamespace returns all handlers in a given namespace.
+// ByNamespace returns a copy of every handler in a given namespace (owned).
 func (r *Registry) ByNamespace(ns string) []*Handler {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
@@ -236,7 +267,7 @@ func (r *Registry) ByNamespace(ns string) []*Handler {
 	prefix := ns + "."
 	for fqn, h := range r.handlers {
 		if len(fqn) > len(prefix) && fqn[:len(prefix)] == prefix {
-			result = append(result, h)
+			result = append(result, owned(h))
 		}
 	}
 	return result
@@ -277,8 +308,7 @@ func (r *Registry) RegisterProxy(handlers []Handler) error {
 // strips it; this accessor makes that contract explicit without round-tripping
 // through Get + manual stripping).
 //
-// The returned Handler is a defensive copy: Middleware and Tags slices share
-// no backing array with the registry's stored copy, so callers may freely
+// The returned Handler is an owned copy (owned), so callers may freely
 // mutate the result without corrupting registry state.
 func (r *Registry) MetadataFor(fqn string) (Handler, bool) {
 	r.mu.RLock()
@@ -287,14 +317,8 @@ func (r *Registry) MetadataFor(fqn string) (Handler, bool) {
 	if !ok {
 		return Handler{}, false
 	}
-	out := *h
+	out := *owned(h)
 	out.Func, out.Stream = nil, nil
-	if len(h.Middleware) > 0 {
-		out.Middleware = append([]Middleware(nil), h.Middleware...)
-	}
-	if len(h.Tags) > 0 {
-		out.Tags = append([]string(nil), h.Tags...)
-	}
 	return out, true
 }
 

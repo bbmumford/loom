@@ -251,10 +251,11 @@ func TestExportCarriesOnlyHandlersWithAFunc(t *testing.T) {
 	}
 }
 
-// TestRegistryShimRefusesAHandlerWithNoFunc: a shim runs its handler while the
-// handler carries a Func, and once the Func is cleared on the stored handler
-// it answers ExecuteRPC with ErrProxyDispatchLocal and ExecuteTask with a
-// failed result, without calling the nil Func.
+// TestRegistryShimRefusesAHandlerWithNoFunc: a shim built around a handler that
+// carries a Func keeps running it after the caller clears Func on its own
+// handler, because the shim holds its own copy (owned); a shim built around a
+// handler that carries none answers ExecuteRPC with ErrProxyDispatchLocal and
+// ExecuteTask with a failed result, without calling a Func.
 func TestRegistryShimRefusesAHandlerWithNoFunc(t *testing.T) {
 	h := &Handler{
 		Namespace: "test",
@@ -277,7 +278,6 @@ func TestRegistryShimRefusesAHandlerWithNoFunc(t *testing.T) {
 	if err != nil || resp == nil || !resp.Success {
 		t.Fatalf("ExecuteRPC with a Func = (%+v, %v), want success", resp, err)
 	}
-
 	h.Func = nil
 	defer func() {
 		if r := recover(); r != nil {
@@ -285,13 +285,19 @@ func TestRegistryShimRefusesAHandlerWithNoFunc(t *testing.T) {
 		}
 	}()
 	resp, err = shim.ExecuteRPC(context.Background(), &handlers.RPCRequest{Payload: payload})
+	if err != nil || resp == nil || !resp.Success {
+		t.Fatalf("ExecuteRPC after the caller cleared its own Func = (%+v, %v), want success from the shim's copy", resp, err)
+	}
+
+	bare := newRegistryShim(h)
+	resp, err = bare.ExecuteRPC(context.Background(), &handlers.RPCRequest{Payload: payload})
 	if !errors.Is(err, ErrProxyDispatchLocal) {
 		t.Errorf("ExecuteRPC with no Func: error = %v, want %v", err, ErrProxyDispatchLocal)
 	}
 	if resp != nil && resp.Success {
 		t.Errorf("ExecuteRPC with no Func reported success")
 	}
-	result, err := shim.ExecuteTask(context.Background(), &handlers.Task{
+	result, err := bare.ExecuteTask(context.Background(), &handlers.Task{
 		ID: "task-1", Handler: h.FQN(), Payload: payload,
 	})
 	if err != nil {

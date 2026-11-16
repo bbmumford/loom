@@ -3,6 +3,8 @@ package rpc
 import (
 	"context"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"google.golang.org/protobuf/encoding/protojson"
@@ -12,6 +14,7 @@ import (
 	sharedDispatch "github.com/bbmumford/loom/pkg/dispatch"
 	"github.com/bbmumford/loom/pkg/rpc/effect"
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
+	"github.com/bbmumford/loom/ports"
 )
 
 // ExportToHandlerRegistry registers every handler in this rpc.Registry that
@@ -35,18 +38,58 @@ import (
 // handler reached only through RPC never takes the task branch; the branch
 // costs one RPCRequest per task because ExecuteTask passes through to
 // ExecuteRPC.
+//
+// The export is all or nothing and idempotent. A name hr already holds from
+// this same registration of this registry (an earlier export of it) is left
+// as it is; every other name hr holds is refused, all of them named, before
+// anything is registered; a registration hr refuses after that (one made
+// concurrently under an exported name) withdraws every handler this call
+// registered, by its exact handle, before the refusal is returned. The
+// endpoint spine exports Deps.Registry once after composition, the export an
+// endpoint that still exports the same registry itself has already made is
+// then the no-op, and a failure leaves hr as it was for the spine to stop the
+// boot on.
 func (r *Registry) ExportToHandlerRegistry(hr *handlers.HandlerRegistry) error {
+	if hr == nil {
+		return fmt.Errorf("rpc: export: no handler registry to export into")
+	}
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-
+	shims := make([]*registryShim, 0, len(r.handlers))
 	for _, h := range r.handlers {
 		if h.Func == nil {
 			continue
 		}
-		shim := newRegistryShim(h)
-		if err := hr.RegisterRPC(shim); err != nil {
-			return err
+		shims = append(shims, newRegistryShim(h))
+	}
+	r.mu.RUnlock()
+	sort.Slice(shims, func(i, j int) bool { return shims[i].Name() < shims[j].Name() })
+
+	pending := make([]*registryShim, 0, len(shims))
+	var held []string
+	for _, shim := range shims {
+		meta, ok := hr.GetMeta(shim.Name())
+		if !ok {
+			pending = append(pending, shim)
+			continue
 		}
+		if existing, isShim := meta.(*registryShim); isShim && existing.origin == shim.origin {
+			continue
+		}
+		held = append(held, shim.Name())
+	}
+	if len(held) > 0 {
+		return fmt.Errorf("rpc: export: the handler registry already holds %d of the operations under another registration: %s", len(held), strings.Join(held, ", "))
+	}
+	done := make([]handlers.RegistrationHandle, 0, len(pending))
+	for _, shim := range pending {
+		handle, err := hr.RegisterHandlerScoped(ports.RegistrationScope{}, shim)
+		if err != nil {
+			for _, d := range done {
+				hr.UnregisterExact(d)
+			}
+			return fmt.Errorf("rpc: export: %w", err)
+		}
+		done = append(done, handle)
 	}
 	return nil
 }
@@ -57,12 +100,19 @@ func (r *Registry) ExportToHandlerRegistry(hr *handlers.HandlerRegistry) error {
 // to TaskHandler before invoking) can dispatch handlers registered via
 // rpc.Registry — e.g. an operation a background scanner publishes as a mesh
 // task.
+//
+// handler is the shim's own copy of the registered handler (owned), taken at
+// export, so nothing done to the registry's handlers or to what Get and All
+// return reaches the mesh dispatch. origin is the registry's stored handler,
+// compared and never read: ExportToHandlerRegistry tells by it that a name
+// the handler registry holds is this same registration.
 type registryShim struct {
 	handler *Handler
+	origin  *Handler
 }
 
-func newRegistryShim(h *Handler) *registryShim {
-	return &registryShim{handler: h}
+func newRegistryShim(stored *Handler) *registryShim {
+	return &registryShim{handler: owned(stored), origin: stored}
 }
 
 // HandlerMeta interface
@@ -110,16 +160,8 @@ var _ handlers.StreamHandler = (*registryShim)(nil)
 //
 // A handler with no Func is refused with ErrProxyDispatchLocal, the refusal
 // Registry.Dispatch gives, before the payload is read. ExportToHandlerRegistry
-// exports no such handler, so the refusal covers the window the shared pointer
-// opens: the shim holds the registry's stored *Handler, which Get, All and
-// ByRole hand out, so a holder can clear Func on it after the export.
-//
-// Func and WebhookSignature are read once, before the payload, and the call
-// below uses those two values. Both run caller code in between — the request
-// type's own ProtoReflect under unmarshalPayload, and the handler's
-// SecretProvider under verifyWebhookSignature — so re-reading either field
-// would let a Func cleared on the stored handler reach the call as nil, and a
-// WebhookSignature cleared there drop the check between the test and its use.
+// exports no such handler, so only a shim built around one some other way
+// reaches it.
 //
 // A handler that declares WebhookSignature is refused after decoding and
 // before Func, through verifyWebhookSignature as in Registry.Dispatch, on a

@@ -13,21 +13,16 @@ import (
 	lad "github.com/bbmumford/ledger"
 	"github.com/bbmumford/loom/directory"
 	"github.com/bbmumford/loom/pkg/dispatch"
-	"github.com/bbmumford/loom/pkg/rpc"
-	"github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/ports"
 )
 
-// requirementTag returns the peer record tag naming what each executed handler in
-// registered asks of a caller: those with a Func, in the order publishOnce lists
-// them in RpcHandlers, which the tag's runs index. "" when none is executed.
-func requirementTag(registered []*rpc.Handler) string {
+// requirementTag returns the peer record tag naming what each catalogued
+// operation asks of a caller, in the order the record lists them in
+// RpcHandlers, which the tag's runs index. "" for an empty catalogue.
+func requirementTag(catalogue []catalogueEntry) string {
 	var requirements []string
-	for _, h := range registered {
-		if h.Func == nil {
-			continue
-		}
-		requirements = append(requirements, scope.AdvertisedRequirement(h.Requirement, h.Scope))
+	for _, entry := range catalogue {
+		requirements = append(requirements, entry.requirement)
 	}
 	if len(requirements) == 0 {
 		return ""

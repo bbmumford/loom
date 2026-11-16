@@ -31,9 +31,15 @@ func meshHTTPPort() string {
 // SetRoles atomically updates the runtime's role set and triggers an
 // immediate signed re-publish of the swarm PeerRecord. External callers
 // (a composition root's role controller, runtime promotion logic) use this to surface role
-// changes to peers within the next gossip round.
+// changes to peers within the next gossip round. The set it declares is also
+// the one every later PublishRPCHandlersToLAD advertises (declaredRoleSet), so
+// the spine's publication after composition keeps a role set an endpoint
+// declared while it composed.
 func (rt *Runtime) SetRoles(roles []string) {
 	rt.cfg.Roles = append([]string(nil), roles...)
+	rt.declaredRolesMu.Lock()
+	rt.declaredRoles = append([]string{}, roles...)
+	rt.declaredRolesMu.Unlock()
 	if rt.swarm != nil && rt.swarm.Publisher != nil {
 		rt.swarm.Publisher.SetRoles(roles)
 		rt.swarm.Publisher.PublishNow()
@@ -72,4 +78,15 @@ func (rt *Runtime) SetServiceName(name string) {
 // print the role set. Used at runtime startup only.
 func rolesJoined(roles []string) string {
 	return strings.Join(roles, ",")
+}
+
+// declaredRoleSet returns a copy of the role set SetRoles last declared and
+// true, or nil and false before SetRoles is first called.
+func (rt *Runtime) declaredRoleSet() ([]string, bool) {
+	rt.declaredRolesMu.Lock()
+	defer rt.declaredRolesMu.Unlock()
+	if rt.declaredRoles == nil {
+		return nil, false
+	}
+	return append([]string(nil), rt.declaredRoles...), true
 }

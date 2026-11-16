@@ -514,6 +514,14 @@ type Runtime struct {
 	roleActivation *roleActivationManager
 	rpcRegistry    *rpc.Registry
 	takeover       *TakeoverEngine
+
+	// declaredRoles is the role set SetRoles last declared, nil until it is
+	// first called: PublishRPCHandlersToLAD advertises it in place of the
+	// roles it derives, so a publication never re-advertises a role the caller
+	// of SetRoles withheld. Guarded by declaredRolesMu.
+	declaredRolesMu sync.Mutex
+	declaredRoles   []string
+
 	composeReg     *compose.Registry // guarded by lifecycleMu
 	composeTaskSeq atomic.Uint64
 	// composeTaskInFlight bounds live async work independently of the
@@ -636,8 +644,14 @@ func Initialize(cfg Config) (*Runtime, error) {
 		rt.recordVL1Disconnection()
 	})
 
-	// Step 5: Initialize RPC server with HandlerRegistry
+	// Step 5: Initialize RPC server with HandlerRegistry. A held registry
+	// (cfg.HoldUntilReady) refuses every dispatch from here, before any
+	// handler, dispatcher or listener exists, until the endpoint marks it
+	// ready.
 	registry := handlers.NewHandlerRegistry()
+	if cfg.HoldUntilReady {
+		registry.HoldUntilReady()
+	}
 	registry.SetEnabledRoles([]string{"system"})
 
 	rt.rpcServer = NewRPCServer(registry)
@@ -656,9 +670,10 @@ func Initialize(cfg Config) (*Runtime, error) {
 	// peer nodes instead of failing with "unknown handler".
 	rt.wireForwarder()
 
-	// Register built-in handlers on the registry
-	_ = registry.RegisterRPC(&PingRPCHandler{})
-	_ = registry.RegisterRPC(&StatusRPCHandler{identity: identity, startTime: rt.rpcServer.startTime, rt: rt})
+	// Register built-in handlers on the registry: loom's own mesh handlers,
+	// which every node answers and no endpoint's catalogue lists.
+	_ = registry.RegisterInfrastructure(&PingRPCHandler{})
+	_ = registry.RegisterInfrastructure(&StatusRPCHandler{identity: identity, startTime: rt.rpcServer.startTime, rt: rt})
 
 	// NAT traversal: the punch coordinator and its responder-side
 	// RPC handler. NATBehaviour / localPunchCandidates are snapshot
@@ -671,7 +686,7 @@ func Initialize(cfg Config) (*Runtime, error) {
 		rt.NATBehaviour,
 		rt.localPunchCandidates,
 	)
-	_ = registry.RegisterRPC(&holepunchRPCHandler{
+	_ = registry.RegisterInfrastructure(&holepunchRPCHandler{
 		coord: rt.punchCoord,
 		probe: rt.punchProbe,
 	})
@@ -1008,9 +1023,9 @@ func Initialize(cfg Config) (*Runtime, error) {
 			// the route engine is live the moment any session can be
 			// accepted.
 			//
-			// InitSwarm is constructed with a nil rpc.Registry; the
-			// endpoint's later PublishRPCHandlersToLAD call threads
-			// its registry through PeerPublisher.SetRegistry (InitSwarm
+			// InitSwarm is constructed with a nil rpc.Registry, so the
+			// publisher's records list no operation until the endpoint's
+			// PublishRPCHandlersToLAD commits the node's catalogue (InitSwarm
 			// itself is idempotent and returns the existing integration).
 			//
 			// Transit mode is derived from the configured roles — anchor
@@ -3206,14 +3221,26 @@ func (rt *Runtime) PublishHandlersToLAD(ctx context.Context, roles []string, reg
 
 // PublishRPCHandlersToLAD publishes the unified PeerRecord (roles +
 // handlers + grade + capabilities + addresses) onto the swarm fleet.peer
-// topic. The peer publisher signs and republishes on any input change;
-// receivers index via role_table.go and address_table.go.
+// topic, synchronously, and returns the publication's error. The record's
+// handler list is the catalogue of this node's handler registry (catalogueOf):
+// what it dispatches, snapshotted now, so an operation reg holds that was never
+// exported into the handler registry is not advertised and one exported from
+// anywhere else is. Its roles are the set SetRoles last declared, and until
+// SetRoles is called reg's beside the catalogue's own (catalogueRoles). The handler list, roles, grade, service and region are
+// committed as one record (PeerPublisher.commit): a failure returns its error
+// and leaves the previous record the one the publisher republishes. The
+// endpoint spine calls it once, after composition, and stops the boot on its
+// error; runtime role activation calls it after a role's handlers change.
 func (rt *Runtime) PublishRPCHandlersToLAD(ctx context.Context, reg *rpc.Registry) error {
 	if reg == nil {
 		return fmt.Errorf("rpc registry not provided")
 	}
 
-	roles := reg.Roles()
+	catalogue := catalogueOf(rt.Registry())
+	roles, declared := rt.declaredRoleSet()
+	if !declared {
+		roles = catalogueRoles(reg.Roles(), catalogue)
+	}
 	if rt.isAnchorCapable() {
 		hasAnchor := false
 		for _, r := range roles {
@@ -3234,26 +3261,23 @@ func (rt *Runtime) PublishRPCHandlersToLAD(ctx context.Context, reg *rpc.Registr
 		}
 	}
 
-	// InitSwarm is idempotent: Runtime.Initialize already wired the
-	// swarm (with reg=nil) so the route engine could come up as an
-	// invariant on every node. This call returns the existing
-	// integration; thread our registry through PeerPublisher.SetRegistry
-	// so the handler list in subsequent PeerRecords is populated. If
-	// Initialize hit the InitSwarm-failed branch (no VL1/LAD), this
-	// call constructs the integration for the first time with our reg.
+	// InitSwarm is idempotent: Runtime.Initialize already wired the swarm
+	// (with reg=nil) so the route engine could come up as an invariant on
+	// every node, and this call returns that integration and records reg as
+	// the registry runtime role activation republishes with. If Initialize
+	// hit the InitSwarm-failed branch (no VL1/LAD), this call constructs the
+	// integration for the first time.
 	si, err := rt.InitSwarm(reg)
 	if err != nil {
 		return fmt.Errorf("init swarm: %w", err)
 	}
-	if si != nil && si.Publisher != nil {
-		si.Publisher.SetRegistry(reg)
+	if si == nil || si.Publisher == nil {
+		return fmt.Errorf("publish: the swarm integration holds no peer publisher")
 	}
-	// Batch the four field updates (roles + grade + service + region)
-	// into a single Publisher.Update so receivers index ONE PeerRecord
-	// instead of four in rapid succession. Carry operator-facing
-	// identifiers in every PeerRecord so topology builders can identify
-	// peers we're not directly connected to without any LAD reach record.
-	si.Publisher.Update(func(s *State) {
+	// Operator-facing identifiers ride every PeerRecord so topology builders
+	// can identify peers we're not directly connected to without any LAD
+	// reach record.
+	if err := si.Publisher.commit(catalogue, func(s *State) {
 		s.Roles = roles
 		s.MaxGrade = swarmGradeFromInternal(bestGrade)
 		if rt.cfg.ServiceName != "" {
@@ -3264,28 +3288,28 @@ func (rt *Runtime) PublishRPCHandlersToLAD(ctx context.Context, reg *rpc.Registr
 				s.Region = region
 			}
 		}
-	})
+	}); err != nil {
+		return fmt.Errorf("publish peer record: %w", err)
+	}
 
 	// Populate the swarm PeerRecord's address list so peers can hole-
 	// punch from Grade-C WS up to Grade-A noise-UDP. Without this, the
 	// AddressTable subscribers see addrs=0 in every PeerRecord and the
 	// dial path falls back to the LAD reach table. Listener wiring + grade-upgrade subscriber are installed
 	// here so both fire on every subsequent state change, not just the
-	// first publish.
+	// first publish; the records they trigger carry the committed catalogue.
 	rt.advertiseSwarmListeners(si)
 	rt.installSwarmGradeUpgradeHook(si)
 
-	dbgNode.Printf("Published peer record via swarm (roles %v, grade %v)", roles, bestGrade)
+	dbgNode.Printf("Published peer record via swarm (roles %v, grade %v, handlers %d)", roles, bestGrade, len(catalogue))
 
 	// The route engine is wired in Runtime.Initialize, not here, so
 	// every node has a live route.Router from boot, not only the subset
 	// that calls PublishRPCHandlersToLAD. Anchor-vs-other transit mode is decided
 	// at Initialize from cfg.Roles + isAnchorCapable(); endpoints that
 	// dynamically gain the anchor role after boot can call
-	// rt.Route().Router.SetTransitMode to promote. ctx is retained on
-	// the signature for backward compatibility with endpoint callers and
-	// for future per-call cancellation needs even though no current call
-	// site below depends on it.
+	// rt.Route().Router.SetTransitMode to promote. node.Publish takes no
+	// context, so ctx bounds nothing here.
 	_ = ctx
 	return nil
 }

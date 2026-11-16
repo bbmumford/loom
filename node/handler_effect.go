@@ -10,13 +10,12 @@ import (
 	"strings"
 
 	"github.com/bbmumford/loom/node/handlers"
-	"github.com/bbmumford/loom/pkg/rpc"
 	"github.com/bbmumford/loom/pkg/rpc/effect"
 )
 
 // The peer record tags that advertise the effect class of the operations a
 // node executes, each a comma-joined list of FQNs. PeerPublisher writes them
-// from the rpc.Registry it publishes (effectTags); RoleTable reads them back
+// from the catalogue it publishes (effectTags); RoleTable reads them back
 // through PeerInfo.Tags (RoleTable.HandlerEffect). An FQN in neither list is
 // effect.Unsafe, so a record carrying neither tag holds every operation it
 // lists to the one-execution rule. An FQN never holds a comma, which the
@@ -26,20 +25,16 @@ const (
 	idempotentHandlersMetaKey = "idempotent_handlers"
 )
 
-// effectTags returns the two effect tags for the executed handlers in
-// registered: those with a Func, the same set publishOnce lists in
+// effectTags returns the two effect tags for the catalogue a record lists in
 // RpcHandlers. A tag with no FQN is left out.
-func effectTags(registered []*rpc.Handler) []string {
+func effectTags(catalogue []catalogueEntry) []string {
 	var readOnly, idempotent []string
-	for _, h := range registered {
-		if h.Func == nil {
-			continue
-		}
-		switch h.Effect {
+	for _, entry := range catalogue {
+		switch entry.effect {
 		case effect.ReadOnly:
-			readOnly = append(readOnly, h.FQN())
+			readOnly = append(readOnly, entry.fqn)
 		case effect.Idempotent:
-			idempotent = append(idempotent, h.FQN())
+			idempotent = append(idempotent, entry.fqn)
 		}
 	}
 	var tags []string

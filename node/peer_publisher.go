@@ -7,6 +7,8 @@ package node
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"sort"
 	"strconv"
@@ -31,9 +33,17 @@ import (
 type PeerPublisher struct {
 	node swarm.Node
 	rt   *Runtime
-	reg  *rpc.Registry
 
-	mu          sync.Mutex
+	// publishMu serialises every publication, the run loop's and commit's, so
+	// a record built from inputs read before a commit is never published after
+	// the commit's record.
+	publishMu sync.Mutex
+
+	mu sync.Mutex
+	// catalogue is the operations every record lists (RpcHandlers and the
+	// effect and requirement tags): a snapshot, never a live registry, so a
+	// registration after it advertises nothing until commit replaces it.
+	catalogue   []catalogueEntry
 	stopOnce    sync.Once // Stop is exported; concurrent callers must not double-close
 	roles       []string
 	addresses   []*swarmpb.Address
@@ -117,29 +127,18 @@ func (p *PeerPublisher) SetRegion(region string) {
 
 // NewPeerPublisher creates a PeerPublisher. Call Start to begin republishing
 // on input changes; the PeerPublisher otherwise holds no state.
+// NewPeerPublisher builds the publisher of node's records. Its catalogue starts
+// as the snapshot of reg's executed handlers (catalogueOfRegistry; empty for a
+// nil reg, which is what Runtime.Initialize passes) and changes only by
+// commit, which Runtime.PublishRPCHandlersToLAD calls.
 func NewPeerPublisher(node swarm.Node, rt *Runtime, reg *rpc.Registry) *PeerPublisher {
 	return &PeerPublisher{
 		node:        node,
 		rt:          rt,
-		reg:         reg,
+		catalogue:   catalogueOfRegistry(reg),
 		republishCh: make(chan struct{}, 1),
 		stopCh:      make(chan struct{}),
 	}
-}
-
-// SetRegistry updates the rpc.Registry the publisher reads handler FQNs
-// from. Needed because InitSwarm is idempotent — the swarm/publisher are
-// constructed once at Runtime.Initialize with reg=nil (no registry yet),
-// then the endpoint later calls PublishRPCHandlersToLAD with its
-// registry. Without this setter, the late registry would be discarded
-// and every PeerRecord would carry an empty handler list. Triggers an
-// immediate republish so the new handler set propagates without waiting
-// for the 5-minute TTL refresh.
-func (p *PeerPublisher) SetRegistry(reg *rpc.Registry) {
-	p.mu.Lock()
-	p.reg = reg
-	p.mu.Unlock()
-	p.PublishNow()
 }
 
 // Start begins the publisher loop. Republishes are triggered by:
@@ -352,29 +351,124 @@ func (p *PeerPublisher) maybeRepublishOnSaturationChange() {
 }
 
 func (p *PeerPublisher) publishOnce() {
-	log.Printf("[SWARM] publishOnce: entry")
+	p.publishMu.Lock()
+	defer p.publishMu.Unlock()
 	p.mu.Lock()
-	roles := append([]string(nil), p.roles...)
-	addrs := append([]*swarmpb.Address(nil), p.addresses...)
-	maxGrade := p.maxGrade
-	serviceName := p.serviceName
-	region := p.region
-	rtts := p.rtts
-	// Copied under the lock like every other field here: the marshal below
-	// runs outside it, and proto.Marshal over a map another goroutine is
-	// writing is a data race, not merely a stale read.
-	var extras map[string]string
+	in := p.inputsLocked()
+	p.mu.Unlock()
+	if err := p.send(in); err != nil {
+		log.Printf("[SWARM] publishOnce: %v", err)
+	}
+}
+
+// publication is one record's inputs, read under p.mu (inputsLocked) and
+// built and published outside it (send).
+type publication struct {
+	roles       []string
+	addrs       []*swarmpb.Address
+	maxGrade    swarmpb.Grade
+	serviceName string
+	region      string
+	rtts        AddressRTTProvider
+	extras      map[string]string
+	catalogue   []catalogueEntry
+}
+
+// inputsLocked copies the publisher's inputs; the caller holds p.mu. Every
+// slice and map is copied, because send marshals them outside the lock and
+// proto.Marshal over a map another goroutine is writing is a data race, not
+// merely a stale read. The catalogue is replaced whole by commit and never
+// written in place, so it is shared.
+func (p *PeerPublisher) inputsLocked() publication {
+	in := publication{
+		roles:       append([]string(nil), p.roles...),
+		addrs:       append([]*swarmpb.Address(nil), p.addresses...),
+		maxGrade:    p.maxGrade,
+		serviceName: p.serviceName,
+		region:      p.region,
+		rtts:        p.rtts,
+		catalogue:   p.catalogue,
+	}
 	if len(p.extras) > 0 {
-		extras = make(map[string]string, len(p.extras))
+		in.extras = make(map[string]string, len(p.extras))
 		for key, value := range p.extras {
-			extras[key] = value
+			in.extras[key] = value
 		}
 	}
-	// Snapshot reg under the lock so SetRegistry (called from
-	// PublishRPCHandlersToLAD after Runtime.Initialize wired the
-	// publisher with reg=nil) doesn't race the publishOnce reader.
-	reg := p.reg
+	return in
+}
+
+// state is in's State fields, the shape Update and commit's update read.
+func (in publication) state() State {
+	return State{
+		Roles:       append([]string(nil), in.roles...),
+		Addresses:   append([]*swarmpb.Address(nil), in.addrs...),
+		MaxGrade:    in.maxGrade,
+		ServiceName: in.serviceName,
+		Region:      in.region,
+	}
+}
+
+// withState is in with s's fields, roles sorted as Update stores them.
+func (in publication) withState(s State) publication {
+	in.roles = append([]string(nil), s.Roles...)
+	sort.Strings(in.roles)
+	in.addrs = append([]*swarmpb.Address(nil), s.Addresses...)
+	in.maxGrade = s.MaxGrade
+	in.serviceName = s.ServiceName
+	in.region = s.Region
+	return in
+}
+
+// errNoSwarmNode is send's refusal on a publisher with no swarm node to
+// publish through: the record is built and nothing is sent.
+var errNoSwarmNode = errors.New("peer publisher: no swarm node to publish through")
+
+// commit publishes the record of catalogue and the inputs update gives,
+// synchronously, and only once node.Publish accepted it installs both, so the
+// run loop's later records carry them: one record, never a new handler list
+// beside the previous roles or the reverse. It returns the publication's
+// error and then installs nothing, so the records the loop goes on publishing
+// are the previous commit's. update is run again on the inputs as they stand
+// at install, so an address or grade another caller set meanwhile is kept;
+// it must only assign. Runtime.PublishRPCHandlersToLAD is its caller.
+func (p *PeerPublisher) commit(catalogue []catalogueEntry, update func(s *State)) error {
+	p.publishMu.Lock()
+	defer p.publishMu.Unlock()
+	p.mu.Lock()
+	in := p.inputsLocked()
 	p.mu.Unlock()
+	next := in
+	if update != nil {
+		s := in.state()
+		update(&s)
+		next = in.withState(s)
+	}
+	next.catalogue = catalogue
+	if err := p.send(next); err != nil {
+		return err
+	}
+	p.mu.Lock()
+	cur := p.inputsLocked()
+	if update != nil {
+		s := cur.state()
+		update(&s)
+		cur = cur.withState(s)
+	}
+	p.roles = cur.roles
+	p.addresses = cur.addrs
+	p.maxGrade = cur.maxGrade
+	p.serviceName = cur.serviceName
+	p.region = cur.region
+	p.catalogue = catalogue
+	p.mu.Unlock()
+	return nil
+}
+
+// send builds the record of in and publishes it on the fleet.peer topic,
+// returning node.Publish's error, a marshal failure, or errNoSwarmNode.
+func (p *PeerPublisher) send(in publication) error {
+	roles, addrs, maxGrade, serviceName, region, rtts, extras := in.roles, in.addrs, in.maxGrade, in.serviceName, in.region, in.rtts, in.extras
 
 	// Stamp the freshest RTT observation onto each advertised address
 	// so peers can pick the lowest-latency endpoint without an extra
@@ -420,36 +514,22 @@ func (p *PeerPublisher) publishOnce() {
 		}
 	}
 
-	// Gather the FQNs this node executes from rpc.Registry (snapshot taken
-	// under lock above — reg may be nil when Runtime.Initialize wired the
-	// publisher before any handler registry was published). A handler with
-	// no Func is a RegisterProxy entry or a Register call that supplied
-	// none: another node executes it, and rpc.ExportToHandlerRegistry
-	// leaves it out of the registry RPCServer dispatches from. The record's
-	// handler list is what RoleTable.Lookup(role, fqn) matches when the
-	// forwarder and findNodeForRole pick a node for an FQN, so carrying such
-	// an entry would send its callers here for a forwarding hop, or to the
-	// "not found on target node" refusal when they target this node.
-	var handlers, handlerEffects []string
-	var handlerRequirements string
-	if reg != nil {
-		registered := reg.All() // sorted by FQN
-		handlers = make([]string, 0, len(registered))
-		for _, handler := range registered {
-			if handler.Func == nil {
-				continue
-			}
-			handlers = append(handlers, handler.FQN())
-		}
-		// The effect class of each listed handler rides beside its FQN, so
-		// a caller's RoleTable.HandlerEffect can tell whether the operation
-		// may be sent down more than one route.
-		handlerEffects = effectTags(registered)
-		// What each listed handler asks of a caller rides the same way, so a
-		// caller's RoleTable can compare the holders of an operation before it
-		// picks one (RoleTable.Answerers).
-		handlerRequirements = requirementTag(registered)
+	// The FQNs this node executes are the committed catalogue's, sorted by
+	// FQN: the record's handler list is what RoleTable.Lookup(role, fqn)
+	// matches when the forwarder and findNodeForRole pick a node for an FQN,
+	// so it lists only what this node's handler registry dispatches.
+	handlers := make([]string, 0, len(in.catalogue))
+	for _, entry := range in.catalogue {
+		handlers = append(handlers, entry.fqn)
 	}
+	// The effect class of each listed handler rides beside its FQN, so
+	// a caller's RoleTable.HandlerEffect can tell whether the operation
+	// may be sent down more than one route.
+	handlerEffects := effectTags(in.catalogue)
+	// What each listed handler asks of a caller rides the same way, so a
+	// caller's RoleTable can compare the holders of an operation before it
+	// picks one (RoleTable.Answerers).
+	handlerRequirements := requirementTag(in.catalogue)
 
 	// Operator-facing metadata (service name + region) rides Capabilities.tags.
 	// Topology builders read these to identify peers we're not directly
@@ -571,16 +651,18 @@ func (p *PeerPublisher) publishOnce() {
 
 	body, err := proto.Marshal(rec)
 	if err != nil {
-		log.Printf("[SWARM] publishOnce: proto.Marshal FAILED: %v", err)
-		return
+		return fmt.Errorf("peer publisher: marshal record: %w", err)
 	}
 	if p.node == nil {
-		log.Printf("[SWARM] publishOnce: WARNING node nil — skipping publish")
-		return
+		return errNoSwarmNode
 	}
 	pubErr := p.node.Publish(topicFleetPeer, body)
-	log.Printf("[SWARM] publishOnce: Publish ok=%v err=%v topic=%s bodySize=%d roles=%v addrs=%d handlers=%d service=%s region=%s",
+	log.Printf("[SWARM] publish: ok=%v err=%v topic=%s bodySize=%d roles=%v addrs=%d handlers=%d service=%s region=%s",
 		pubErr == nil, pubErr, string(topicFleetPeer), len(body), roles, len(addrs), len(handlers), serviceName, region)
+	if pubErr != nil {
+		return fmt.Errorf("peer publisher: publish record: %w", pubErr)
+	}
+	return nil
 }
 
 // topicFleetPeer is the swarm topic that carries fleet PeerRecords.

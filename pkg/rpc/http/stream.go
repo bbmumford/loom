@@ -60,12 +60,12 @@ var streamKeepalive = 15 * time.Second
 // serveStream runs h's Stream for one HTTP request whose body parsed into req.
 func (b *Bridge) serveStream(w http.ResponseWriter, r *http.Request, h *rpc.Handler, req proto.Message) {
 	if err := b.registry.Enforce(r.Context(), h); err != nil {
-		writeBridgeError(w, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()})
+		writeBridgeError(w, handlerError(err, h.FQN()))
 		return
 	}
 	if h.WebhookSignature != nil {
 		if err := rpc.VerifyWebhookSignature(h.WebhookSignature, req); err != nil {
-			writeBridgeError(w, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()})
+			writeBridgeError(w, handlerError(err, h.FQN()))
 			return
 		}
 	}
@@ -85,7 +85,7 @@ func (b *Bridge) serveStream(w http.ResponseWriter, r *http.Request, h *rpc.Hand
 	switch {
 	case err == nil:
 	case !s.started:
-		writeBridgeError(w, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()})
+		writeBridgeError(w, handlerError(err, h.FQN()))
 	case ctx.Err() == nil:
 		s.writeFrame("error", "", errorFrame(err))
 	}

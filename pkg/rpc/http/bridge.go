@@ -266,16 +266,16 @@ func (b *Bridge) dispatch(w http.ResponseWriter, r *http.Request, h *rpc.Handler
 // status-code shaping single-sourced.
 func (b *Bridge) executeLocal(r *http.Request, h *rpc.Handler, req proto.Message) ([]byte, error) {
 	if err := b.registry.Enforce(r.Context(), h); err != nil {
-		return nil, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()}
+		return nil, handlerError(err, h.FQN())
 	}
 	if h.WebhookSignature != nil {
 		if err := rpc.VerifyWebhookSignature(h.WebhookSignature, req); err != nil {
-			return nil, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()}
+			return nil, handlerError(err, h.FQN())
 		}
 	}
 	resp, err := h.Func(r.Context(), req)
 	if err != nil {
-		return nil, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()}
+		return nil, handlerError(err, h.FQN())
 	}
 	out, err := protojson.MarshalOptions{EmitUnpopulated: false}.Marshal(resp)
 	if err != nil {
@@ -304,7 +304,7 @@ func (b *Bridge) executeLocal(r *http.Request, h *rpc.Handler, req proto.Message
 func (b *Bridge) executeProxy(r *http.Request, h *rpc.Handler, req proto.Message) ([]byte, error) {
 	if h != nil {
 		if err := b.registry.Enforce(r.Context(), h); err != nil {
-			return nil, &bridgeError{status: classifyHandlerStatus(err), cause: err, op: h.FQN()}
+			return nil, handlerError(err, h.FQN())
 		}
 	}
 	payload, err := proto.Marshal(req)
@@ -337,13 +337,17 @@ unmarshal:
 // classifyHandlerStatus maps a handler error to an HTTP status code.
 // Known sentinels (ErrScopeDenied, ErrHandlerNotFound, webhook signature
 // failures, context cancellations) get specific codes; unknown errors
-// get 500 + the error msg.
+// get 500 + the error msg. A call that reached a node still starting
+// (rpc.ErrStarting, from a handler's own downstream call) is 503, and
+// handlerError adds its Retry-After.
 //
 // We don't sanitize the unknown-error message here — downstream callers
 // (writeBridgeError) decide whether to expose the cause or substitute a
 // generic body. That keeps the classifier pure.
 func classifyHandlerStatus(err error) int {
 	switch {
+	case errors.Is(err, rpc.ErrStarting):
+		return http.StatusServiceUnavailable
 	case errors.Is(err, rpc.ErrRefusalUnrecorded):
 		// The refusal was not recorded, so the call fails as unavailable:
 		// a 403 would answer a refusal that is not on the record.
@@ -367,6 +371,19 @@ func classifyHandlerStatus(err error) int {
 		return http.StatusUnauthorized
 	}
 	return http.StatusInternalServerError
+}
+
+// handlerError is the bridgeError for an error a handler, the registry's
+// Enforce or a stream returned: its status is classifyHandlerStatus's, and a
+// starting refusal carries Retry-After as classifyMeshError gives it for the
+// same refusal from another node. executeLocal, executeProxy's Enforce and the
+// stream bridge build every such error through it.
+func handlerError(err error, op string) *bridgeError {
+	be := &bridgeError{status: classifyHandlerStatus(err), cause: err, op: op}
+	if errors.Is(err, rpc.ErrStarting) {
+		be.retryAfter = "1"
+	}
+	return be
 }
 
 // bridgeError captures all the metadata needed to render an HTTP error

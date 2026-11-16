@@ -164,6 +164,16 @@ type Config struct {
 	// history. Values <= 0 use the safe default.
 	ComposeTaskCompletionRetentionPerPartition int
 
+	// HoldUntilReady makes Initialize hold the node's handler registry from
+	// its creation (handlers.HandlerRegistry.HoldUntilReady): every dispatch,
+	// and every inbound request RPCServer serves, is refused with
+	// scope.ErrStarting until Registry().MarkReady is called. The
+	// endpoint spine sets it and marks the registry ready once composition,
+	// the mesh export and the publication are done, so the window between the
+	// node being dialable and its endpoint's policies being installed runs
+	// nothing.
+	HoldUntilReady bool
+
 	// RegisterDomains registers external RPC domains (e.g. an anchor
 	// domain) on anchor-capable nodes. Each entry runs against a fresh
 	// rpc.Registry which is then exported to the handler registry.

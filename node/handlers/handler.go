@@ -8,7 +8,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/bbmumford/loom/internal/securityctx"
@@ -99,6 +101,16 @@ type HandlerMeta interface {
 // none, or returns nil, is judged by its scope tag as before.
 type RequirementDeclarer interface {
 	Requirement() *scope.Requirement
+}
+
+// AdvertDeclarer is an optional interface a HandlerMeta implements when the
+// requirement its peer-record advert states differs from the Requirement its own
+// gate judges: a wrapper that leaves an arm to the handler it delegates to
+// declares the delegate's full Requirement here, so every holder of the
+// operation advertises it alike (node's RoleTable compares holders' adverts
+// before it picks one). node's publication reads it, else RequirementDeclarer.
+type AdvertDeclarer interface {
+	AdvertisedRequirement() *scope.Requirement
 }
 
 // EffectDeclarer is an optional interface a HandlerMeta implements to declare
@@ -463,12 +475,25 @@ type HandlerRegistry struct {
 	pendingHandlers    map[string]*registrationEntry
 	nextScopeID        uint64
 	scopeIDsExhausted  bool
+
+	// held is set by HoldUntilReady and cleared by MarkReady. While it is set
+	// every dispatch is refused with scope.ErrStarting before admission, scope,
+	// middleware or handler run (refuseWhileHeld), node's RPCServer answers
+	// every inbound request with that refusal, and node's local dispatcher
+	// leaves in-process calls to the mesh. Atomic so the dispatch paths read it
+	// without mu.
+	held atomic.Bool
 }
 
 type registrationEntry struct {
 	name      string
 	meta      HandlerMeta
 	admission TaskAdmission
+
+	// infrastructure marks a handler of loom's own mesh layer
+	// (RegisterInfrastructure): dispatched like any other and left out of
+	// Catalogue, which is what this node advertises it serves.
+	infrastructure bool
 }
 
 // registrationScopeToken must remain non-zero-sized. Go permits pointers to
@@ -524,6 +549,41 @@ func NewHandlerRegistry() *HandlerRegistry {
 		registrationScopes: make(map[*registrationScopeToken]*registrationScopeState),
 		pendingHandlers:    make(map[string]*registrationEntry),
 	}
+}
+
+// HoldUntilReady holds the registry: until MarkReady every dispatch, resolved
+// or not, is refused with an error wrapping scope.ErrStarting and no handler,
+// middleware or scope check runs. node.Initialize holds the registry it builds
+// when node.Config.HoldUntilReady is set, which the endpoint spine sets so a
+// peer that dials the node while the endpoint is still composing is told to
+// retry instead of reaching a handler whose policies are not yet installed.
+func (r *HandlerRegistry) HoldUntilReady() {
+	r.held.Store(true)
+}
+
+// MarkReady releases HoldUntilReady: dispatch proceeds from the next call on.
+// The endpoint spine calls it once, after every route, feature set and
+// infrastructure route is registered and the node's catalogue is exported and
+// published.
+func (r *HandlerRegistry) MarkReady() {
+	r.held.Store(false)
+}
+
+// Ready reports whether the registry dispatches: false from HoldUntilReady
+// until MarkReady. node's RPCServer reads it before anything else in a request
+// and node's local dispatcher before it claims an in-process call.
+func (r *HandlerRegistry) Ready() bool {
+	return !r.held.Load()
+}
+
+// refuseWhileHeld is the hold's one refusal: nil when the registry
+// dispatches, and otherwise an error wrapping scope.ErrStarting that names the
+// operation. Every dispatch entry point calls it first.
+func (r *HandlerRegistry) refuseWhileHeld(name string) error {
+	if r == nil || !r.held.Load() {
+		return nil
+	}
+	return fmt.Errorf("%w: %s", scope.ErrStarting, name)
 }
 
 // UseForRole registers middleware that runs for all handlers of a given role.
@@ -704,9 +764,27 @@ func (r *HandlerRegistry) RegisterHandlerScoped(
 	return r.registerMeta(registrationScope, h)
 }
 
+// RegisterInfrastructure registers a handler of loom's own mesh layer, which
+// every node answers whatever endpoint it runs (node.Initialize registers ping,
+// status and hole punching through it). It is dispatched like any other
+// handler, the hold included, and left out of Catalogue, so a node's
+// publication lists only the operations its endpoint serves.
+func (r *HandlerRegistry) RegisterInfrastructure(h HandlerMeta) error {
+	_, err := r.registerEntry(ports.RegistrationScope{}, h, true)
+	return err
+}
+
 func (r *HandlerRegistry) registerMeta(
 	registrationScope ports.RegistrationScope,
 	h HandlerMeta,
+) (RegistrationHandle, error) {
+	return r.registerEntry(registrationScope, h, false)
+}
+
+func (r *HandlerRegistry) registerEntry(
+	registrationScope ports.RegistrationScope,
+	h HandlerMeta,
+	infrastructure bool,
 ) (RegistrationHandle, error) {
 	if h == nil {
 		return RegistrationHandle{}, fmt.Errorf("handler cannot be nil")
@@ -752,9 +830,10 @@ func (r *HandlerRegistry) registerMeta(
 	}
 
 	entry := &registrationEntry{
-		name:      name,
-		meta:      h,
-		admission: admission,
+		name:           name,
+		meta:           h,
+		admission:      admission,
+		infrastructure: infrastructure,
 	}
 	handle := RegistrationHandle{registry: r, entry: entry}
 	if state != nil {
@@ -1043,6 +1122,25 @@ func (r *HandlerRegistry) AllHandlers() []HandlerMeta {
 	return result
 }
 
+// Catalogue returns the handlers this node advertises it serves, sorted by
+// name: every published registration (a pending role activation's are not yet
+// published) except loom's own mesh handlers (RegisterInfrastructure). node's
+// publication (Runtime.PublishRPCHandlersToLAD) snapshots it into the peer
+// record, so what a node advertises is what this registry dispatches.
+func (r *HandlerRegistry) Catalogue() []HandlerMeta {
+	r.mu.RLock()
+	result := make([]HandlerMeta, 0, len(r.handlers))
+	for _, entry := range r.handlers {
+		if entry.infrastructure {
+			continue
+		}
+		result = append(result, entry.meta)
+	}
+	r.mu.RUnlock()
+	sort.Slice(result, func(i, j int) bool { return result[i].Name() < result[j].Name() })
+	return result
+}
+
 // Handlers is an alias for AllHandlers (used by node runtime).
 func (r *HandlerRegistry) Handlers() []HandlerMeta {
 	return r.AllHandlers()
@@ -1207,6 +1305,9 @@ func (r *HandlerRegistry) Dispatch(ctx context.Context, req *RPCRequest) (*RPCRe
 	if req == nil {
 		return nil, fmt.Errorf("RPC request is nil")
 	}
+	if err := r.refuseWhileHeld(req.Handler); err != nil {
+		return nil, err
+	}
 	resolved, ok := r.Resolve(req.Handler)
 	if !ok {
 		return nil, ErrHandlerNotFound
@@ -1230,6 +1331,9 @@ func (r *HandlerRegistry) DispatchRPCWithAuth(
 ) (*RPCResponse, error) {
 	if req == nil {
 		return nil, fmt.Errorf("RPC request is nil")
+	}
+	if err := r.refuseWhileHeld(req.Handler); err != nil {
+		return nil, err
 	}
 	resolved, ok := r.Resolve(req.Handler)
 	if !ok {
@@ -1261,6 +1365,9 @@ func (h ResolvedHandler) dispatchRPC(
 	}
 	if h.registry == nil || h.meta == nil {
 		return nil, ErrHandlerNotFound
+	}
+	if err := h.registry.refuseWhileHeld(h.name); err != nil {
+		return nil, err
 	}
 	if req.Handler != h.name {
 		return nil, fmt.Errorf(
@@ -1407,6 +1514,9 @@ func (r *HandlerRegistry) DispatchTaskWithAuth(
 	if task == nil {
 		return nil, fmt.Errorf("task is nil")
 	}
+	if err := r.refuseWhileHeld(task.Handler); err != nil {
+		return nil, err
+	}
 	resolved, ok := r.Resolve(task.Handler)
 	if !ok {
 		return nil, ErrHandlerNotFound
@@ -1427,6 +1537,9 @@ func (h ResolvedHandler) DispatchTaskWithAuth(
 	}
 	if h.registry == nil || h.meta == nil {
 		return nil, ErrHandlerNotFound
+	}
+	if err := h.registry.refuseWhileHeld(h.name); err != nil {
+		return nil, err
 	}
 	if task.Handler != h.name {
 		return nil, fmt.Errorf(
@@ -1558,6 +1671,9 @@ func unwindTaskMiddleware(
 // Returns ErrHandlerNotFound if no handler is registered for the name.
 // Returns ErrUnsupportedMode if the handler doesn't implement StreamHandler.
 func (r *HandlerRegistry) DispatchStream(ctx context.Context, handlerName string, stream MessageStream) error {
+	if err := r.refuseWhileHeld(handlerName); err != nil {
+		return err
+	}
 	resolved, ok := r.Resolve(handlerName)
 	if !ok {
 		return ErrHandlerNotFound

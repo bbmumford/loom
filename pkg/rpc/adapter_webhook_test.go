@@ -219,15 +219,16 @@ func TestExportedWebhookHandlerAdmitsAValidSignature(t *testing.T) {
 }
 
 // clearFuncWhenAsked registers one webhook-class handler whose SecretProvider
-// clears Func on the registry's stored handler and then returns the signing
-// secret. SecretProvider is the caller code verifyWebhookSignature runs after
-// the Func refusal and before the Func call, and Get hands back the pointer the
-// shim and Dispatch both hold, so it reaches that window without a second
-// goroutine. Returns the registry, the stored handler, the FQN, a signed
-// request and a count of Func invocations.
-func clearFuncWhenAsked(t *testing.T) (*Registry, *Handler, string, *webhookEvent, *int) {
+// clears Func on the handler Get handed out and then returns the signing
+// secret. SecretProvider is the caller code verifyWebhookSignature runs between
+// the Func check and the Func call, so it is the caller's one chance to reach
+// the handler a call runs, and Get hands out the only handler a caller holds.
+// Returns the registry, the FQN, a signed request and a count of Func
+// invocations.
+func clearFuncWhenAsked(t *testing.T) (*Registry, string, *webhookEvent, *int) {
 	t.Helper()
 	calls := new(int)
+	var reached *Handler
 	reg := NewRegistry()
 	h := Handler{
 		Namespace: "test",
@@ -240,33 +241,45 @@ func clearFuncWhenAsked(t *testing.T) (*Registry, *Handler, string, *webhookEven
 		Request:  (*webhookEvent)(nil),
 		Response: (*webhookEvent)(nil),
 		Scope:    ScopeNone,
+		WebhookSignature: stripeConfig(func() string {
+			if reached != nil {
+				reached.Func = nil
+				reached.WebhookSignature = nil
+			}
+			return webhookTestSecret
+		}),
 	}
 	if err := reg.Register(h); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	stored, ok := reg.Get(h.FQN())
+	got, ok := reg.Get(h.FQN())
 	if !ok {
 		t.Fatalf("Get %q after Register: not found", h.FQN())
 	}
-	stored.WebhookSignature = stripeConfig(func() string {
-		stored.Func = nil
-		return webhookTestSecret
-	})
+	reached = got
 	ev := newWebhookEvent(webhookTestPayload, stripeSign(webhookTestPayload, webhookTestSecret, time.Now().Unix()))
-	return reg, stored, h.FQN(), ev, calls
+	return reg, h.FQN(), ev, calls
 }
 
-// TestShimCallsTheFuncItAdmitted: registryShim.ExecuteRPC admits the request on
-// the Func it read before the payload and calls that Func, so clearing Func on
-// the stored handler while the call is inside verifyWebhookSignature neither
-// dereferences nil nor turns the admitted call into a refusal.
+// TestShimCallsTheFuncItAdmitted: a shim exported from the registry runs the
+// Func of its own copy, so caller code inside verifyWebhookSignature clearing
+// Func on the handler Get handed out neither reaches the call nor turns the
+// admitted call into a refusal; the Func runs once.
 func TestShimCallsTheFuncItAdmitted(t *testing.T) {
-	_, stored, _, ev, calls := clearFuncWhenAsked(t)
+	reg, fqn, ev, calls := clearFuncWhenAsked(t)
 	payload, err := proto.Marshal(ev)
 	if err != nil {
 		t.Fatalf("proto.Marshal: %v", err)
 	}
-	shim := newRegistryShim(stored)
+	target := handlers.NewHandlerRegistry()
+	if err := reg.ExportToHandlerRegistry(target); err != nil {
+		t.Fatalf("ExportToHandlerRegistry: %v", err)
+	}
+	meta, ok := target.GetMeta(fqn)
+	if !ok {
+		t.Fatalf("%s was not exported", fqn)
+	}
+	shim := meta.(handlers.RPCHandler)
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -285,12 +298,12 @@ func TestShimCallsTheFuncItAdmitted(t *testing.T) {
 	}
 }
 
-// TestDispatchCallsTheFuncItAdmitted: Registry.Dispatch admits the request on
-// the Func it read before the scope check and calls that Func, so clearing Func
-// on the stored handler while the call is inside verifyWebhookSignature neither
-// dereferences nil nor turns the admitted call into a refusal.
+// TestDispatchCallsTheFuncItAdmitted: Registry.Dispatch runs the Func of the
+// copy it read, so caller code inside verifyWebhookSignature clearing Func on
+// the handler Get handed out neither reaches the call nor turns the admitted
+// call into a refusal; the Func runs once.
 func TestDispatchCallsTheFuncItAdmitted(t *testing.T) {
-	reg, _, fqn, ev, calls := clearFuncWhenAsked(t)
+	reg, fqn, ev, calls := clearFuncWhenAsked(t)
 	payload, err := proto.Marshal(ev)
 	if err != nil {
 		t.Fatalf("proto.Marshal: %v", err)

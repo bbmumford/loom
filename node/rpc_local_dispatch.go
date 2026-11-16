@@ -25,8 +25,12 @@ type localDispatcherAdapter struct {
 	registry *handlers.HandlerRegistry
 }
 
+// HasHandler claims an in-process call for this node's registry. A registry
+// held until ready claims none: its node is still starting, so the call goes
+// to the mesh, where a ready holder may serve it, rather than to a refusal
+// here.
 func (a *localDispatcherAdapter) HasHandler(name string) bool {
-	if a == nil || a.registry == nil {
+	if a == nil || a.registry == nil || !a.registry.Ready() {
 		return false
 	}
 	meta, ok := a.registry.GetMeta(name)

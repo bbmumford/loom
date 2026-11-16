@@ -667,9 +667,28 @@ func dedupCaller(ctx context.Context, req *pb.RPCRequest) string {
 }
 
 // handleRequest processes a binary RPC request with intelligent dispatch.
-// Dispatch chain: deadline and class refusal → timeout enforcement → context enrichment and principal bind → dedup → relay forward or load-aware local/forward decision → error.
+// Dispatch chain: starting refusal → deadline and class refusal → timeout enforcement → context enrichment and principal bind → dedup → relay forward or load-aware local/forward decision → error.
 func (s *RPCServer) handleRequest(ctx context.Context, req *pb.RPCRequest) *pb.RPCResponse {
 	startTime := time.Now()
+
+	// 0. Starting — while the registry is held until ready, every request,
+	// one this node registers or not and a relay hop alike, is refused with
+	// the typed starting refusal before anything else reads it, so nothing
+	// runs and nothing is forwarded before the endpoint has installed its
+	// policies and published. The refusal is stamped on the response so the
+	// origin's HWPCaller reads a refusal that sent nothing and tries its next
+	// route, and a bridge answers 503 with Retry-After.
+	if s.registry != nil && !s.registry.Ready() {
+		refusal := fmt.Errorf("%w: %s", dispatch.ErrStarting, req.Handler)
+		resp := &pb.RPCResponse{
+			Id:        req.Id,
+			Success:   false,
+			Error:     refusal.Error(),
+			LatencyNs: int64(time.Since(startTime)),
+		}
+		dispatch.StampRefusal(resp, refusal)
+		return resp
+	}
 
 	// 0a. Absolute deadline — a request that arrives past its deadline is
 	// refused before it is executed or forwarded, with the typed refusal the

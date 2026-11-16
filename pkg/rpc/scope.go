@@ -112,6 +112,12 @@ var ErrScopeDenied = rpcscope.ErrDenied
 // ErrScopeDenied. It is rpcscope's sentinel under this package's name.
 var ErrRefusalUnrecorded = rpcscope.ErrRefusalUnrecorded
 
+// ErrStarting is what a call fails with when the node that would serve it is
+// still starting (its handler registry is held until ready) and so ran
+// nothing; rpcscope's sentinel under this package's name. A caller may retry,
+// and the HTTP bridge answers it 503 with Retry-After.
+var ErrStarting = rpcscope.ErrStarting
+
 // EnforceScope rejects calls whose ctx fails the handler's declared
 // Scope. loom itself decides only three things and delegates the rest:
 //

@@ -113,6 +113,17 @@ func (e *AnswerersDisagreeError) Unwrap() error { return ErrAnswerersDisagree }
 // is no node it may send the call to. pkg/rpc re-exports it.
 var ErrNoAnswerer = errors.New("no node advertises this operation")
 
+// ErrStarting is what a call unwraps to when the node it reached is still
+// starting: its handler registry is held until ready (node/handlers'
+// HoldUntilReady), so it ran nothing and forwarded nothing. node's RPCServer
+// answers every inbound request with it while held and stamps it on the
+// response (StampRefusal); responseError rebuilds it here, and isRouteRefusal
+// holds it because nothing ran, so HWPCaller and node's forwarder move to the
+// next route and the last error stays typed for the HTTP bridge's 503 with
+// Retry-After. It is scope.ErrStarting, this exact value, because
+// node/handlers refuses with it and cannot import this package.
+var ErrStarting = rpcscope.ErrStarting
+
 // NoAnswererError is the typed refusal of a call before it is sent to a node
 // that does not advertise Handler. node's forwarder gives it when the role table
 // lists no answerer for Handler and the request names no target, because the
@@ -237,10 +248,12 @@ func routeGrade(r aether.ProbeRoute) grade.Grade {
 // isRouteRefusal reports whether err is one of the typed route refusals, which
 // Call returns wrapped so the caller can still test them with errors.Is. The
 // outbound admission's refusal (ErrNotAdmitted) is one: nothing left the node.
+// A starting node's refusal (ErrStarting) is one: the node that gave it ran
+// nothing.
 func isRouteRefusal(err error) bool {
 	return errors.Is(err, ErrGradeTooLow) || errors.Is(err, ErrRouteDeadline) ||
 		errors.Is(err, ErrAnswerersDisagree) || errors.Is(err, ErrNoAnswerer) ||
-		errors.Is(err, ErrNotAdmitted)
+		errors.Is(err, ErrNotAdmitted) || errors.Is(err, ErrStarting)
 }
 
 // A refusal made by a later hop reaches the origin as a failed RPCResponse.
@@ -270,6 +283,7 @@ const (
 	refusalKindNoAnswer  = "no-answerer"
 	refusalKindDenied    = "denied"
 	refusalKindConflict  = "conflict"
+	refusalKindStarting  = "starting"
 
 	refusalClassKey        = "refusal.class"
 	refusalUnknownKey      = "refusal.unknown-class"
@@ -284,9 +298,11 @@ const (
 // ambiguous outcome (ErrAmbiguousEffect), so the node that receives resp can
 // return the same typed error to its caller. Any other error leaves resp as it
 // is. node's RPCServer calls it on the failed response it builds for a refused
-// or ambiguous forward, for a request naming an undeclared class, and for a
-// request that arrived after its deadline. An ambiguous outcome travels typed
-// because HWPCaller must not send an Unsafe call on another route after one.
+// or ambiguous forward, for a request naming an undeclared class, for a
+// request that arrived after its deadline and for every request it answers
+// while its registry is held until ready (ErrStarting). An ambiguous outcome
+// travels typed because HWPCaller must not send an Unsafe call on another
+// route after one; a starting refusal travels typed because it may.
 func StampRefusal(resp *pb.RPCResponse, err error) {
 	if resp == nil {
 		return
@@ -298,6 +314,8 @@ func StampRefusal(resp *pb.RPCResponse, err error) {
 	switch {
 	case errors.Is(err, ErrAmbiguousEffect):
 		resp.Metadata = map[string]string{refusalKindKey: refusalKindAmbiguous}
+	case errors.Is(err, ErrStarting):
+		resp.Metadata = map[string]string{refusalKindKey: refusalKindStarting}
 	case errors.As(err, &gte):
 		resp.Metadata = map[string]string{
 			refusalKindKey:     refusalKindGrade,
@@ -444,6 +462,8 @@ func responseError(handler string, resp *pb.RPCResponse) error {
 		}
 	case refusalKindNoAnswer:
 		refusal = &NoAnswererError{Handler: handler}
+	case refusalKindStarting:
+		refusal = ErrStarting
 	case refusalKindDenied:
 		text := resp.Error
 		if text == "" {

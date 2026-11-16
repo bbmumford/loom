@@ -79,12 +79,15 @@ func TestThePeerRecordAdvertisesOnlyHandlersThisNodeExecutes(t *testing.T) {
 
 // RoleTable.Lookup(role, fqn) is how the forwarder and findNodeForRole pick a
 // node for an FQN, and it reads the handler list this node publishes. Through
-// the whole pipeline (PublishRPCHandlersToLAD, the signed fleet.peer record,
-// the RoleTable projection) a Func-less FQN names no node here, and the
+// the whole pipeline (the export, PublishRPCHandlersToLAD, the signed fleet.peer
+// record, the RoleTable projection) a Func-less FQN names no node here, and the
 // executing FQN names this one.
 func TestAFuncLessFQNIsNotRoutedToThisNode(t *testing.T) {
 	reg, executing, notHere := publisherTestRegistry(t)
 	rt := newPeerPublicationTestRuntime(t)
+	if err := reg.ExportToHandlerRegistry(rt.Registry()); err != nil {
+		t.Fatalf("ExportToHandlerRegistry: %v", err)
+	}
 	if err := rt.PublishRPCHandlersToLAD(context.Background(), reg); err != nil {
 		t.Fatalf("PublishRPCHandlersToLAD: %v", err)
 	}

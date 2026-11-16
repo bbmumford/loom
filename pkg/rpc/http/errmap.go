@@ -17,6 +17,9 @@ import (
 //     outcome is unknown, so a retry could run the operation a second time
 //   - DeadlineExceeded            → 504 Gateway Timeout
 //   - dispatch.ErrCircuitOpen     → 503 Service Unavailable + Retry-After: 1
+//   - rpc.ErrStarting             → 503 + Retry-After: 1, NOT re-dispatched here:
+//     every node that answered is still starting and ran nothing, and the
+//     dispatcher has already tried each route it had
 //   - dispatch.ErrAnswerersDisagree → 503, NOT retried: the adverts of the
 //     operation disagree on what it requires, nothing left this node, and no
 //     resend changes that until the fleet's adverts do
@@ -65,6 +68,9 @@ func classifyMeshError(err error) (status int, retryAfter string, retryEligible 
 		return 504, "", false
 	}
 	if errors.Is(err, dispatch.ErrCircuitOpen) {
+		return 503, "1", false
+	}
+	if errors.Is(err, rpc.ErrStarting) {
 		return 503, "1", false
 	}
 	if errors.Is(err, dispatch.ErrAnswerersDisagree) {

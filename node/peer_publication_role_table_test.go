@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/ORBTR/aether"
+	"github.com/bbmumford/loom/node/handlers"
 	"github.com/bbmumford/loom/pkg/rpc"
 	"google.golang.org/protobuf/proto"
 )
@@ -21,13 +22,14 @@ import (
 // TestPublishRPCHandlersToLAD_RoleTableGolden pins the whole role-discovery
 // pipeline, not a local replica of either endpoint:
 //
-//	rpc.Registry -> Runtime.PublishRPCHandlersToLAD -> signed fleet.peer record
-//	-> RoleTable projection -> handler-filtered lookup
+//	rpc.Registry -> export into the node's handler registry ->
+//	Runtime.PublishRPCHandlersToLAD -> signed fleet.peer record ->
+//	RoleTable projection -> handler-filtered lookup
 //
 // The exact lists are deliberately registered out of order. This guards both
 // identity shape (handler FQNs, not role names) and deterministic publication.
-// Each handler holds a Func, because the record carries only the FQNs this
-// node executes.
+// Each handler holds a Func and is exported, because the record carries only
+// the FQNs this node's handler registry dispatches.
 func TestPublishRPCHandlersToLAD_RoleTableGolden(t *testing.T) {
 	run := func(ctx context.Context, req proto.Message) (proto.Message, error) { return req, nil }
 	reg := rpc.NewRegistry()
@@ -42,6 +44,9 @@ func TestPublishRPCHandlersToLAD_RoleTableGolden(t *testing.T) {
 	}
 
 	rt := newPeerPublicationTestRuntime(t)
+	if err := reg.ExportToHandlerRegistry(rt.Registry()); err != nil {
+		t.Fatalf("ExportToHandlerRegistry: %v", err)
+	}
 	if err := rt.PublishRPCHandlersToLAD(context.Background(), reg); err != nil {
 		t.Fatalf("PublishRPCHandlersToLAD: %v", err)
 	}
@@ -98,6 +103,8 @@ func newPeerPublicationTestRuntime(t *testing.T) *Runtime {
 		cfg: Config{
 			ServiceName: "publication-golden",
 		},
+		// The handler registry a publication reads its catalogue from.
+		rpcServer: NewRPCServer(handlers.NewHandlerRegistry()),
 		identity: &NodeIdentity{
 			NodeID:     nodeID,
 			PublicKey:  publicKey,

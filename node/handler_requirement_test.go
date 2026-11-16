@@ -332,6 +332,9 @@ func TestALiveDirectoryAnswersForHandlersThisNodeIngested(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	if err := reg.ExportToHandlerRegistry(rt.Registry()); err != nil {
+		t.Fatalf("ExportToHandlerRegistry: %v", err)
+	}
 	if err := rt.PublishRPCHandlersToLAD(context.Background(), reg); err != nil {
 		t.Fatalf("PublishRPCHandlersToLAD: %v", err)
 	}
@@ -394,6 +397,9 @@ func TestALargeEndpointsRecordIsPublished(t *testing.T) {
 		}
 	}
 	rt := newPeerPublicationTestRuntime(t)
+	if err := reg.ExportToHandlerRegistry(rt.Registry()); err != nil {
+		t.Fatalf("ExportToHandlerRegistry: %v", err)
+	}
 	if err := rt.PublishRPCHandlersToLAD(context.Background(), reg); err != nil {
 		t.Fatalf("PublishRPCHandlersToLAD: %v", err)
 	}
