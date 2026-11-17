@@ -130,9 +130,10 @@ const (
 
 	// StreamHandlerBase through StreamHandlerLast carry one handler stream
 	// each (node.serveHandlerStream): an open frame naming the handler and the
-	// caller's principal, then the handler's own frames both ways until either
-	// end closes. Above the assigned bands so a consumer holding a long-lived
-	// stream does not spend the short-lived RPC band.
+	// caller's principal, then enveloped frames both ways
+	// (dispatch.StreamFrames), the last from each end its end frame. Above the
+	// assigned bands so a consumer holding a long-lived stream does not spend
+	// the short-lived RPC band.
 	StreamHandlerBase uint64 = 1000
 	StreamHandlerLast uint64 = 1999
 )

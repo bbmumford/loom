@@ -6,15 +6,18 @@ package node
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/ORBTR/aether"
 	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/bbmumford/loom/node/handlers"
 	"github.com/bbmumford/loom/pkg/dispatch"
+	"github.com/bbmumford/loom/pkg/rpc"
 	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/pkg/trace"
 )
@@ -34,7 +37,9 @@ const handlerStreamOpenWait = 30 * time.Second
 // DispatchStream's scope check, answers one failed pb.RPCResponse stamped with the
 // refusal's kind and the stream closes before the handler runs. Once the handler first uses the stream it is
 // answered one successful pb.RPCResponse (meshMessageStream.accept), after which
-// every frame is the handler's own.
+// every frame both ways is enveloped (dispatch.StreamFrames): the handler's own
+// payloads, then one end frame carrying the handler's return, so the opener's
+// Recv returns its failure typed and io.EOF only for its clean end.
 func (s *RPCServer) serveHandlerStream(ctx context.Context, stream aether.Stream, remoteID aether.NodeID) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -57,7 +62,7 @@ func (s *RPCServer) serveHandlerStream(ctx context.Context, stream aether.Stream
 		_ = stream.Reset(aether.ResetRefused)
 		return
 	}
-	adapter := &meshMessageStream{ctx: ctx, stream: stream, id: req.Id}
+	adapter := &meshMessageStream{ctx: ctx, stream: stream, id: req.Id, frames: dispatch.NewStreamFrames(stream, req.Handler, req.Id)}
 	defer adapter.Close()
 
 	transportPartition := handlers.TransportPartitionFromContext(ctx)
@@ -75,9 +80,7 @@ func (s *RPCServer) serveHandlerStream(ctx context.Context, stream aether.Stream
 		ctx = trace.WithID(ctx, req.TraceId)
 	}
 	adapter.ctx = ctx
-	if err := s.registry.DispatchStream(ctx, req.Handler, adapter); err != nil {
-		adapter.refuse(err.Error(), err)
-	}
+	adapter.finish(s.registry.DispatchStream(ctx, req.Handler, adapter))
 }
 
 // meshMessageStream is a handlers.MessageStream over one aether stream.
@@ -85,15 +88,17 @@ func (s *RPCServer) serveHandlerStream(ctx context.Context, stream aether.Stream
 // The handler's first Send or Recv answers the opener's open frame with success,
 // because DispatchStream runs its scope check before the handler can reach
 // either, so reaching one means the handler was admitted. refuse answers a
-// failure in its place; once accepted it is a no-op, and the close that follows
-// is the opener's signal.
+// failure in its place; once accepted it is a no-op, and the handler's return
+// reaches the opener as the end frame finish sends.
 type meshMessageStream struct {
 	ctx    context.Context
 	stream aether.Stream
 	id     string
+	frames *dispatch.StreamFrames
 
-	once sync.Once
-	err  error
+	once     sync.Once
+	err      error
+	accepted atomic.Bool
 }
 
 func (m *meshMessageStream) answer(resp *pb.RPCResponse) {
@@ -103,6 +108,7 @@ func (m *meshMessageStream) answer(resp *pb.RPCResponse) {
 			err = m.stream.Send(m.ctx, wire)
 		}
 		m.err = err
+		m.accepted.Store(err == nil && resp.Success)
 	})
 }
 
@@ -122,27 +128,60 @@ func (m *meshMessageStream) refuse(reason string, cause error) {
 	m.answer(resp)
 }
 
-// Send writes one frame to the opener.
+// errStreamFinished answers a Send or Recv made after the handler returned
+// without having used its stream: the open frame is no longer answered.
+var errStreamFinished = errors.New("handler stream: the handler has returned")
+
+// finish ends the stream for the handler's return err, after DispatchStream
+// returned. Before acceptance a failure is the refused answer (refuse) and a nil
+// return answers nothing; after it, the end frame goes to the opener: clean for
+// nil, read as io.EOF, else err with the fields rpc.StreamFailureOf reports for
+// it (the HTTP stream's error event's), read as the typed error carrying them.
+func (m *meshMessageStream) finish(err error) {
+	if err != nil {
+		m.refuse(err.Error(), err)
+	} else {
+		m.once.Do(func() { m.err = errStreamFinished })
+	}
+	switch {
+	case !m.accepted.Load():
+	case err == nil:
+		_ = m.frames.End(m.ctx)
+	default:
+		_ = m.frames.Fail(m.ctx, err, rpc.StreamFailureOf(err))
+	}
+}
+
+// Send writes one payload frame to the opener.
 func (m *meshMessageStream) Send(payload []byte) error {
 	if err := m.accept(); err != nil {
 		return err
 	}
-	return m.stream.Send(m.ctx, payload)
+	return m.frames.Send(m.ctx, payload)
 }
 
-// Recv blocks for the opener's next frame.
+// Recv blocks for the opener's next payload frame; io.EOF is the opener's
+// clean end (dispatch.StreamFrames.Recv).
 func (m *meshMessageStream) Recv() ([]byte, error) {
 	if err := m.accept(); err != nil {
 		return nil, err
 	}
-	return m.stream.Receive(m.ctx)
+	return m.frames.Recv(m.ctx)
 }
 
 // Context is the stream's serving context, ended when the session goes.
 func (m *meshMessageStream) Context() context.Context { return m.ctx }
 
-// Close ends the stream from this side. The handler has finished reading, so what
-// the opener still sends is read off here (dispatch.CloseAbandoned).
-func (m *meshMessageStream) Close() error { return dispatch.CloseAbandoned(m.stream) }
+// Close ends the stream from this side: an accepted stream's clean end frame
+// first, unless finish sent its end, then dispatch.CloseAbandoned, which reads
+// off what the opener still sends because the handler has finished reading. A
+// handler that closes its own stream has ended it cleanly; an error it returns
+// afterwards no longer reaches the opener.
+func (m *meshMessageStream) Close() error {
+	if m.accepted.Load() {
+		_ = m.frames.End(m.ctx)
+	}
+	return dispatch.CloseAbandoned(m.stream)
+}
 
 var _ handlers.MessageStream = (*meshMessageStream)(nil)

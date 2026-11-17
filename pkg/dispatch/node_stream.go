@@ -17,7 +17,9 @@ import (
 )
 
 // NodeStream is one handler stream the caller opened to a named node: frames
-// both ways until either end closes.
+// both ways until either end closes. Recv returns io.EOF only at the far
+// handler's clean end; the handler's failure comes back as the typed error a
+// refused call's would, and a stream cut short as ErrNoEndFrame.
 type NodeStream interface {
 	Send(ctx context.Context, payload []byte) error
 	Recv(ctx context.Context) ([]byte, error)
@@ -123,16 +125,27 @@ func OpenHandlerStream(ctx context.Context, session aether.Session, req *pb.RPCR
 		_ = stream.Reset(aether.ResetCancel)
 		return nil, fmt.Errorf("stream %s refused: %w", req.Handler, responseError(req.Handler, resp))
 	}
-	return nodeStream{stream}, nil
+	return nodeStream{NewStreamFrames(stream, req.GetHandler(), req.GetId())}, nil
 }
 
-type nodeStream struct{ stream aether.Stream }
+// nodeStream is the opener's side of an accepted handler stream, its frames
+// enveloped (StreamFrames): Recv returns the handler's failure typed, io.EOF
+// for its clean end, and ErrNoEndFrame for a stream that ended without one.
+type nodeStream struct{ frames *StreamFrames }
 
 func (s nodeStream) Send(ctx context.Context, payload []byte) error {
-	return s.stream.Send(ctx, payload)
+	return s.frames.Send(ctx, payload)
 }
-func (s nodeStream) Recv(ctx context.Context) ([]byte, error) { return s.stream.Receive(ctx) }
-func (s nodeStream) Close() error                             { return CloseAbandoned(s.stream) }
+func (s nodeStream) Recv(ctx context.Context) ([]byte, error) { return s.frames.Recv(ctx) }
+
+// Close sends the opener's clean end frame, which the handler's Recv reads as
+// io.EOF, bounded by abandonedDrainWait, then closes (CloseAbandoned).
+func (s nodeStream) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), abandonedDrainWait)
+	_ = s.frames.End(ctx)
+	cancel()
+	return CloseAbandoned(s.frames.stream)
+}
 
 // abandonedDrainWait bounds how long CloseAbandoned keeps reading a stream whose
 // consumer has finished, which is about one round trip for a peer that closes in

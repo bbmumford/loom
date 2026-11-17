@@ -47,7 +47,6 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
-	"github.com/bbmumford/loom/pkg/dispatch"
 	"github.com/bbmumford/loom/pkg/rpc"
 )
 
@@ -111,17 +110,12 @@ type streamError struct {
 }
 
 // errorFrame is the data of the error event a stream answers after its first
-// frame (streamError).
+// frame (streamError): rpc.StreamFailureOf's fields, the ones node's
+// handler-stream end frame carries, so a mesh stream's failure bridged here
+// reads as its far side reported it.
 func errorFrame(err error) string {
-	status := classifyHandlerStatus(err)
-	frame := streamError{Error: http.StatusText(status), Status: status, Kind: dispatch.RefusalKind(err)}
-	if status < 500 {
-		frame.Error = err.Error()
-		if c, ok := rpc.CodedOf(err); ok {
-			frame.Code = c.Code
-		}
-	}
-	data, _ := json.Marshal(frame)
+	f := rpc.StreamFailureOf(err)
+	data, _ := json.Marshal(streamError{Error: f.Error, Code: f.Code, Status: f.Status, Kind: f.Kind})
 	return string(data)
 }
 

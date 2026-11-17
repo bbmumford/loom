@@ -338,47 +338,10 @@ unmarshal:
 	return out, nil
 }
 
-// classifyHandlerStatus maps a handler error to an HTTP status code.
-// Known sentinels (ErrScopeDenied, ErrHandlerNotFound, webhook signature
-// failures, context cancellations) get specific codes; unknown errors
-// get 500 + the error msg. A call that reached a node still starting
-// (rpc.ErrStarting, from a handler's own downstream call) is 503, and
-// handlerError adds its Retry-After.
-//
-// We don't sanitize the unknown-error message here — downstream callers
-// (writeBridgeError) decide whether to expose the cause or substitute a
-// generic body. That keeps the classifier pure.
-func classifyHandlerStatus(err error) int {
-	if c, ok := rpc.CodedOf(err); ok {
-		return c.Status
-	}
-	switch {
-	case errors.Is(err, rpc.ErrStarting):
-		return http.StatusServiceUnavailable
-	case errors.Is(err, rpc.ErrRefusalUnrecorded):
-		// The refusal was not recorded, so the call fails as unavailable:
-		// a 403 would answer a refusal that is not on the record.
-		return http.StatusServiceUnavailable
-	case errors.Is(err, rpc.ErrScopeDenied):
-		return http.StatusForbidden
-	case errors.Is(err, rpc.ErrConflict):
-		// After the denial: an error wrapping both refuses the caller.
-		return http.StatusConflict
-	case errors.Is(err, rpc.ErrHandlerNotFound):
-		return http.StatusNotFound
-	case errors.Is(err, rpc.ErrProxyDispatchLocal):
-		return http.StatusBadGateway
-	case errors.Is(err, rpc.ErrWebhookSignatureInvalid),
-		errors.Is(err, rpc.ErrWebhookSecretUnset):
-		// Webhook signature failure (bad/missing/expired signature) and
-		// unset signing secret both map to 401 Unauthorized — the request
-		// did not present credentials this gateway can accept. Distinct
-		// from 403 (scope denied) so dashboards and rate-limiters can
-		// alarm on each cause separately.
-		return http.StatusUnauthorized
-	}
-	return http.StatusInternalServerError
-}
+// classifyHandlerStatus maps a handler error to an HTTP status code:
+// rpc.HandlerStatus, which node's handler-stream end frame carries too, so a
+// failure answers one status here and across the mesh.
+func classifyHandlerStatus(err error) int { return rpc.HandlerStatus(err) }
 
 // handlerError is the bridgeError for an error a handler, the registry's
 // Enforce or a stream returned: its status is classifyHandlerStatus's, and a
