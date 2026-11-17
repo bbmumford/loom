@@ -71,7 +71,7 @@ func wireFixture(t *testing.T) *GossipEnvelope {
 	rec, err := proto.MarshalOptions{Deterministic: true}.Marshal(&LADRecord{
 		Topic:           "topic",
 		NodeId:          "node-a",
-		Partition:       "p-1",
+		PartitionId:     "p-1",
 		Body:            []byte("body"),
 		TimestampUnix:   1,
 		LamportClock:    2,

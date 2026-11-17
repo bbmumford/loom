@@ -62,7 +62,7 @@ func TestBuildRPCRequestCtxCarriesTypedPrincipalOutsideMutableContext(t *testing
 	if got := req.Principal.Subject; got != "user-A" {
 		t.Fatalf("subject = %q", got)
 	}
-	if got := req.Principal.GetPartition(); got != "p-1" {
+	if got := req.Principal.GetPartitionId(); got != "p-1" {
 		t.Fatalf("partition = %q, want p-1", got)
 	}
 	if got := req.Principal.Scopes; len(got) != 2 ||

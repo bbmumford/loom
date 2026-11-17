@@ -79,9 +79,9 @@ func principalRequest(id, subject string) *pb.RPCRequest {
 		Handler: effectProbeFQN,
 		Context: map[string]string{dispatch.LogicalIDKey: id},
 		Principal: &pb.AuthenticatedPrincipal{
-			Subject:   subject,
-			Axes:      []*pb.ScopeAxis{{Name: rpcscope.AxisTransportPinned, Value: "part-T"}},
-			Partition: "part-A",
+			Subject:     subject,
+			Axes:        []*pb.ScopeAxis{{Name: rpcscope.AxisTransportPinned, Value: "part-T"}},
+			PartitionId: "part-A",
 		},
 	}
 }

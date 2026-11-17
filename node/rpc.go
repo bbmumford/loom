@@ -915,7 +915,7 @@ func (s *RPCServer) bindAuthenticatedPrincipal(
 	if err != nil {
 		return ctx, err
 	}
-	identity = identity.WithPartition(wire.GetPartition())
+	identity = identity.WithPartition(wire.GetPartitionId())
 	principal, err := rpcscope.NewAuthenticatedPrincipal(identity, wire.Scopes)
 	if err != nil {
 		return ctx, err

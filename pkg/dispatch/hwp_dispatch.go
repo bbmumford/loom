@@ -1315,10 +1315,10 @@ func buildRPCRequestCtx(ctx context.Context, role, method string, payload []byte
 			})
 		}
 		wirePrincipal = &pb.AuthenticatedPrincipal{
-			Subject:   identity.Subject,
-			Axes:      axes,
-			Scopes:    principal.Scopes(),
-			Partition: identity.Partition(),
+			Subject:     identity.Subject,
+			Axes:        axes,
+			Scopes:      principal.Scopes(),
+			PartitionId: identity.Partition(),
 		}
 	}
 	return &pb.RPCRequest{

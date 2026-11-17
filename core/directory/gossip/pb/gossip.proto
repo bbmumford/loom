@@ -84,7 +84,7 @@ message ConnectionOffer {
 message LADRecord {
     string topic = 1;
     string nodeId = 2;
-    string partition = 3;
+    string partitionId = 3;
     bytes body = 4;             // opaque sub-document (roles, reach, member JSON)
     int64 timestampUnix = 5;
     uint64 lamportClock = 6;

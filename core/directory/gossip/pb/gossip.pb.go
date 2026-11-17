@@ -378,7 +378,7 @@ type LADRecord struct {
 	state           protoimpl.MessageState `protogen:"open.v1"`
 	Topic           string                 `protobuf:"bytes,1,opt,name=topic,proto3" json:"topic,omitempty"`
 	NodeId          string                 `protobuf:"bytes,2,opt,name=nodeId,proto3" json:"nodeId,omitempty"`
-	Partition       string                 `protobuf:"bytes,3,opt,name=partition,proto3" json:"partition,omitempty"`
+	PartitionId     string                 `protobuf:"bytes,3,opt,name=partitionId,proto3" json:"partitionId,omitempty"`
 	Body            []byte                 `protobuf:"bytes,4,opt,name=body,proto3" json:"body,omitempty"` // opaque sub-document (roles, reach, member JSON)
 	TimestampUnix   int64                  `protobuf:"varint,5,opt,name=timestampUnix,proto3" json:"timestampUnix,omitempty"`
 	LamportClock    uint64                 `protobuf:"varint,6,opt,name=lamportClock,proto3" json:"lamportClock,omitempty"`
@@ -439,9 +439,9 @@ func (x *LADRecord) GetNodeId() string {
 	return ""
 }
 
-func (x *LADRecord) GetPartition() string {
+func (x *LADRecord) GetPartitionId() string {
 	if x != nil {
-		return x.Partition
+		return x.PartitionId
 	}
 	return ""
 }
@@ -566,11 +566,11 @@ const file_gossip_proto_rawDesc = "" +
 	"\taddresses\x18\x03 \x03(\tR\taddresses\x12\x1c\n" +
 	"\ttransport\x18\x04 \x01(\tR\ttransport\x12$\n" +
 	"\rtimestampUnix\x18\x05 \x01(\x03R\rtimestampUnix\x12\x1c\n" +
-	"\tsignature\x18\x06 \x01(\fR\tsignature\"\xdb\x03\n" +
+	"\tsignature\x18\x06 \x01(\fR\tsignature\"\xdf\x03\n" +
 	"\tLADRecord\x12\x14\n" +
 	"\x05topic\x18\x01 \x01(\tR\x05topic\x12\x16\n" +
-	"\x06nodeId\x18\x02 \x01(\tR\x06nodeId\x12\x1c\n" +
-	"\tpartition\x18\x03 \x01(\tR\tpartition\x12\x12\n" +
+	"\x06nodeId\x18\x02 \x01(\tR\x06nodeId\x12 \n" +
+	"\vpartitionId\x18\x03 \x01(\tR\vpartitionId\x12\x12\n" +
 	"\x04body\x18\x04 \x01(\fR\x04body\x12$\n" +
 	"\rtimestampUnix\x18\x05 \x01(\x03R\rtimestampUnix\x12\"\n" +
 	"\flamportClock\x18\x06 \x01(\x04R\flamportClock\x12\x10\n" +

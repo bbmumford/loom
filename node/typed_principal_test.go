@@ -110,8 +110,8 @@ func typedPrincipalRequest() *pb.RPCRequest {
 				{Name: rpcscope.AxisTransportPinned, Value: "orbtr"},
 				{Name: rpcscope.AxisWithinTransport, Value: "org-A"},
 			},
-			Scopes:    []string{"org.read", "org.write"},
-			Partition: "org-A",
+			Scopes:      []string{"org.read", "org.write"},
+			PartitionId: "org-A",
 		},
 	}
 }
