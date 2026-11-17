@@ -58,6 +58,10 @@ func classifyMeshError(err error) (status int, retryAfter string, retryEligible 
 	if err == nil {
 		return 500, "", false
 	}
+	// A handler's refusal with its own status is the answer, never retried.
+	if c, ok := rpc.CodedOf(err); ok {
+		return c.Status, "", false
+	}
 	// An ambiguous effect was sent and may have run; any resend could run it
 	// again. It is checked before the deadline mapping because its cause is
 	// often the deadline that ended the wait.

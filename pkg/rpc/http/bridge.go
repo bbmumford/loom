@@ -345,6 +345,9 @@ unmarshal:
 // (writeBridgeError) decide whether to expose the cause or substitute a
 // generic body. That keeps the classifier pure.
 func classifyHandlerStatus(err error) int {
+	if c, ok := rpc.CodedOf(err); ok {
+		return c.Status
+	}
 	switch {
 	case errors.Is(err, rpc.ErrStarting):
 		return http.StatusServiceUnavailable
@@ -432,8 +435,21 @@ func writeBridgeError(w http.ResponseWriter, err error) {
 		writeError(w, be.status, http.StatusText(be.status)+" (requestID="+reqID+")")
 		return
 	}
-	// 4xx: surface the classified cause so callers can debug their requests.
+	// 4xx: surface the classified cause so callers can debug their requests,
+	// and a handler's refusal code beside it (rpc.Coded) for a client to
+	// switch on.
+	if c, ok := rpc.CodedOf(be.cause); ok {
+		writeCodedError(w, be.status, be.cause.Error(), c.Code)
+		return
+	}
 	writeError(w, be.status, be.cause.Error())
+}
+
+func writeCodedError(w http.ResponseWriter, status int, message, code string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	resp, _ := json.Marshal(map[string]string{"error": message, "code": code})
+	_, _ = w.Write(resp)
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
