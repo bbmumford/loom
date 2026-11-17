@@ -104,6 +104,26 @@ const (
 	OpCritical                       // Key rotation, auth — fast transport + retry
 )
 
+// Exposure is where a Handler declares its operation may be reached from. The
+// zero value, ExposureMeshAndHTTP, is what a declaration that names none carries:
+// the mesh and every HTTP mount of a registry holding it. ExposureMeshOnly keeps the
+// operation to the mesh: pkg/rpc/http's RegisterAll and RegisterAllWithBridge mount
+// no route for it, Bridge.HandleRPC and the directory treat it as a name the
+// registry does not hold, and a library HTTP edge reading declarations does the same,
+// so no HTTP request reaches its Middleware, its Func or the mesh caller. Mesh
+// dispatch (Registry.Dispatch, the node's handler registry) does not read it.
+type Exposure int
+
+const (
+	ExposureMeshAndHTTP Exposure = iota // the mesh and HTTP mounts; the default
+	ExposureMeshOnly                    // the mesh alone; every HTTP surface answers it as unknown
+)
+
+// MeshOnly reports whether h declares its operation reachable over the mesh only.
+func (h *Handler) MeshOnly() bool {
+	return h.Exposure == ExposureMeshOnly
+}
+
 // Middleware is a standard HTTP middleware function.
 // Handlers declare their own middleware chain — no fixed security tiers.
 // This allows each app to compose its own auth/rate-limit/scope stack.
@@ -169,6 +189,7 @@ type Handler struct {
 	OpClass          OperationClass          // declared operation class (zero value: OpStandard); loom does not read it, a caller forwards a class as the opClass hint via dispatch.WithOpClass
 	Effect           effect.Class            // what a second execution does (zero value: effect.Unsafe); dispatch sends only an effect.Class.Repeatable operation down more than one route or again after an unknown outcome
 	WebhookSignature *WebhookSignatureConfig // optional: declare this handler is a webhook-class receiver; the registry runs signature verification pre-dispatch
+	Exposure         Exposure                // where the operation is reached from (zero value: ExposureMeshAndHTTP); ExposureMeshOnly keeps every HTTP surface from mounting or dispatching it
 
 	// Stream, when set, serves this operation as a handler stream as well
 	// (node.serveHandlerStream, reached with OpenNodeStream): frames both ways

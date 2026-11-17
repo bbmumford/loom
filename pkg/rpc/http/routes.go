@@ -18,6 +18,8 @@ import (
 //
 // Handlers with nil Func are proxied over mesh via rpc.CallRaw().
 // Handlers with non-nil Func are executed locally.
+// A handler declaring rpc.ExposureMeshOnly gets no route (bridged), so the
+// router answers its path as it answers any path it does not hold.
 //
 // The introspection endpoint (`GET /rpc/_directory`) is mounted last and
 // defaults to summary-only. Endpoints that want verbose directory access
@@ -41,7 +43,7 @@ func RegisterAll(reg *rpc.Registry, router chi.Router) {
 //
 // The bridge's registry is the source of truth for the mounted handlers.
 func RegisterAllWithBridge(bridge *Bridge, router chi.Router) {
-	for _, h := range bridge.registry.All() {
+	for _, h := range bridged(bridge.registry) {
 		handler := h // bind by value so closure captures stable pointer
 		final := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			bridge.dispatch(w, r, handler)
@@ -50,4 +52,21 @@ func RegisterAllWithBridge(bridge *Bridge, router chi.Router) {
 		router.Method("POST", "/rpc/"+handler.FQN(), wrapped)
 	}
 	router.Method("GET", "/rpc/_directory", bridge.HandleDirectory())
+}
+
+// bridged is every handler of reg an HTTP surface may present: all of them but
+// those declaring rpc.ExposureMeshOnly, sorted by FQN as reg.All returns them.
+// RegisterAllWithBridge mounts exactly these and writeDirectory lists exactly
+// these, and Bridge.HandleRPC answers a mesh-only handler as a miss, because a
+// mesh-only operation (cortex's inference declarations) must not be reachable
+// from any HTTP request, however the bridge is mounted.
+func bridged(reg *rpc.Registry) []*rpc.Handler {
+	all := reg.All()
+	out := make([]*rpc.Handler, 0, len(all))
+	for _, h := range all {
+		if !h.MeshOnly() {
+			out = append(out, h)
+		}
+	}
+	return out
 }

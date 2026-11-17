@@ -130,6 +130,10 @@ func (b *Bridge) HandleDirectory() http.HandlerFunc {
 // HandleRPC dispatches based on {handler} URL parameter.
 // Used for wildcard routes: POST /rpc/{handler}.
 //
+// A handler declaring rpc.ExposureMeshOnly is answered exactly as a name the
+// registry does not hold: 404, before its Middleware, its Func or the mesh
+// caller is reached.
+//
 // Special-cases the meta-path "_directory" (any HTTP method): returns
 // the same JSON manifest as the GET /rpc/_directory route mounted by
 // RegisterAll. Wildcard-routed gateways don't call RegisterAll, so without
@@ -156,7 +160,7 @@ func (b *Bridge) HandleRPC(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h, ok := b.registry.Get(handlerName)
-	if !ok {
+	if !ok || h.MeshOnly() {
 		w.Header().Set("Connection", "close")
 		writeError(w, http.StatusNotFound, "unknown handler: "+handlerName)
 		return

@@ -15,10 +15,11 @@ package rpchttp
 // response message with protojson's default JSON names, flushed as it is sent. A
 // refusal before the first frame (the scope judge, a webhook signature, the
 // stream's own early error) is the bridge's usual error answer with its status;
-// a failure after it is one "error" event carrying {"error": message}, because
-// the stream's status is already sent. The stream ends when the operation
-// returns or the caller goes away; nothing is written after the operation
-// returns.
+// a failure after it is one "error" event (errorFrame) carrying the message and
+// refusal code a unary call failing with the same error is answered, its status
+// and the refusal's mesh kind, because the stream's own HTTP status is already
+// sent. The stream ends when the operation returns or the caller goes away;
+// nothing is written after the operation returns.
 //
 // A resumable stream declares a cursor: a response field whose JSON name is
 // "cursor" is written as each event's id, and a request whose own cursor field
@@ -46,6 +47,7 @@ import (
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/reflect/protoreflect"
 
+	"github.com/bbmumford/loom/pkg/dispatch"
 	"github.com/bbmumford/loom/pkg/rpc"
 )
 
@@ -91,14 +93,35 @@ func (b *Bridge) serveStream(w http.ResponseWriter, r *http.Request, h *rpc.Hand
 	}
 }
 
+// streamError is the data of a stream's error event. Error and Code are the body
+// writeBridgeError writes for a unary call failing with the same error: Error the
+// classified message of a 4xx cause and the status text of any other, Code a 4xx
+// handler refusal's wire code (rpc.Coded, as writeCodedError writes it), left out
+// when it has none. Status is the HTTP status that unary call is answered with
+// (classifyHandlerStatus), carried in the data because the stream's own status line
+// is already sent; Kind is the refusal kind the mesh stamps for the error
+// (dispatch.RefusalKind: "denied", "conflict", and so on), left out when it is none.
+// Code names the same key with the same meaning as the unary body, so one client
+// reader maps a unary refusal and a stream's error event alike.
+type streamError struct {
+	Error  string `json:"error"`
+	Code   string `json:"code,omitempty"`
+	Status int    `json:"status"`
+	Kind   string `json:"kind,omitempty"`
+}
+
 // errorFrame is the data of the error event a stream answers after its first
-// frame: the classified message of a 4xx cause, the status text of any other.
+// frame (streamError).
 func errorFrame(err error) string {
-	msg := http.StatusText(http.StatusInternalServerError)
-	if status := classifyHandlerStatus(err); status < 500 {
-		msg = err.Error()
+	status := classifyHandlerStatus(err)
+	frame := streamError{Error: http.StatusText(status), Status: status, Kind: dispatch.RefusalKind(err)}
+	if status < 500 {
+		frame.Error = err.Error()
+		if c, ok := rpc.CodedOf(err); ok {
+			frame.Code = c.Code
+		}
 	}
-	data, _ := json.Marshal(map[string]string{"error": msg})
+	data, _ := json.Marshal(frame)
 	return string(data)
 }
 

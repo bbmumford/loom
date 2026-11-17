@@ -104,11 +104,13 @@ func HandleDirectory(reg *rpc.Registry, auth DirectoryAuthCheck) http.HandlerFun
 // HandleDirectory function and Bridge.HandleDirectory. Splitting it out
 // keeps the two entry points in exact lockstep — they cannot diverge on
 // summary/verbose shape or on the fail-closed default when auth is nil.
+// It lists what an HTTP request can reach (bridged), so a handler declaring
+// rpc.ExposureMeshOnly is neither counted nor listed.
 func writeDirectory(w http.ResponseWriter, r *http.Request, reg *rpc.Registry, auth DirectoryAuthCheck) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 
-	all := reg.All()
+	all := bridged(reg)
 	roles := make(map[string]int)
 	for _, h := range all {
 		roles[h.Role()]++

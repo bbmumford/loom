@@ -15,6 +15,7 @@ import (
 	"github.com/ORBTR/aether/rpc/pb"
 	"github.com/bbmumford/loom/node/handlers"
 	"github.com/bbmumford/loom/pkg/dispatch"
+	rpcscope "github.com/bbmumford/loom/pkg/rpc/scope"
 	"github.com/bbmumford/loom/pkg/trace"
 )
 
@@ -30,8 +31,8 @@ const handlerStreamOpenWait = 30 * time.Second
 // caller's principal, which is judged as an RPC's is: against the transport
 // partition the session bound, by the consumer's admitter, so a stream admits
 // nobody an RPC would refuse. A principal refused, or a handler refused by
-// DispatchStream's scope check, answers one failed pb.RPCResponse and the stream
-// closes before the handler runs. Once the handler first uses the stream it is
+// DispatchStream's scope check, answers one failed pb.RPCResponse stamped with the
+// refusal's kind and the stream closes before the handler runs. Once the handler first uses the stream it is
 // answered one successful pb.RPCResponse (meshMessageStream.accept), after which
 // every frame is the handler's own.
 func (s *RPCServer) serveHandlerStream(ctx context.Context, stream aether.Stream, remoteID aether.NodeID) {
@@ -66,7 +67,7 @@ func (s *RPCServer) serveHandlerStream(ctx context.Context, stream aether.Stream
 	if req.Principal != nil {
 		ctx, err = s.bindAuthenticatedPrincipal(ctx, req, transportPartition)
 		if err != nil {
-			adapter.refuse(fmt.Sprintf("authenticated principal denied: %v", err))
+			adapter.refuse(fmt.Sprintf("authenticated principal denied: %v", err), fmt.Errorf("%w: %w", rpcscope.ErrDenied, err))
 			return
 		}
 	}
@@ -75,7 +76,7 @@ func (s *RPCServer) serveHandlerStream(ctx context.Context, stream aether.Stream
 	}
 	adapter.ctx = ctx
 	if err := s.registry.DispatchStream(ctx, req.Handler, adapter); err != nil {
-		adapter.refuse(err.Error())
+		adapter.refuse(err.Error(), err)
 	}
 }
 
@@ -110,8 +111,15 @@ func (m *meshMessageStream) accept() error {
 	return m.err
 }
 
-func (m *meshMessageStream) refuse(reason string) {
-	m.answer(&pb.RPCResponse{Id: m.id, Success: false, Error: reason})
+// refuse answers the open frame with a failure whose text is reason and whose
+// refusal kind is cause's (dispatch.StampFailed), so the opener's
+// OpenHandlerStream returns the typed refusal a refused call returns: a denied
+// principal or scope is scope.ErrDenied there, as RPCServer.handleRequest and
+// executeLocal stamp it for a call.
+func (m *meshMessageStream) refuse(reason string, cause error) {
+	resp := &pb.RPCResponse{Id: m.id, Success: false, Error: reason}
+	dispatch.StampFailed(resp, cause)
+	m.answer(resp)
 }
 
 // Send writes one frame to the opener.

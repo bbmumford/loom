@@ -74,7 +74,11 @@ func (c *HWPCaller) OpenNodeStream(ctx context.Context, nodeID, role, handler st
 }
 
 // OpenHandlerStream opens one stream of the handler-stream band on session,
-// sends req as its open frame and waits for the far side's answer. The
+// sends req as its open frame and waits for the far side's answer. A refusal is
+// read as HWPCaller reads a failed response (responseError): the kind the far
+// side stamped (StampFailed) comes back typed, so a refusal of the caller's
+// authority is scope.ErrDenied and a starting or route refusal is its own error,
+// as the same refusal of a call is. The
 // process's admission is asked first, with the role req's context names, its
 // handler and its payload, because a caller holding a session reaches this
 // without HWPCaller: a refused stream is never opened.
@@ -117,7 +121,7 @@ func OpenHandlerStream(ctx context.Context, session aether.Session, req *pb.RPCR
 	}
 	if !resp.Success {
 		_ = stream.Reset(aether.ResetCancel)
-		return nil, fmt.Errorf("stream %s refused: %s", req.Handler, resp.Error)
+		return nil, fmt.Errorf("stream %s refused: %w", req.Handler, responseError(req.Handler, resp))
 	}
 	return nodeStream{stream}, nil
 }

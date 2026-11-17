@@ -17,6 +17,7 @@ type Registry struct {
 	policy   scope.PresencePolicy  // consumer-supplied scope evaluator (nil fails closed)
 	authz    *scope.Policy         // two-arm op authorizer; EnforceScope consults it for a handler that declares a Requirement (nil → the Scope/PresencePolicy tier path)
 	refusals scope.RefusalRecorder // the server's refusal recorder; Enforce calls it for every refusal (nil returns the refusal unrecorded)
+	listed   map[string]string     // catalogue-only declarations (Catalogue): FQN → role; Roles reads it, no handler lookup does
 }
 
 // NewRegistry creates an empty handler registry.
@@ -235,13 +236,21 @@ func (r *Registry) All() []*Handler {
 	return result
 }
 
-// Roles returns all unique namespace.domain role strings.
+// Roles returns all unique namespace.domain role strings: the role of every
+// handler and of every catalogue-only declaration (Catalogue), sorted. It is what
+// a published registry advertises (node's Runtime.PublishRPCHandlersToLAD), so a
+// domain an endpoint only calls stays on its role list without a handler here.
 func (r *Registry) Roles() []string {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	roles := make([]string, 0, len(r.byRole))
 	for role := range r.byRole {
 		roles = append(roles, role)
+	}
+	for _, role := range catalogueRoles(r.listed) {
+		if _, held := r.byRole[role]; !held {
+			roles = append(roles, role)
+		}
 	}
 	sort.Strings(roles)
 	return roles
