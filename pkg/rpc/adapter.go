@@ -208,6 +208,7 @@ func (s *registryShim) ExecuteRPC(ctx context.Context, req *handlers.RPCRequest)
 			Latency:  time.Since(start),
 			Denied:   handlers.Denial(err),
 			Conflict: sharedDispatch.Conflict(err),
+			Coded:    handlers.CodedRefusal(err),
 		}, nil
 	}
 

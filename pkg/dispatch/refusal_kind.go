@@ -10,8 +10,10 @@ import "github.com/ORBTR/aether/rpc/pb"
 // StampFailed records on resp, a failed response, the one refusal kind err
 // carries: StampRefusal's when err is a typed route refusal or an ambiguous
 // outcome, else StampDenial's when it refuses the caller's authority, else
-// StampConflict's when it is a conflict with stored state. Anything else leaves
-// resp as it is, and the caller reads it as a handler rejection. node's
+// StampConflict's when it is a conflict with stored state, with StampCoded's
+// status and code beside either or alone when err carries a handler's coded
+// refusal. Anything else leaves resp as it is, and the caller reads it as a
+// handler rejection. node's
 // serveHandlerStream stamps the failed answer to a stream it refuses with it, so
 // OpenHandlerStream rebuilds the typed error (responseError) as HWPCaller does
 // for a refused call, and RefusalKind names the kind with it.
@@ -25,6 +27,7 @@ func StampFailed(resp *pb.RPCResponse, err error) {
 	}
 	StampDenial(resp, err)
 	StampConflict(resp, err)
+	StampCoded(resp, err)
 }
 
 // RefusalKind is the kind a failed response carrying err is stamped with on the

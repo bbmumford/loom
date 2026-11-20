@@ -986,8 +986,9 @@ func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startT
 	s.dispatchLatency.Record(req.Handler, time.Since(t0), failure == nil)
 	if failure != nil {
 		// The failure's words are the response's Error text when the handler
-		// answered a failed response, and its kind is stamped for the
-		// origin's HWPCaller to read back as the same refusal or conflict.
+		// answered a failed response, and its kind, and a coded refusal's
+		// status and code, are stamped for the origin's HWPCaller to read back
+		// as the same refusal or conflict.
 		latency := time.Since(startTime)
 		if err == nil && resp != nil {
 			latency = resp.Latency
@@ -1000,6 +1001,7 @@ func (s *RPCServer) executeLocal(ctx context.Context, req *pb.RPCRequest, startT
 		}
 		dispatch.StampDenial(failed, failure)
 		dispatch.StampConflict(failed, failure)
+		dispatch.StampCoded(failed, failure)
 		return failed
 	}
 	return &pb.RPCResponse{

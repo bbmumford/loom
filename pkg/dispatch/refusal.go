@@ -292,6 +292,12 @@ const (
 	refusalRemainingKey    = "refusal.remaining-ns"
 	refusalNeedKey         = "refusal.need-ns"
 	refusalRequirementsKey = "refusal.requirements"
+
+	// The status and code of a handler's coded refusal (scope.Coded), which
+	// StampCoded writes beside the kind (the denial or conflict the refusal
+	// also is, or none) and responseError reads back.
+	refusalStatusKey = "refusal.status"
+	refusalCodeKey   = "refusal.code"
 )
 
 // StampRefusal records err on resp when err is a typed route refusal or an
@@ -355,6 +361,64 @@ func StampDenial(resp *pb.RPCResponse, err error) {
 	}
 	resp.Metadata = map[string]string{refusalKindKey: refusalKindDenied}
 }
+
+// StampCoded records the status and code of the handler's coded refusal err
+// carries (a scope.Coded), so the origin's HWPCaller returns an error carrying
+// the same Coded (responseError) and the HTTP bridge proxying the call answers
+// the handler's own status with the code beside its words, as it answers the
+// same refusal made in its own process. It writes them beside the kind
+// StampDenial or StampConflict stamped, which is still what the reading node
+// tests with errors.Is, and leaves resp as it is for a response that succeeded,
+// for a route refusal's kind (StampRefusal), which is the hop's outcome and
+// not the handler's, and for an error carrying no Coded. RPCServer.executeLocal
+// calls it after StampDenial and StampConflict on every failed response its
+// registry gives, and StampFailed on a refused stream's.
+func StampCoded(resp *pb.RPCResponse, err error) {
+	if resp == nil || resp.Success {
+		return
+	}
+	c, ok := rpcscope.CodedOf(err)
+	if !ok || c.Status < 400 || c.Status > 499 || c.Code == "" {
+		return
+	}
+	switch resp.Metadata[refusalKindKey] {
+	case "", refusalKindDenied, refusalKindConflict:
+	default:
+		return
+	}
+	if resp.Metadata == nil {
+		resp.Metadata = map[string]string{}
+	}
+	resp.Metadata[refusalStatusKey] = strconv.Itoa(c.Status)
+	resp.Metadata[refusalCodeKey] = c.Code
+}
+
+// codedAnswer rebuilds the coded refusal StampCoded recorded on resp around
+// answer, the handler's answer responseError read from resp, or returns answer
+// unchanged when resp records none or a status outside 4xx. text is resp's
+// Error as answer carries it: the rebuilt error reads as that text, the far
+// handler's own words (its Coded's code among them once), and unwraps to a
+// Coded whose Cause is answer, so errors.As finds the status and code and
+// errors.Is what answer unwraps to (scope.ErrDenied or ErrConflict, and
+// ErrHandlerError).
+func codedAnswer(resp *pb.RPCResponse, answer error, text string) error {
+	code := resp.Metadata[refusalCodeKey]
+	status, err := strconv.Atoi(resp.Metadata[refusalStatusKey])
+	if code == "" || err != nil || status < 400 || status > 499 {
+		return answer
+	}
+	return &codedHop{text: text, coded: &rpcscope.Coded{Status: status, Code: code, Cause: answer}}
+}
+
+// codedHop is a coded refusal a handler on another node answered with: its
+// text is that node's, and it unwraps to the Coded rebuilt from the response.
+type codedHop struct {
+	text  string
+	coded *rpcscope.Coded
+}
+
+func (e *codedHop) Error() string { return e.text }
+func (e *codedHop) Unwrap() error { return e.coded }
 
 // deniedAnswer is a refusal of the caller's authority a handler on another node
 // answered with. Its text is that node's. It unwraps to scope.ErrDenied, which
@@ -426,11 +490,12 @@ func (e *hopRefusal) Unwrap() error { return e.refusal }
 // responseError is the error for a response whose Success is false: the typed
 // refusal StampRefusal recorded on it, the handler's refusal of its caller
 // StampDenial recorded (a *deniedAnswer), the handler's conflict StampConflict
-// recorded (a *conflictAnswer), or else a handler rejection. Every
-// place HWPCaller reads a failed response goes through it, so a route refusal
-// is never reported as ErrHandlerError, which the HTTP bridge answers as a
-// caller's mistake. A field that does not parse reads as zero; the kind alone
-// decides the type.
+// recorded (a *conflictAnswer), or else a handler rejection; each of the last
+// three inside the scope.Coded StampCoded recorded beside it, when it recorded
+// one. Every place HWPCaller reads a failed response goes through it, so a
+// route refusal is never reported as ErrHandlerError, which the HTTP bridge
+// answers as a caller's mistake. A field that does not parse reads as zero;
+// the kind alone decides the type.
 func responseError(handler string, resp *pb.RPCResponse) error {
 	var refusal error
 	switch resp.Metadata[refusalKindKey] {
@@ -469,15 +534,15 @@ func responseError(handler string, resp *pb.RPCResponse) error {
 		if text == "" {
 			text = rpcscope.ErrDenied.Error()
 		}
-		return &deniedAnswer{text: text}
+		return codedAnswer(resp, &deniedAnswer{text: text}, text)
 	case refusalKindConflict:
 		text := resp.Error
 		if text == "" {
 			text = ErrConflict.Error()
 		}
-		return &conflictAnswer{text: text}
+		return codedAnswer(resp, &conflictAnswer{text: text}, text)
 	default:
-		return NewHandlerError(resp.Error)
+		return codedAnswer(resp, NewHandlerError(resp.Error), resp.Error)
 	}
 	if resp.Error == "" {
 		return refusal

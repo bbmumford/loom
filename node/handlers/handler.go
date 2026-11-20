@@ -226,6 +226,17 @@ type RPCResponse struct {
 	// whichever of them carried it. It is its own field beside Denied because a
 	// response carries one kind and Outcome hands on the one that is set.
 	Conflict error `json:"-"`
+
+	// Coded is the handler's coded refusal behind a failed response, an error
+	// carrying a scope.Coded whose text is Error, and nil for every other
+	// outcome (see CodedRefusal). pkg/rpc's registryShim sets it for a Func's.
+	// Outcome hands it on as the failure when Denied and Conflict are unset (an
+	// error carrying a Coded and a kind is that kind's field already, the same
+	// error): RPCServer.executeLocal stamps its Status and Code on the wire
+	// response (dispatch.StampCoded), and node's local dispatcher and
+	// dispatch.LocalCaller return it, so an HTTP bridge answers the handler's
+	// own status and code whichever of them carried it.
+	Coded error `json:"-"`
 }
 
 // Denial returns err when it is a refusal of the caller's authority (it wraps
@@ -252,6 +263,15 @@ func Conflict(err error) error {
 	return nil
 }
 
+// CodedRefusal returns err when it carries a handler's coded refusal (a
+// scope.Coded), and nil otherwise: the value RPCResponse.Coded holds.
+func CodedRefusal(err error) error {
+	if _, ok := scope.CodedOf(err); ok {
+		return err
+	}
+	return nil
+}
+
 // ErrNoResponse is the failure of a dispatch whose handler answered no
 // response and no error. dispatchRPC answers it, wrapped and naming the
 // handler, in place of that answer, and Outcome answers it for a result with
@@ -266,9 +286,10 @@ var ErrNoResponse = errors.New("answered no response and no error")
 // hands on: the payload of a success, or the failure in its place. The error
 // comes first when there is one, whatever response stands beside it; a result
 // with no response is ErrNoResponse; a failed response is its Denied, else its
-// Conflict, else an error of its Error text. A failure therefore wraps
-// scope.ErrDenied or scope.ErrConflict exactly when the result named that
-// kind, under the words the result carried.
+// Conflict, else its Coded, else an error of its Error text. A failure
+// therefore wraps scope.ErrDenied or scope.ErrConflict exactly when the result
+// named that kind, and carries a scope.Coded when the handler's refusal did,
+// under the words the result carried.
 //
 // It is the one reading of a dispatch result: RPCServer.executeLocal stamps
 // the failure it returns on the wire response, node's local dispatcher returns
@@ -290,6 +311,8 @@ func Outcome(resp *RPCResponse, err error) ([]byte, error) {
 		return nil, resp.Denied
 	case resp.Conflict != nil:
 		return nil, resp.Conflict
+	case resp.Coded != nil:
+		return nil, resp.Coded
 	}
 	return nil, errors.New(resp.Error)
 }
