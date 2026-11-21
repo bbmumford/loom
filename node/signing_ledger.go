@@ -30,6 +30,15 @@ import (
 // signed-topic Append through one signing chokepoint also makes the
 // SignRecord field-ordering invariant easier to maintain — only one
 // caller needs to get the order right, not five.
+//
+// Seq is part of the signed bytes, and those Append sites leave it 0 for
+// the ledger to assign, so a record is signed only after the ledger has
+// numbered it: through lad.SigningLedger's AppendSigned and
+// BatchAppendSigned, which number, sign and store in one step. A record
+// that already carries its Seq is signed here and appended as it is. A
+// signed-topic record with no Seq over an inner ledger that cannot number
+// before signing is refused, because the signature would not survive the
+// number the ledger gives it.
 type signingLedger struct {
 	inner lad.Ledger
 	priv  ed25519.PrivateKey
@@ -93,20 +102,27 @@ func (s *signingLedger) Append(ctx context.Context, rec lad.Record) error {
 		return fmt.Errorf("%w: %q — publishing would be silently discarded by every "+
 			"receiver; land a consumer first", ErrTopicReserved, rec.Topic)
 	}
-	if isSignedTopic(rec.Topic) && len(rec.Signature) == 0 {
-		// Fail closed rather than append an unsigned record on a signed
-		// topic — peers' signed-topic ACL would silently drop it, exactly the
-		// regression this wrapper exists to prevent. Guard the key up front
-		// (ed25519.Sign panics on a nil key) and re-check the signature landed.
-		if len(s.priv) == 0 {
-			return fmt.Errorf("signing ledger: cannot sign %s record — no private key", rec.Topic)
-		}
-		lad.SignRecord(&rec, s.priv)
-		if len(rec.Signature) == 0 {
-			return fmt.Errorf("signing ledger: %s record still unsigned after SignRecord", rec.Topic)
-		}
+	if !needsSignature(rec) {
+		return s.inner.Append(ctx, rec)
 	}
-	return s.inner.Append(ctx, rec)
+	// Fail closed rather than append an unsigned record on a signed topic —
+	// peers' signed-topic ACL would silently drop it, exactly the regression
+	// this wrapper exists to prevent. Guard the key up front (ed25519.Sign
+	// panics on a nil key).
+	if len(s.priv) == 0 {
+		return fmt.Errorf("signing ledger: cannot sign %s record — no private key", rec.Topic)
+	}
+	if rec.Seq != 0 {
+		if err := s.sign(&rec); err != nil {
+			return err
+		}
+		return s.inner.Append(ctx, rec)
+	}
+	numbering, ok := s.inner.(lad.SigningLedger)
+	if !ok {
+		return fmt.Errorf("%w: %s record", errCannotNumberBeforeSigning, rec.Topic)
+	}
+	return numbering.AppendSigned(ctx, rec, s.sign)
 }
 
 func (s *signingLedger) BatchAppend(ctx context.Context, records []lad.Record) error {
@@ -120,20 +136,63 @@ func (s *signingLedger) BatchAppend(ctx context.Context, records []lad.Record) e
 				ErrTopicReserved, records[i].Topic, i)
 		}
 	}
+	unnumbered := false
 	for i := range records {
-		if isSignedTopic(records[i].Topic) && len(records[i].Signature) == 0 {
-			// Fail closed on a signed topic with no signing key or an
-			// empty signature — see Append.
-			if len(s.priv) == 0 {
-				return fmt.Errorf("signing ledger: cannot sign %s record — no private key", records[i].Topic)
-			}
-			lad.SignRecord(&records[i], s.priv)
-			if len(records[i].Signature) == 0 {
-				return fmt.Errorf("signing ledger: %s record still unsigned after SignRecord", records[i].Topic)
-			}
+		if !needsSignature(records[i]) {
+			continue
+		}
+		// Fail closed on a signed topic with no signing key — see Append.
+		if len(s.priv) == 0 {
+			return fmt.Errorf("signing ledger: cannot sign %s record — no private key", records[i].Topic)
+		}
+		if records[i].Seq == 0 {
+			unnumbered = true
 		}
 	}
-	return s.inner.BatchAppend(ctx, records)
+	if !unnumbered {
+		for i := range records {
+			if needsSignature(records[i]) {
+				if err := s.sign(&records[i]); err != nil {
+					return err
+				}
+			}
+		}
+		return s.inner.BatchAppend(ctx, records)
+	}
+	numbering, ok := s.inner.(lad.SigningLedger)
+	if !ok {
+		return fmt.Errorf("%w: a batch with an unnumbered signed-topic record", errCannotNumberBeforeSigning)
+	}
+	return numbering.BatchAppendSigned(ctx, records, s.sign)
+}
+
+// errCannotNumberBeforeSigning refuses a signed-topic record with no Seq when
+// the inner ledger is not a lad.SigningLedger: it would number the record
+// after the signature was made over Seq 0, and every peer's signedTopicACL
+// would then refuse the record.
+var errCannotNumberBeforeSigning = errors.New("signing ledger: the inner ledger cannot number a record before it is signed")
+
+// needsSignature reports whether rec is a signed-topic record the caller left
+// unsigned, which this wrapper signs.
+func needsSignature(rec lad.Record) bool {
+	return isSignedTopic(rec.Topic) && len(rec.Signature) == 0
+}
+
+// sign is the lad.SignFunc AppendSigned and BatchAppendSigned call on each
+// record after numbering it: it signs a signed-topic record the caller left
+// unsigned with the node's key and leaves every other record as it is.
+func (s *signingLedger) sign(rec *lad.Record) error {
+	if !needsSignature(*rec) {
+		return nil
+	}
+	if len(s.priv) == 0 {
+		return fmt.Errorf("signing ledger: cannot sign %s record — no private key", rec.Topic)
+	}
+	lad.SignRecord(rec, s.priv)
+	if len(rec.Signature) == 0 {
+		return fmt.Errorf("signing ledger: %s record still unsigned after SignRecord", rec.Topic)
+	}
+	return nil
 }
 
 func (s *signingLedger) Stream(ctx context.Context, from lad.CausalWatermark, topics []lad.Topic) (<-chan lad.Record, error) {

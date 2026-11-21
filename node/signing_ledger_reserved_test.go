@@ -17,7 +17,9 @@ import (
 	lad "github.com/bbmumford/ledger"
 )
 
-// recordingLedger captures what actually reaches the inner ledger.
+// recordingLedger captures what actually reaches the inner ledger. It numbers
+// a record with no Seq before AppendSigned and BatchAppendSigned sign it, as a
+// lad.SigningLedger does.
 type recordingLedger struct{ got []lad.Record }
 
 func (r *recordingLedger) Append(_ context.Context, rec lad.Record) error {
@@ -26,6 +28,30 @@ func (r *recordingLedger) Append(_ context.Context, rec lad.Record) error {
 }
 
 func (r *recordingLedger) BatchAppend(_ context.Context, recs []lad.Record) error {
+	r.got = append(r.got, recs...)
+	return nil
+}
+
+func (r *recordingLedger) AppendSigned(_ context.Context, rec lad.Record, sign lad.SignFunc) error {
+	if rec.Seq == 0 {
+		rec.Seq = uint64(len(r.got) + 1)
+	}
+	if err := sign(&rec); err != nil {
+		return err
+	}
+	r.got = append(r.got, rec)
+	return nil
+}
+
+func (r *recordingLedger) BatchAppendSigned(_ context.Context, recs []lad.Record, sign lad.SignFunc) error {
+	for i := range recs {
+		if recs[i].Seq == 0 {
+			recs[i].Seq = uint64(len(r.got) + i + 1)
+		}
+		if err := sign(&recs[i]); err != nil {
+			return err
+		}
+	}
 	r.got = append(r.got, recs...)
 	return nil
 }
