@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	dscrypto "github.com/bbmumford/loom/internal/recipientwrap"
+	dscrypto "github.com/bbmumford/diststore/crypto"
 	"github.com/bbmumford/loom/ports"
 )
 

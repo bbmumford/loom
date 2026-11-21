@@ -35,7 +35,7 @@
 // plaintexts — an AEAD/NaCl-box nonce-reuse failure. Bump Epoch OR bind the
 // nonce to content+recipients so distinct plaintexts never share one.
 //
-// DEK wrapping uses internal/recipientwrap
+// DEK wrapping uses diststore/crypto
 // (WrapDataKeyForRecipient — NaCl-box / P256-AESKW, entitlement fail-closed).
 // Recipient selection is gated by ports.TrustPolicy.AuthorizeSecretRecipient:
 // capability advertisement alone NEVER makes a node a recipient.

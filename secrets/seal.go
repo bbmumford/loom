@@ -16,7 +16,7 @@ import (
 	"fmt"
 	"sort"
 
-	dscrypto "github.com/bbmumford/loom/internal/recipientwrap"
+	dscrypto "github.com/bbmumford/diststore/crypto"
 	"golang.org/x/crypto/chacha20poly1305"
 )
 

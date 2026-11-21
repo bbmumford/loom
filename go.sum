@@ -33,6 +33,8 @@ github.com/armon/go-metrics v0.4.1 h1:hR91U9KYmb6bLBYLQjyM+3j+rcd/UhE+G78SFnF8gJ
 github.com/armon/go-metrics v0.4.1/go.mod h1:E6amYzXo6aW1tqzoZGT755KkbgrJsSdpwZ+3JqfkOG4=
 github.com/bbmumford/cfgload v0.0.2 h1:kNZz3iE0mIBpsJ7uOweCT0IO2F7jQEBYnmAnU2mjUHQ=
 github.com/bbmumford/cfgload v0.0.2/go.mod h1:jBdgF0N1h/EFtaCrNhJEzYgQoeQtAqqmagta6dUHf2k=
+github.com/bbmumford/diststore v0.0.1 h1:RZy6crwpO24souyFWmFAqjKNv+vOCZ99q4BLum7n2fM=
+github.com/bbmumford/diststore v0.0.1/go.mod h1:uaJgBd1RnEiign+mrEbSr6XYSTUJfPnWseN+9W2u7fY=
 github.com/bbmumford/envreq v0.0.1 h1:ISzvkaupwPT6yl1oHsnJFEZXzZ4TsjrNr61wmBwj98M=
 github.com/bbmumford/envreq v0.0.1/go.mod h1:KrpBPleRbYyIl02gjgQmMbJIwhjJqDnZmV9F0N+8GcI=
 github.com/bbmumford/ledger v0.0.20 h1:5UYZE3ZwIm3p68dBNJ1Op9sR5oB1/7pttL2j5xLnpso=

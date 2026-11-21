@@ -12,7 +12,7 @@ import (
 	"errors"
 	"testing"
 
-	dscrypto "github.com/bbmumford/loom/internal/recipientwrap"
+	dscrypto "github.com/bbmumford/diststore/crypto"
 )
 
 func genKey(t *testing.T) (ed25519.PublicKey, ed25519.PrivateKey) {
