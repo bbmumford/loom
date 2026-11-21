@@ -38,6 +38,19 @@ import (
 // ErrClosed is returned by operations on a closed journal.
 var ErrClosed = errors.New("journal: closed")
 
+// maxEntryBytes bounds one entry's payload on every path: stageLocked refuses to write a longer one,
+// and Open's scan, both replays and the compaction scan stop at a stated length past it before
+// allocating for it. So every entry the journal accepts is one every reader reads back, and a
+// damaged length costs a reader no more than the bytes around it.
+const maxEntryBytes = 64 << 20
+
+// ErrEntryTooLarge is the refusal of a record whose entry would pass maxEntryBytes. Append and
+// BatchAppend return it, wrapped, with nothing written durably and the head unchanged.
+var ErrEntryTooLarge = errors.New("journal: entry exceeds maxEntryBytes")
+
+// entryLengthOK reports whether a stated entry length is one stageLocked can have written.
+func entryLengthOK(length uint32) bool { return length != 0 && length <= maxEntryBytes }
+
 type entry struct {
 	W ports.Watermark `json:"w"`
 	R ports.Record    `json:"r"`
@@ -115,7 +128,7 @@ func scanLastValid(f *os.File) (int64, ports.Watermark, error) {
 		}
 		length := binary.BigEndian.Uint32(hdr[:4])
 		want := binary.BigEndian.Uint32(hdr[4:])
-		if length == 0 || length > 64<<20 {
+		if !entryLengthOK(length) {
 			break // corrupt length — truncate here
 		}
 		payload := make([]byte, length)
@@ -203,6 +216,9 @@ func (j *FileJournal) stageLocked(rec ports.Record) (ports.Watermark, error) {
 	if err != nil {
 		return 0, fmt.Errorf("journal: encode: %w", err)
 	}
+	if len(payload) > maxEntryBytes {
+		return 0, fmt.Errorf("journal: %d-byte entry: %w", len(payload), ErrEntryTooLarge)
+	}
 	var hdr [8]byte
 	binary.BigEndian.PutUint32(hdr[:4], uint32(len(payload)))
 	binary.BigEndian.PutUint32(hdr[4:], crc32.ChecksumIEEE(payload))
@@ -279,6 +295,9 @@ func (j *FileJournal) Replay(ctx context.Context, from ports.Watermark, topics [
 				break
 			}
 			length := binary.BigEndian.Uint32(hdr[:4])
+			if !entryLengthOK(length) {
+				break
+			}
 			payload := make([]byte, length)
 			if _, err := io.ReadFull(readF, payload); err != nil {
 				break
@@ -351,6 +370,9 @@ func (j *FileJournal) ReplayUntil(ctx context.Context, from, to ports.Watermark,
 				return
 			}
 			length := binary.BigEndian.Uint32(hdr[:4])
+			if !entryLengthOK(length) {
+				return
+			}
 			payload := make([]byte, length)
 			if _, err := io.ReadFull(readF, payload); err != nil {
 				return
@@ -538,6 +560,9 @@ func (j *FileJournal) scanLocked(fn func(entry)) error {
 			return nil
 		}
 		length := binary.BigEndian.Uint32(hdr[:4])
+		if !entryLengthOK(length) {
+			return nil
+		}
 		payload := make([]byte, length)
 		if _, err := io.ReadFull(readF, payload); err != nil {
 			return nil
