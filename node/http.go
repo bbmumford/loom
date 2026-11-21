@@ -6,25 +6,17 @@ package node
 
 import (
 	"encoding/json"
-	"net"
 	"net/http"
-	"strings"
+
+	"github.com/bbmumford/weft"
 )
 
 // SnapshotHandler returns an HTTP handler that serves the latest anchor snapshot.
 func (rt *Runtime) SnapshotHandler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// 1. Rate Limiting (Token Bucket)
-		ip, _, err := net.SplitHostPort(r.RemoteAddr)
-		if err != nil {
-			ip = r.RemoteAddr
-		}
-		// Handle X-Forwarded-For if behind proxy
-		if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-			ip = strings.TrimSpace(strings.Split(fwd, ",")[0])
-		}
-
-		if !rt.checkSnapshotRateLimit(ip) {
+		// 1. Rate Limiting (Token Bucket), keyed on the client address the
+		// connection or the trusted edge proved.
+		if !rt.checkSnapshotRateLimit(weft.DefaultClientIP(r)) {
 			http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 			return
 		}

@@ -40,3 +40,10 @@ use ../whisper
 // go.mod replaces. Resolve it locally until it is published and loom bumps
 // its pin.
 use ../tursoraft
+
+// loom/go.mod requires weft v0.0.6, a version the weft repository carries no
+// tag for, so no module origin serves it, not even its go.mod; node's
+// bootstrap and snapshot handlers key their rate limit on weft.DefaultClientIP.
+// Replace every weft version with the local tree until a release is published
+// and loom bumps its pin.
+replace github.com/bbmumford/weft => ../weft

@@ -44,6 +44,7 @@ import (
 	"github.com/bbmumford/reach"
 	"github.com/bbmumford/route"
 	meshdb "github.com/bbmumford/tursoraft/manager"
+	"github.com/bbmumford/weft"
 
 	wstransport "github.com/ORBTR/aether/websocket"
 	"github.com/bbmumford/loom/compose"
@@ -3384,6 +3385,9 @@ func (rt *Runtime) verifyAuthToken(token string) bool {
 // snapshotRateLimitTTL / snapshotRateLimitMaxIPs bound the per-IP rate-limit
 // map. The endpoint is public and keyed on the client IP,
 // so without eviction a rotating-source-IP flood grows the map without bound.
+// handleVL1Upgrade and SnapshotHandler pass weft.DefaultClientIP, the
+// connection's peer address or the client a trusted edge names, never a value
+// the caller writes, so one caller cannot mint keys to fill the map.
 const (
 	snapshotRateLimitTTL    = 10 * time.Minute
 	snapshotRateLimitMaxIPs = 4096
@@ -3409,10 +3413,9 @@ func (rt *Runtime) checkSnapshotRateLimit(ip string) bool {
 
 	entry, exists := rt.snapshotRateLimit[ip]
 	if !exists {
-		// Once saturated with distinct live IPs, refuse new ones rather than
-		// grow unbounded — a rotating-XFF flood is rate-limited, not a leak.
-		// NOTE: `ip` is caller-supplied (may derive from X-Forwarded-For); the
-		// caller should only trust XFF from a known proxy, else key on RemoteAddr.
+		// Once saturated with distinct live IPs, refuse the new key's request
+		// rather than grow unbounded or evict a held key: an abuse limit
+		// fails closed for the newcomer and leaves every held budget intact.
 		if len(rt.snapshotRateLimit) >= snapshotRateLimitMaxIPs {
 			return false
 		}
@@ -3971,16 +3974,10 @@ func (rt *Runtime) ConnectivityTestHandler() http.HandlerFunc {
 
 // handleVL1Upgrade handles HTTP requests to upgrade to VL1 protocol
 func (rt *Runtime) handleVL1Upgrade(w http.ResponseWriter, r *http.Request) {
-	// 1. Rate Limiting (Token Bucket)
-	ip, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		ip = r.RemoteAddr
-	}
-	// Handle X-Forwarded-For if behind proxy
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		ip = strings.TrimSpace(strings.Split(fwd, ",")[0])
-	}
-
+	// 1. Rate Limiting (Token Bucket), keyed on the client address the
+	// connection or the trusted edge proved. The join carries no proved
+	// identity yet: its proof is checked after the 101 answer.
+	ip := weft.DefaultClientIP(r)
 	if !rt.checkSnapshotRateLimit(ip) {
 		http.Error(w, "Rate limit exceeded", http.StatusTooManyRequests)
 		return
@@ -4092,7 +4089,8 @@ func (rt *Runtime) handleVL1Upgrade(w http.ResponseWriter, r *http.Request) {
 	if ip := rt.getPublicIP(); ip != "" {
 		_, _ = rw.WriteString(fmt.Sprintf("X-VL1-Public-IP: %s\r\n", ip))
 	}
-	// Reflect the client's observed public IP (from X-Forwarded-For / connection source)
+	// Reflect the client's observed public IP (the address the rate limit is
+	// keyed on: the connection's peer, or the client the trusted edge names).
 	// This lets the client correct its STUN-discovered IP when behind NAT/proxy
 	if ip != "" && ip != "127.0.0.1" && ip != "0.0.0.0" {
 		_, _ = rw.WriteString(fmt.Sprintf("X-VL1-Observed-IP: %s\r\n", ip))

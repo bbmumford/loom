@@ -13,6 +13,7 @@ require (
 	github.com/bbmumford/route v0.0.3
 	github.com/bbmumford/swarm v0.0.9
 	github.com/bbmumford/tursoraft v0.0.6
+	github.com/bbmumford/weft v0.0.6
 	github.com/bbmumford/whisper v0.0.18
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/gobwas/ws v1.4.0
