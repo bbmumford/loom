@@ -16,10 +16,11 @@ import (
 // tag list. Logically equivalent to setting DEBUG=*.
 var forceAllEnabled atomic.Bool
 
-// overrideTags holds a runtime-supplied tag list that takes precedence
-// over the DEBUG env var. Set by SetTags; intended for test fixtures
-// and operator commands ("flip mesh.lad on without restarting").
-var overrideTags atomic.Value // []string
+// overrideTags points at a runtime-supplied tag list that takes precedence
+// over the DEBUG env var; a nil pointer is no override, so parsedTags reads
+// DEBUG. Set by SetTags; intended for test fixtures and operator commands
+// ("flip mesh.lad on without restarting").
+var overrideTags atomic.Pointer[[]string]
 
 // SetTags overrides the effective DEBUG tag list for the current
 // process, ignoring whatever was in os.Getenv("DEBUG") at startup.
@@ -27,11 +28,12 @@ var overrideTags atomic.Value // []string
 // namespaces of existing Loggers are also refreshed.
 func SetTags(tags []string) {
 	if tags == nil {
-		overrideTags.Store([]string(nil))
+		overrideTags.Store(nil)
 	} else {
-		// Copy to avoid sharing the caller's slice.
-		c := append([]string(nil), tags...)
-		overrideTags.Store(c)
+		// Copy to avoid sharing the caller's slice; an empty list stays an
+		// override under which no tag is on.
+		c := append([]string{}, tags...)
+		overrideTags.Store(&c)
 	}
 	refreshLoggers()
 }
@@ -89,13 +91,12 @@ func TagEnabled(tag string) bool {
 	return false
 }
 
-// parsedTags returns the current effective DEBUG tag list. If
-// SetEnabled / Configure overrode the environment at runtime, that
-// override takes precedence; otherwise the value reflects the DEBUG
-// env var at process start.
+// parsedTags returns the current effective DEBUG tag list: the list the
+// last SetTags call set, while one is set, and otherwise the DEBUG env var
+// as it reads now.
 func parsedTags() []string {
-	if v := overrideTags.Load(); v != nil {
-		return v.([]string)
+	if p := overrideTags.Load(); p != nil {
+		return *p
 	}
 	return splitTags(os.Getenv(envVar))
 }
