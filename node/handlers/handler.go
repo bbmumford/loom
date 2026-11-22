@@ -1193,9 +1193,9 @@ func (r *HandlerRegistry) Count() int {
 
 // validateScope is the mesh's check point: judgeScope, and for a refusal the
 // registered refusal recorder called with ctx, the caller and the permission h
-// asks before the refusal returns (scope.RecordRefusal). A recorder's failure
-// fails the call with scope.ErrRefusalUnrecorded, which Denial does not read as
-// a denial.
+// asks before the refusal returns (scope.RecordRefusal). A refusal the recorder
+// could not record returns joined with scope.ErrRefusalUnrecorded, which Denial
+// still reads as the denial it is.
 func (r *HandlerRegistry) validateScope(ctx context.Context, h HandlerMeta) error {
 	err := r.judgeScope(ctx, h)
 	if err == nil {

@@ -107,9 +107,10 @@ func OpClassFromContext(ctx context.Context) string {
 // offending fields for diagnostic logging.
 var ErrScopeDenied = rpcscope.ErrDenied
 
-// ErrRefusalUnrecorded is what Enforce fails a call with when the registry's
-// refusal recorder could not record its refusal; it does not unwrap to
-// ErrScopeDenied. It is rpcscope's sentinel under this package's name.
+// ErrRefusalUnrecorded is joined to a refusal Enforce returns when the
+// registry's refusal recorder could not record it; the joined error still
+// unwraps to ErrScopeDenied. It is rpcscope's sentinel under this package's
+// name.
 var ErrRefusalUnrecorded = rpcscope.ErrRefusalUnrecorded
 
 // ErrStarting is what a call fails with when the node that would serve it is
@@ -170,9 +171,9 @@ func (r *Registry) Enforce(ctx context.Context, h *Handler) error {
 // EnforceAt judges h under cp's presence and authorization policies
 // (EnforceScope), and for a refusal of h calls cp's refusal recorder with ctx,
 // the caller and the permission h asks before the refusal returns
-// (rpcscope.RecordRefusal). A recorder's failure fails the call with
-// rpcscope.ErrRefusalUnrecorded. A nil cp refuses every call, as a nil policy
-// does.
+// (rpcscope.RecordRefusal). A refusal the recorder could not record returns as
+// the refusal, joined with rpcscope.ErrRefusalUnrecorded. A nil cp refuses every
+// call, as a nil policy does.
 func EnforceAt(ctx context.Context, cp CheckPoint, h *Handler) error {
 	if cp == nil {
 		return fmt.Errorf("%w: no check point to judge the call under", ErrScopeDenied)

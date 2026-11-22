@@ -33,11 +33,9 @@ func HandlerStatus(err error) int {
 	switch {
 	case errors.Is(err, ErrStarting):
 		return http.StatusServiceUnavailable
-	case errors.Is(err, ErrRefusalUnrecorded):
-		// The refusal was not recorded, so the call fails as unavailable:
-		// a 403 would answer a refusal that is not on the record.
-		return http.StatusServiceUnavailable
 	case errors.Is(err, ErrScopeDenied):
+		// A refusal its recorder could not record (joined with
+		// ErrRefusalUnrecorded) is answered as the refusal it is.
 		return http.StatusForbidden
 	case errors.Is(err, ErrConflict):
 		// After the denial: an error wrapping both refuses the caller.

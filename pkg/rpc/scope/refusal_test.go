@@ -23,9 +23,9 @@ func (o *oneRefusal) RecordRefusal(context.Context, Refusal) error {
 }
 
 // RecordRefusal calls the recorder only for a denial, returns the denial when
-// it records or when no recorder is registered, and otherwise fails with
-// ErrRefusalUnrecorded, from which neither the denial nor the recorder's error
-// unwraps.
+// it records or when no recorder is registered, and otherwise returns the
+// denial joined with ErrRefusalUnrecorded, from which the recorder's error does
+// not unwrap.
 func TestRecordRefusal(t *testing.T) {
 	ctx := context.Background()
 	denied := fmt.Errorf("%w: handler a.b.C", ErrDenied)
@@ -45,12 +45,12 @@ func TestRecordRefusal(t *testing.T) {
 	sentinel := errors.New("chain closed")
 	rec.fail = fmt.Errorf("%w and %w", sentinel, ErrDenied)
 	got := RecordRefusal(ctx, rec, Refusal{}, denied)
-	if !errors.Is(got, ErrRefusalUnrecorded) || errors.Is(got, ErrDenied) || errors.Is(got, sentinel) {
-		t.Fatalf("unrecorded: %v; want ErrRefusalUnrecorded alone", got)
+	if !errors.Is(got, ErrRefusalUnrecorded) || !errors.Is(got, ErrDenied) || errors.Is(got, sentinel) {
+		t.Fatalf("unrecorded: %v; want the denial and ErrRefusalUnrecorded, not the recorder's error", got)
 	}
 
 	var typedNil *oneRefusal
-	if got := RecordRefusal(ctx, typedNil, Refusal{}, denied); !errors.Is(got, ErrRefusalUnrecorded) {
-		t.Fatalf("typed-nil recorder: %v, want ErrRefusalUnrecorded", got)
+	if got := RecordRefusal(ctx, typedNil, Refusal{}, denied); !errors.Is(got, ErrRefusalUnrecorded) || !errors.Is(got, ErrDenied) {
+		t.Fatalf("typed-nil recorder: %v, want the denial and ErrRefusalUnrecorded", got)
 	}
 }

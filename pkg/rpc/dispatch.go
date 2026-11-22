@@ -20,7 +20,8 @@ var ErrProxyDispatchLocal = errors.New("rpc: proxy handler cannot dispatch local
 // Dispatch executes a handler from the registry against raw protobuf bytes.
 // Enforces Scope through Enforce before invoking the handler; returns
 // ErrScopeDenied (wrapped) when the call fails the handler's declared scope
-// tier, or rpcscope.ErrRefusalUnrecorded when that refusal was not recorded.
+// tier, joined with rpcscope.ErrRefusalUnrecorded when that refusal was not
+// recorded.
 //
 // Dispatch runs scope, unmarshal, the webhook check and the handler for an
 // in-process caller holding this Registry. The mesh RPC server does not call

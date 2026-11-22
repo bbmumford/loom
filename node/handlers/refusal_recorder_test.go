@@ -26,8 +26,8 @@ func (m *meshRefusals) RecordRefusal(_ context.Context, r rpcscope.Refusal) erro
 
 // The mesh check point hands the registered recorder one refusal per refused
 // call, naming the operation and the scope tag it asks, and the response stays
-// a denial; a refusal the recorder cannot record fails the call without a
-// Denied, so the serving node does not answer it as a refusal on the record.
+// a denial; a refusal the recorder cannot record is still answered as a
+// denial, its error naming the record it could not make.
 func TestTheMeshCheckPointRecordsEachRefusal(t *testing.T) {
 	ctx := context.Background()
 	reg := NewHandlerRegistry()
@@ -48,8 +48,8 @@ func TestTheMeshCheckPointRecordsEachRefusal(t *testing.T) {
 
 	rec.fail = errors.New("audit host down")
 	resp, err = reg.Dispatch(ctx, &RPCRequest{Handler: probe.name})
-	if err != nil || resp == nil || resp.Success || resp.Denied != nil || !strings.Contains(resp.Error, rpcscope.ErrRefusalUnrecorded.Error()) {
-		t.Fatalf("unrecorded Dispatch = (%+v, %v); want a failed response with no Denied", resp, err)
+	if err != nil || resp == nil || resp.Success || resp.Denied == nil || !strings.Contains(resp.Error, rpcscope.ErrRefusalUnrecorded.Error()) {
+		t.Fatalf("unrecorded Dispatch = (%+v, %v); want a failed response with its Denied", resp, err)
 	}
 	if probe.ran.Load() != 0 {
 		t.Fatalf("the refused handler ran %d times", probe.ran.Load())

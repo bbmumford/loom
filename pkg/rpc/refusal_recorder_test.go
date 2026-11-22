@@ -75,9 +75,9 @@ func TestDispatchRecordsEachRefusalThroughTheRegisteredRecorder(t *testing.T) {
 	}
 }
 
-// A recorder that cannot record fails the call with ErrRefusalUnrecorded, which
-// is not a denial, and the handler does not run.
-func TestARefusalTheRecorderCannotRecordFailsTheCall(t *testing.T) {
+// A refusal the recorder cannot record still returns as the denial, joined with
+// ErrRefusalUnrecorded, and the handler does not run.
+func TestARefusalTheRecorderCannotRecordStaysADenial(t *testing.T) {
 	var calls int
 	h := withinPartitionHandler(&calls)
 	reg := NewRegistry()
@@ -88,8 +88,8 @@ func TestARefusalTheRecorderCannotRecordFailsTheCall(t *testing.T) {
 	}
 	ctx := WithAuthenticatedScopeIdentity(context.Background(), idAxes("orbtr", "", "user-1"))
 	_, err := reg.Dispatch(ctx, h.FQN(), nil)
-	if !errors.Is(err, ErrRefusalUnrecorded) || errors.Is(err, ErrScopeDenied) || calls != 0 {
-		t.Fatalf("Dispatch = %v (calls %d), want ErrRefusalUnrecorded and no denial", err, calls)
+	if !errors.Is(err, ErrRefusalUnrecorded) || !errors.Is(err, ErrScopeDenied) || calls != 0 {
+		t.Fatalf("Dispatch = %v (calls %d), want the denial joined with ErrRefusalUnrecorded", err, calls)
 	}
 
 	var typedNil *countingRecorder

@@ -29,8 +29,8 @@ func (b *bridgeRefusals) RecordRefusal(_ context.Context, r scope.Refusal) error
 
 // The bridge's local and proxied calls each record their refusal
 // through the registry's recorder and answer 403; a refusal the recorder
-// cannot record answers 503, never 403.
-func TestTheBridgeRecordsEveryRefusalAndAnswersAnUnrecordedOne503(t *testing.T) {
+// cannot record still answers 403, never 503.
+func TestTheBridgeRecordsEveryRefusalAndAnswersAnUnrecordedOne403(t *testing.T) {
 	bridge, h := newBridgeWithHandler(t, stubHandler(rpc.ScopeSubject))
 	rec := &bridgeRefusals{}
 	bridge.registry.SetRefusalRecorder(rec)
@@ -47,10 +47,7 @@ func TestTheBridgeRecordsEveryRefusalAndAnswersAnUnrecordedOne503(t *testing.T) 
 
 	rec.fail = errors.New("audit host down")
 	_, err = bridge.executeLocal(newPostRequest(context.Background()), h, &structpb.Struct{})
-	if !errors.As(err, &be) || be.status != http.StatusServiceUnavailable || errors.Is(err, rpc.ErrScopeDenied) {
-		t.Fatalf("unrecorded: %v; want 503 and no denial", err)
-	}
-	if got := classifyHandlerStatus(rpc.ErrRefusalUnrecorded); got != http.StatusServiceUnavailable {
-		t.Fatalf("classifyHandlerStatus(ErrRefusalUnrecorded) = %d, want 503", got)
+	if !errors.As(err, &be) || be.status != http.StatusForbidden || !errors.Is(err, rpc.ErrScopeDenied) || !errors.Is(err, rpc.ErrRefusalUnrecorded) {
+		t.Fatalf("unrecorded: %v; want 403, the denial and ErrRefusalUnrecorded", err)
 	}
 }

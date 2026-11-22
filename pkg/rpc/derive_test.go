@@ -45,8 +45,8 @@ func TestADerivedRegistryJudgesUnderItsParentsPoliciesAndRecorder(t *testing.T) 
 	}
 
 	rec.fail = errors.New("audit host down")
-	if _, err := derived.Dispatch(ctx, h.FQN(), nil); !errors.Is(err, ErrRefusalUnrecorded) || errors.Is(err, ErrScopeDenied) {
-		t.Fatalf("Dispatch with a failing parent recorder = %v, want ErrRefusalUnrecorded and no denial", err)
+	if _, err := derived.Dispatch(ctx, h.FQN(), nil); !errors.Is(err, ErrRefusalUnrecorded) || !errors.Is(err, ErrScopeDenied) {
+		t.Fatalf("Dispatch with a failing parent recorder = %v, want the denial joined with ErrRefusalUnrecorded", err)
 	}
 }
 
@@ -91,9 +91,9 @@ func (c heldCheckPoint) AuthzPolicy() *scope.Policy             { return c.authz
 func (c heldCheckPoint) RefusalRecorder() scope.RefusalRecorder { return c.rec }
 
 // EnforceAt judges under the check point's policies and records each refusal
-// through its recorder, as Registry.Enforce does; a recorder's failure fails the
-// call with ErrRefusalUnrecorded, an admitted call records nothing, and a nil
-// check point refuses.
+// through its recorder, as Registry.Enforce does; a refusal the recorder cannot
+// record stands, joined with ErrRefusalUnrecorded; an admitted call records
+// nothing; and a nil check point refuses.
 func TestEnforceAtRecordsARefusalThroughTheCheckPoint(t *testing.T) {
 	var calls int
 	h := withinPartitionHandler(&calls)
@@ -113,8 +113,8 @@ func TestEnforceAtRecordsARefusalThroughTheCheckPoint(t *testing.T) {
 	}
 
 	rec.fail = errors.New("audit host down")
-	if err := EnforceAt(refused, cp, &h); !errors.Is(err, ErrRefusalUnrecorded) || errors.Is(err, ErrScopeDenied) {
-		t.Fatalf("EnforceAt with a failing recorder = %v, want ErrRefusalUnrecorded and no denial", err)
+	if err := EnforceAt(refused, cp, &h); !errors.Is(err, ErrRefusalUnrecorded) || !errors.Is(err, ErrScopeDenied) {
+		t.Fatalf("EnforceAt with a failing recorder = %v, want the denial joined with ErrRefusalUnrecorded", err)
 	}
 	if err := EnforceAt(admitted, nil, &h); !errors.Is(err, ErrScopeDenied) {
 		t.Fatalf("EnforceAt with no check point = %v, want ErrScopeDenied", err)
