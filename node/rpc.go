@@ -292,8 +292,10 @@ const (
 	rpcHopsKey    rpcContextKey = "rpc.hops"
 	// rpcCallerNodeKey carries the mesh node ID of the peer whose session
 	// delivered this request. Set by every session-scoped entry point
-	// (ServeMeshStream, BidiRPC.serve, HandleSession) and read only by the
-	// dedup cache key. Empty on any path with no peer session.
+	// (ServeMeshStream, BidiRPC.serve, HandleSession) and read through
+	// CallerNode: by the dedup cache key, and by a server's refusal recorder
+	// keying a caller that proved no partition. Empty on any path with no peer
+	// session.
 	rpcCallerNodeKey rpcContextKey = "rpc.callerNode"
 )
 
@@ -582,9 +584,11 @@ func withCallerNode(ctx context.Context, nodeID string) context.Context {
 	return context.WithValue(ctx, rpcCallerNodeKey, nodeID)
 }
 
-// callerNodeFromCtx returns the delivering peer's node ID, or "" when the
-// request did not arrive over a peer session.
-func callerNodeFromCtx(ctx context.Context) string {
+// CallerNode returns the node ID of the peer whose session delivered the
+// request ctx belongs to, or "" when it did not arrive over a peer session. A
+// server's refusal recorder reads it at the check point to tell apart mesh
+// callers that proved no partition, which carry nothing else to key on.
+func CallerNode(ctx context.Context) string {
 	if v, ok := ctx.Value(rpcCallerNodeKey).(string); ok {
 		return v
 	}
@@ -655,7 +659,7 @@ func requestDedupKey(ctx context.Context, req *pb.RPCRequest) string {
 // the same call sent direct arrive from different peers, and both must join
 // one entry for the handler to run once. Two principals never share an entry.
 // A request without one names no caller, so the delivering peer
-// (callerNodeFromCtx) is the only caller it has; requests that arrived over no
+// (CallerNode) is the only caller it has; requests that arrived over no
 // peer session share one namespace with each other.
 func dedupCaller(ctx context.Context, req *pb.RPCRequest) string {
 	if req.Principal != nil {
@@ -663,7 +667,7 @@ func dedupCaller(ctx context.Context, req *pb.RPCRequest) string {
 			return lengthPrefixed("principal", string(b))
 		}
 	}
-	return lengthPrefixed("peer", callerNodeFromCtx(ctx))
+	return lengthPrefixed("peer", CallerNode(ctx))
 }
 
 // handleRequest processes a binary RPC request with intelligent dispatch.
