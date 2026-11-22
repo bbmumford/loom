@@ -18,6 +18,12 @@ type Registry struct {
 	authz    *scope.Policy         // two-arm op authorizer; EnforceScope consults it for a handler that declares a Requirement (nil → the Scope/PresencePolicy tier path)
 	refusals scope.RefusalRecorder // the server's refusal recorder; Enforce calls it for every refusal (nil returns the refusal unrecorded)
 	listed   map[string]string     // catalogue-only declarations (Catalogue): FQN → role; Roles reads it, no handler lookup does
+
+	// parent is the registry Derive built this one from: while a policy or the
+	// recorder is not set here (policySet, authzSet, refusalsSet), its accessor
+	// reads the parent's.
+	parent                           *Registry
+	policySet, authzSet, refusalsSet bool
 }
 
 // NewRegistry creates an empty handler registry.
@@ -26,6 +32,20 @@ func NewRegistry() *Registry {
 		handlers: make(map[string]*Handler),
 		byRole:   make(map[string][]*Handler),
 	}
+}
+
+// Derive returns an empty registry that judges calls under r's presence policy,
+// authorization policy and refusal recorder. Each is read from r at every call
+// until it is set on the derived registry (a Set call, even with nil, ends the
+// inheritance of that one alone), so a recorder a server registers on r after
+// deriving still records the derived registry's refusals. A server that serves
+// part of its routes from a registry beside its main one (a proxied or forwarded
+// surface) derives it, so none of its refusals goes unrecorded for want of a
+// copied recorder.
+func (r *Registry) Derive() *Registry {
+	d := NewRegistry()
+	d.parent = r
+	return d
 }
 
 // SetPresencePolicy configures the consumer-supplied evaluator that decides,
@@ -37,15 +57,20 @@ func NewRegistry() *Registry {
 func (r *Registry) SetPresencePolicy(p scope.PresencePolicy) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.policy = p
+	r.policy, r.policySet = p, true
 }
 
-// PresencePolicy returns the configured scope evaluator (or nil). A nil policy
-// fails closed at EnforceScope for every non-None handler.
+// PresencePolicy returns the configured scope evaluator, the parent's for a
+// derived registry on which none was set (or nil). A nil policy fails closed at
+// EnforceScope for every non-None handler.
 func (r *Registry) PresencePolicy() scope.PresencePolicy {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.policy
+	p, set, parent := r.policy, r.policySet, r.parent
+	r.mu.RUnlock()
+	if !set && parent != nil {
+		return parent.PresencePolicy()
+	}
+	return p
 }
 
 // SetAuthzPolicy installs the two-arm op authorizer (capability | nexus) that
@@ -56,15 +81,20 @@ func (r *Registry) PresencePolicy() scope.PresencePolicy {
 func (r *Registry) SetAuthzPolicy(p *scope.Policy) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.authz = p
+	r.authz, r.authzSet = p, true
 }
 
-// AuthzPolicy returns the configured two-arm op authorizer (or nil). A nil authz
-// fails closed at EnforceScope for every handler that declares a Requirement.
+// AuthzPolicy returns the configured two-arm op authorizer, the parent's for a
+// derived registry on which none was set (or nil). A nil authz fails closed at
+// EnforceScope for every handler that declares a Requirement.
 func (r *Registry) AuthzPolicy() *scope.Policy {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.authz
+	p, set, parent := r.authz, r.authzSet, r.parent
+	r.mu.RUnlock()
+	if !set && parent != nil {
+		return parent.AuthzPolicy()
+	}
+	return p
 }
 
 // SetRefusalRecorder registers the recorder Enforce calls for every call it
@@ -75,14 +105,19 @@ func (r *Registry) AuthzPolicy() *scope.Policy {
 func (r *Registry) SetRefusalRecorder(rec scope.RefusalRecorder) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	r.refusals = rec
+	r.refusals, r.refusalsSet = rec, true
 }
 
-// RefusalRecorder returns the registered refusal recorder (or nil).
+// RefusalRecorder returns the registered refusal recorder, the parent's for a
+// derived registry on which none was registered (or nil).
 func (r *Registry) RefusalRecorder() scope.RefusalRecorder {
 	r.mu.RLock()
-	defer r.mu.RUnlock()
-	return r.refusals
+	rec, set, parent := r.refusals, r.refusalsSet, r.parent
+	r.mu.RUnlock()
+	if !set && parent != nil {
+		return parent.RefusalRecorder()
+	}
+	return rec
 }
 
 // owned returns a copy of h that shares no memory a caller can write with h:

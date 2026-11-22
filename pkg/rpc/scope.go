@@ -139,22 +139,49 @@ var ErrStarting = rpcscope.ErrStarting
 // Requirement it is judged by that authorizer, not its Scope tag; a caller that
 // supplies none, or a nil one, fails a Requirement-bearing handler CLOSED
 // (symmetric to a nil PresencePolicy).
+//
+// EnforceScope is the judge alone and records nothing, so it is the probe a test
+// judges a handler's declaration with. A server judges a call through
+// Registry.Enforce or EnforceAt, which record its refusal; library hostcontract
+// refuses a non-test caller of EnforceScope.
 func EnforceScope(ctx context.Context, h *Handler, policy rpcscope.PresencePolicy, authz ...*rpcscope.Policy) error {
 	return enforceScope(ctx, h, policy, authz...)
 }
 
-// Enforce is this registry's check point: EnforceScope under its presence and
-// authorization policies, and for a refusal of h the registered refusal
-// recorder called with ctx, the caller and the permission h asks before the
-// refusal returns (rpcscope.RecordRefusal). A recorder's failure fails the call
-// with rpcscope.ErrRefusalUnrecorded. Dispatch and the HTTP bridge's local,
-// proxied and streamed calls judge through it.
+// CheckPoint is what a call is judged under: the presence and authorization
+// policies EnforceScope applies and the recorder each refusal is recorded
+// through before it returns. *Registry is one. A server that dispatches a call
+// outside a Registry's Dispatch and HTTP bridge (node.orbtr.io's per-partition
+// mesh dispatch, whose resolver holds the three) is another, and judges it with
+// EnforceAt.
+type CheckPoint interface {
+	PresencePolicy() rpcscope.PresencePolicy
+	AuthzPolicy() *rpcscope.Policy
+	RefusalRecorder() rpcscope.RefusalRecorder
+}
+
+// Enforce is this registry's check point: EnforceAt over the registry's own
+// policies and recorder. Dispatch and the HTTP bridge's local, proxied and
+// streamed calls judge through it.
 func (r *Registry) Enforce(ctx context.Context, h *Handler) error {
-	err := enforceScope(ctx, h, r.PresencePolicy(), r.AuthzPolicy())
+	return EnforceAt(ctx, r, h)
+}
+
+// EnforceAt judges h under cp's presence and authorization policies
+// (EnforceScope), and for a refusal of h calls cp's refusal recorder with ctx,
+// the caller and the permission h asks before the refusal returns
+// (rpcscope.RecordRefusal). A recorder's failure fails the call with
+// rpcscope.ErrRefusalUnrecorded. A nil cp refuses every call, as a nil policy
+// does.
+func EnforceAt(ctx context.Context, cp CheckPoint, h *Handler) error {
+	if cp == nil {
+		return fmt.Errorf("%w: no check point to judge the call under", ErrScopeDenied)
+	}
+	err := enforceScope(ctx, h, cp.PresencePolicy(), cp.AuthzPolicy())
 	if err == nil || h == nil {
 		return err
 	}
-	return rpcscope.RecordRefusal(ctx, r.RefusalRecorder(), rpcscope.Refusal{
+	return rpcscope.RecordRefusal(ctx, cp.RefusalRecorder(), rpcscope.Refusal{
 		Operation:   h.FQN(),
 		Caller:      rpcscope.AuthenticatedIdentityFromContext(ctx),
 		Requirement: h.Requirement,
