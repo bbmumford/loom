@@ -126,5 +126,4 @@ build (see the package doc).
 
 ## License
 
-Proprietary — Copyright (c) 2026 HSTLES / ORBTR Pty Ltd. All Rights
-Reserved. See [LICENSE](LICENSE).
+MIT — Copyright (c) 2026 HSTLES / ORBTR Pty Ltd. See [LICENSE](LICENSE).

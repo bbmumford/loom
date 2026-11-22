@@ -18,8 +18,13 @@ append-only control plane.
 - **Leech** — client that hydrates content by hedging fetches across backends
   and verifying chunk hashes.
 
-The design is documented in `storage-design.md`; this README focuses on how to
-wire the code into a complete system.
+## Design
+
+- **Data model.** A blob is split into chunks, each a `ChunkRef` (index, SHA-256 hash, size). A `Manifest` lists the chunks with the chunk size, a version, optional metadata, the previous manifest's id (`PrevManifestID`, so updates form a chain) and the publisher's signature and key. Its id is the SHA-256 of its canonical JSON encoding (`CanonicalBytes`, `ComputeContentID`), the same bytes the publisher signs.
+- **What the trust anchor holds.** `ChainBackend` publishes a manifest, answers its compact header (`GetManifestHeader`: id, size, chunk size, chunk count, signature), loads the full manifest by id, resolves a human-readable name to the latest manifest id (`ResolveName`), streams updates to a name (`WatchUpdates`), and records which peer provides a root (`AnnounceProvides`). The anchor can be an EVM contract, another chain module or a LAD topic.
+- **Address-less retrieval.** Content is found by hash, never by a fixed endpoint: a `Leech` asks its `FetchBackend`s (peer to peer over VL1, a relay, an HTTP gateway) for each chunk hash, hedging across them, and verifies every chunk against its hash before use.
+
+This README focuses on how to wire the code into a complete system.
 
 ## Getting Started
 
