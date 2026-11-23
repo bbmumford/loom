@@ -1,6 +1,6 @@
 /*
- * Copyright (c) 2026 HSTLES / ORBTR Pty Ltd. All Rights Reserved.
- * Queries: licensing@hstles.com
+ * Copyright (c) 2026 Brandon Miller-Mumford.
+ * Licensed under the MIT License; see LICENSE.
  */
 
 package loom
@@ -145,8 +145,8 @@ func TestNamingExemptionsArePinned(t *testing.T) {
 	}
 }
 
-// licenceText is the header every hand-written file opens with, as a planted
-// source for the matcher test.
+// licenceText is a copyright block of the form licenceHeader excuses, as a
+// planted source for the matcher test.
 const licenceText = "/*\n * Copyright (c) 2026 HSTLES / ORBTR Pty Ltd. All Rights Reserved.\n * Queries: licensing@hstles.com\n */"
 
 // barredWords are the identity-class words, compared case-blind against whole
