@@ -366,6 +366,8 @@ github.com/tursodatabase/turso-go-platform-libs v0.5.3 h1:JvlE+vC2IbyVrxlAVuPoBK
 github.com/tursodatabase/turso-go-platform-libs v0.5.3/go.mod h1:bo+Lpv5OYOX1gRV9L5DLKMsYxmDs56SkZwnCOLEFcxU=
 github.com/tursodatabase/turso-go-platform-libs v0.8.0-pre.12 h1:NAIijchiBXKNiICTxygAf2QBJeCWq0GverQMJuxJKVA=
 github.com/tursodatabase/turso-go-platform-libs v0.8.0-pre.12/go.mod h1:bo+Lpv5OYOX1gRV9L5DLKMsYxmDs56SkZwnCOLEFcxU=
+github.com/tursodatabase/turso-go-platform-libs v0.8.4 h1:pRMoTqvPU9a/ryf1+CcrNv/aB6BHABylN4GiOUf1nBI=
+github.com/tursodatabase/turso-go-platform-libs v0.8.4/go.mod h1:bo+Lpv5OYOX1gRV9L5DLKMsYxmDs56SkZwnCOLEFcxU=
 github.com/tv42/httpunix v0.0.0-20150427012821-b75d8614f926 h1:G3dpKMzFDjgEh2q1Z7zUUtKa8ViPtH+ocF0bE0g00O8=
 github.com/tv42/httpunix v0.0.0-20150427012821-b75d8614f926/go.mod h1:9ESjWnEqriFuLhtthL60Sar/7RFoluCcXsuvEwTV5KM=
 github.com/wlynxg/anet v0.0.5 h1:J3VJGi1gvo0JwZ/P1/Yc/8p63SoW98B5dHkYDmpgvvU=
@@ -549,3 +551,5 @@ turso.tech/database/tursogo v0.5.3 h1:ICh0AtACo8aVxPj/wsqCnT8Erl/WkNYuhy59/L5RDT
 turso.tech/database/tursogo v0.5.3/go.mod h1:JjsqX4S3fT1arHjqKuiuGxhJQE+VlYboU5YVqHOjy6s=
 turso.tech/database/tursogo v0.8.0-pre.12 h1:dX7xGxu0I6SK2rXXpIJjJaGcx5GbFShDuDNNr39IX08=
 turso.tech/database/tursogo v0.8.0-pre.12/go.mod h1:/vu2w3ycTRMR1JlPTMoSXxwSoBiSS5QlFu/lvlF2C0k=
+turso.tech/database/tursogo v0.8.4 h1:Efk4SmeFGmYrpP6lJzrpHI61E9F4mKNPPJkfQaWIuuM=
+turso.tech/database/tursogo v0.8.4/go.mod h1:cqgEMkw4IaoCROXYo6togf9EonYF2v1Ftk6dL9QML8Y=
