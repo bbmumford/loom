@@ -39,11 +39,23 @@ func TestSwarmTrustGate(t *testing.T) {
 	bad := swarm.Record{Topic: "fleet.peer", NodeID: swarm.NodeID(string(idA)), PubKey: pubB}
 	unruled := swarm.Record{Topic: "rogue.topic", NodeID: swarm.NodeID(string(idA)), PubKey: pubA}
 
-	// off: no gate wired.
-	for _, m := range []string{"", "off", "bogus"} {
+	// A mode naming no gate yields none, and InitSwarm refuses it.
+	for _, m := range []string{"off", "bogus"} {
 		if check, gate := newSwarmTrustGate(m, directory.BaselinePolicyConfig()); check != nil || gate != nil {
 			t.Fatalf("mode %q must yield no gate", m)
 		}
+	}
+
+	// The zero mode enforces: it rejects the key mismatch and the unruled topic.
+	zero, zg := newSwarmTrustGate("", directory.BaselinePolicyConfig())
+	if zero == nil || zg == nil || !zg.enforce {
+		t.Fatal(`mode "" must yield an enforcing gate`)
+	}
+	if err := zero(good); err != nil {
+		t.Fatalf(`mode "" rejected a well-formed self-owned publish: %v`, err)
+	}
+	if zero(bad) == nil || zero(unruled) == nil {
+		t.Fatal(`mode "" must reject a key mismatch and an unruled topic`)
 	}
 
 	// observe: accepts all three, counts the key mismatch AND the unruled topic.

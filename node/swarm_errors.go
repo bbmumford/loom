@@ -11,4 +11,7 @@ import "errors"
 var (
 	ErrSwarmIdentityUnset  = errors.New("node: swarm requires Runtime identity to be loaded first")
 	ErrSwarmNotInitialized = errors.New("node: swarm not initialized — call Runtime.InitSwarm first")
+	// ErrSwarmTrustMode is returned by InitSwarm for a SwarmTrustMode that
+	// names no trust gate: swarm stores no record without one.
+	ErrSwarmTrustMode = errors.New(`node: SwarmTrustMode must be "enforce", "observe" or ""`)
 )

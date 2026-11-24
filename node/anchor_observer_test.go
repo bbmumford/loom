@@ -21,6 +21,7 @@ import (
 	"github.com/bbmumford/loom/ports"
 	"github.com/bbmumford/swarm"
 	swarmpb "github.com/bbmumford/swarm/proto/pb"
+	"github.com/bbmumford/swarm/swarmtest"
 	"google.golang.org/protobuf/proto"
 )
 
@@ -121,7 +122,7 @@ func newObserverHubNode(t *testing.T, hub *observerHub) observerHubNode {
 		t.Fatal(err)
 	}
 	id := swarm.NodeID(string(aid))
-	n, err := swarm.New(swarm.Config{NodeID: id, PrivKey: priv, TreeDegree: 4, MaxRecordBytes: peerRecordMaxBytes})
+	n, err := swarm.New(swarm.Config{NodeID: id, PrivKey: priv, TreeDegree: 4, MaxRecordBytes: peerRecordMaxBytes, TrustCheck: swarmtest.AcceptAll})
 	if err != nil {
 		t.Fatal(err)
 	}

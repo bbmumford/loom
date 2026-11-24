@@ -15,10 +15,14 @@ import (
 	"time"
 
 	"github.com/ORBTR/aether"
+	"github.com/bbmumford/loom/directory"
 	"github.com/bbmumford/swarm"
 	meshdbcfg "github.com/bbmumford/tursoraft/manager"
 	"github.com/bbmumford/tursoraft/sqldtest"
 )
+
+// meshDBClusterTestTopic is the topic the cluster test publishes over swarm.
+const meshDBClusterTestTopic = "meshdb.clustertest"
 
 func freeUDPPort(t *testing.T) int {
 	t.Helper()
@@ -43,12 +47,17 @@ const clusterGroup, clusterDB = "control", "ctl"
 func startClusterMember(t *testing.T, m *clusterMember, primary, key string) {
 	t.Helper()
 	m.port = freeUDPPort(t)
+	// The cluster's nodes trust one another on the test topic as well as the
+	// baseline the swarm trust gate enforces.
+	policy := directory.BaselinePolicyConfig()
+	policy.OpenPublishPrefixes = append(policy.OpenPublishPrefixes, meshDBClusterTestTopic)
 	cfg := Config{
-		ServiceName: meshDBTestService,
-		DataDir:     m.dir,
-		NetworkKeys: []string{"meshdb-cluster-test-network-key"},
-		VL1:         VL1TransportConfig{Enabled: true, UDPPort: m.port},
-		LAD:         LADDirectoryConfig{Storage: "local", LocalDir: filepath.Join(m.dir, "lad"), BootstrapHosts: "127.0.0.1:9"},
+		ServiceName:      meshDBTestService,
+		DataDir:          m.dir,
+		SwarmTrustPolicy: &policy,
+		NetworkKeys:      []string{"meshdb-cluster-test-network-key"},
+		VL1:              VL1TransportConfig{Enabled: true, UDPPort: m.port},
+		LAD:              LADDirectoryConfig{Storage: "local", LocalDir: filepath.Join(m.dir, "lad"), BootstrapHosts: "127.0.0.1:9"},
 		Databases: &DatabasesConfig{
 			Enabled:   true,
 			LocalDir:  filepath.Join(m.dir, "db"),
@@ -179,7 +188,7 @@ func TestMeshDBClusterOnLoopbackVL1(t *testing.T) {
 
 	// Swarm on its own stream: a record published by one member reaches the
 	// other two alongside the Raft traffic on the mesh database stream.
-	const topic = swarm.Topic("meshdb.clustertest")
+	const topic = swarm.Topic(meshDBClusterTestTopic)
 	got := make(chan string, 4)
 	for _, m := range ms[1:] {
 		unsub, err := m.rt.swarm.Node.Subscribe(topic, func(r swarm.Record) error {

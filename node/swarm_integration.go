@@ -8,6 +8,7 @@ package node
 import (
 	"context"
 	"crypto/ed25519"
+	"fmt"
 	"log"
 	"path/filepath"
 	"sync"
@@ -121,7 +122,8 @@ func (rt *Runtime) swarmTrustGate() (func(swarm.Record) error, *trustGateCounter
 }
 
 // newSwarmTrustGate builds the inbound trust-gate check for the given mode
-// from policyCfg, or returns (nil, nil) when the gate is off ("" / "off").
+// from policyCfg, or returns (nil, nil) for a mode that names no gate, which
+// InitSwarm refuses.
 // The check runs TrustPolicy.AuthorizePublish on each signature-verified
 // record: the NodeID must bind to its key under loom's aether scheme (for an
 // observer attestation the bound identity is the observer, whose key signed
@@ -129,13 +131,16 @@ func (rt *Runtime) swarmTrustGate() (func(swarm.Record) error, *trustGateCounter
 // counts a would-reject and ACCEPTS (the shadow-parity step); "enforce"
 // rejects.
 //
-// Loom's zero SwarmTrustMode "" leaves the gate off; the composition root
-// picks the mode, and library/endpoint's SwarmTrustMode defaults to
-// "enforce". Under enforce a topic outside policyCfg is refused: with the
+// Loom's zero SwarmTrustMode "" is "enforce", so a composition that picks no
+// mode stores no record its policy refuses. Under enforce a topic outside
+// policyCfg is refused: with the
 // baseline that admits a node's own PeerRecord, latency, mesh database member
 // and route records, and the role takeover topics only once the composition
 // root supplies its role entitlements (directory.WithRoleEntitlements).
 func newSwarmTrustGate(mode string, policyCfg directory.PolicyConfig) (func(swarm.Record) error, *trustGateCounters) {
+	if mode == "" {
+		mode = "enforce"
+	}
 	if mode != "observe" && mode != "enforce" {
 		return nil, nil
 	}
@@ -214,18 +219,16 @@ func (rt *Runtime) InitSwarm(reg *rpc.Registry) (*SwarmIntegration, error) {
 	}
 
 	// Inbound trust gate: loom's TrustPolicy wired as swarm's TrustCheck
-	// hook (see newSwarmTrustGate). Off at loom's zero SwarmTrustMode, which
-	// library/endpoint replaces with "enforce" unless configured otherwise;
-	// "observe" counts would-rejects without rejecting (the shadow-parity
-	// step), "enforce" rejects. NOT the swarm
-	// RequireNodeKeyBinding bool — its hex(pubkey) NodeID derivation is incompatible
-	// with aether's vl1_ fingerprint and would reject every record on this fleet.
-	var trustGate *trustGateCounters
-	if check, gate := rt.swarmTrustGate(); check != nil {
-		cfg.TrustCheck = check
-		trustGate = gate
-		log.Printf("[SWARM] InitSwarm: trust gate wired mode=%s (aether NodeID↔key bind)", rt.cfg.SwarmTrustMode)
+	// hook (see newSwarmTrustGate), which swarm.New requires. "" and
+	// "enforce" reject; "observe" counts would-rejects without rejecting (the
+	// shadow-parity step); any other mode is refused here.
+	check, trustGate := rt.swarmTrustGate()
+	if check == nil {
+		log.Printf("[SWARM] InitSwarm: ERROR no trust gate for mode %q", rt.cfg.SwarmTrustMode)
+		return nil, fmt.Errorf("%w: got %q", ErrSwarmTrustMode, rt.cfg.SwarmTrustMode)
 	}
+	cfg.TrustCheck = check
+	log.Printf("[SWARM] InitSwarm: trust gate wired mode=%q (aether NodeID↔key bind)", rt.cfg.SwarmTrustMode)
 
 	// Trust shadow (observe-only): mirror every accepted record into a
 	// Swarm-backed directory so ShadowParity can compare its state against the

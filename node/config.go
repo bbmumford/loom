@@ -75,20 +75,17 @@ type Config struct {
 	AuthValidator ports.AuthValidator
 
 	// SwarmTrustMode selects the inbound trust gate on the swarm
-	// live-directory convergence path. "" / "off" = no gate (current
-	// behaviour). "observe" runs the FULL pre-store authorization —
+	// live-directory convergence path, which swarm requires. "" and
+	// "enforce" reject a record that fails TrustPolicy.AuthorizePublish.
+	// "observe" runs the FULL pre-store authorization —
 	// TrustPolicy.AuthorizePublish: NodeID↔key bind (aether scheme), partition
 	// scope, and the topic publish rule, seeded from the self-owned baseline —
 	// and COUNTS records that WOULD be rejected without rejecting any; that is
 	// the shadow-parity step, and it must show zero would-rejects for legit
 	// traffic fleet-wide (read TrustGateStats + the trust-shadow ShadowStats /
-	// ShadowParity) before cutover. "enforce" rejects a record that fails the
-	// same authorization. Default off.
-	//
-	// ⚠ Do NOT reach for the swarm RequireNodeKeyBinding bool instead: it
-	// derives NodeID as hex(pubkey), incompatible with aether's vl1_
-	// fingerprint, so on this fleet it would reject EVERY record. TrustCheck
-	// with the aether scheme (wired from this field) is the correct gate.
+	// ShadowParity) before cutover. Any other value, "off" among them, makes
+	// InitSwarm refuse (ErrSwarmTrustMode). Swarm itself binds every record's
+	// NodeID to its signing key under the aether scheme before the gate runs.
 	SwarmTrustMode string
 
 	// SwarmTrustPolicy is the trust material the gate SwarmTrustMode selects
