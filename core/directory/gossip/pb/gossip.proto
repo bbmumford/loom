@@ -73,7 +73,7 @@ message ConnectionOffer {
 //     HLC=0 and stale records win on equal lamport clocks.
 //   - expiresAtUnix: TTL for tombstone pruning; without it the
 //     receiver treats every record as never-expires.
-//   - authorPubkey: signed-topic enforcement — verifiers need the
+//   - authorPubKey: signed-topic enforcement — verifiers need the
 //     pubkey alongside the signature.
 //   - blobCid: content-addressed reference for off-record blobs
 //     (snapshot manifest payloads).
@@ -95,6 +95,6 @@ message LADRecord {
     bytes signature = 11;
     uint64 hlcTimestamp = 12;
     int64 expiresAtUnix = 13;
-    bytes authorPubkey = 14;
+    bytes authorPubKey = 14;
     string blobCid = 15;
 }

@@ -366,7 +366,7 @@ func (x *ConnectionOffer) GetSignature() []byte {
 //     HLC=0 and stale records win on equal lamport clocks.
 //   - expiresAtUnix: TTL for tombstone pruning; without it the
 //     receiver treats every record as never-expires.
-//   - authorPubkey: signed-topic enforcement — verifiers need the
+//   - authorPubKey: signed-topic enforcement — verifiers need the
 //     pubkey alongside the signature.
 //   - blobCid: content-addressed reference for off-record blobs
 //     (snapshot manifest payloads).
@@ -389,7 +389,7 @@ type LADRecord struct {
 	Signature       []byte                 `protobuf:"bytes,11,opt,name=signature,proto3" json:"signature,omitempty"`
 	HlcTimestamp    uint64                 `protobuf:"varint,12,opt,name=hlcTimestamp,proto3" json:"hlcTimestamp,omitempty"`
 	ExpiresAtUnix   int64                  `protobuf:"varint,13,opt,name=expiresAtUnix,proto3" json:"expiresAtUnix,omitempty"`
-	AuthorPubkey    []byte                 `protobuf:"bytes,14,opt,name=authorPubkey,proto3" json:"authorPubkey,omitempty"`
+	AuthorPubKey    []byte                 `protobuf:"bytes,14,opt,name=authorPubKey,proto3" json:"authorPubKey,omitempty"`
 	BlobCid         string                 `protobuf:"bytes,15,opt,name=blobCid,proto3" json:"blobCid,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -516,9 +516,9 @@ func (x *LADRecord) GetExpiresAtUnix() int64 {
 	return 0
 }
 
-func (x *LADRecord) GetAuthorPubkey() []byte {
+func (x *LADRecord) GetAuthorPubKey() []byte {
 	if x != nil {
-		return x.AuthorPubkey
+		return x.AuthorPubKey
 	}
 	return nil
 }
@@ -582,7 +582,7 @@ const file_gossip_proto_rawDesc = "" +
 	"\tsignature\x18\v \x01(\fR\tsignature\x12\"\n" +
 	"\fhlcTimestamp\x18\f \x01(\x04R\fhlcTimestamp\x12$\n" +
 	"\rexpiresAtUnix\x18\r \x01(\x03R\rexpiresAtUnix\x12\"\n" +
-	"\fauthorPubkey\x18\x0e \x01(\fR\fauthorPubkey\x12\x18\n" +
+	"\fauthorPubKey\x18\x0e \x01(\fR\fauthorPubKey\x12\x18\n" +
 	"\ablobCid\x18\x0f \x01(\tR\ablobCidB4Z2github.com/bbmumford/loom/core/directory/gossip/pbb\x06proto3"
 
 var (

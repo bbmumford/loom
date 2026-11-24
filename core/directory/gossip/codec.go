@@ -239,7 +239,7 @@ func recordToProto(r lad.Record) *gossippb.LADRecord {
 		TombstoneReason: r.TombstoneReason,
 		Signature:       r.Signature,
 		HlcTimestamp:    r.HLCTimestamp,
-		AuthorPubkey:    r.AuthorPubKey,
+		AuthorPubKey:    r.AuthorPubKey,
 		BlobCid:         r.BlobCID,
 	}
 	if !r.DeletedAt.IsZero() {
@@ -269,7 +269,7 @@ func protoToRecord(pb *gossippb.LADRecord) lad.Record {
 		TombstoneReason: pb.TombstoneReason,
 		Signature:       pb.Signature,
 		HLCTimestamp:    pb.HlcTimestamp,
-		AuthorPubKey:    pb.AuthorPubkey,
+		AuthorPubKey:    pb.AuthorPubKey,
 		BlobCID:         pb.BlobCid,
 	}
 	if pb.DeletedAtUnix != 0 {

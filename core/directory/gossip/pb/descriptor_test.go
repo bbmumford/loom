@@ -82,7 +82,7 @@ func wireFixture(t *testing.T) *GossipEnvelope {
 		Signature:       []byte{0x05},
 		HlcTimestamp:    6,
 		ExpiresAtUnix:   7,
-		AuthorPubkey:    []byte{0x08},
+		AuthorPubKey:    []byte{0x08},
 		BlobCid:         "cid",
 	})
 	if err != nil {
