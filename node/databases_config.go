@@ -43,6 +43,16 @@ type DatabasesConfig struct {
 	// or an empty current key, fails Initialize. When nil, each group's own
 	// EncryptionKey is used and a group without one is refused.
 	KeyResolver func(group string) (current, prior string, err error)
+	// TokenResolver, when set, supplies each group's auth token at the point
+	// KeyResolver supplies its key, after Roles' release, and replaces the
+	// group's AuthToken when it returns one; an error fails Initialize. A host
+	// whose tokens live in a vault reads them here, so a group's credential is
+	// read only once its release holds.
+	TokenResolver func(group string) (string, error)
+	// Roles, when set, releases a group it maps to a role only under this
+	// node's verified endorsement of that role (RoleRelease): KeyResolver is
+	// asked for no group's key until every mapped group's role is endorsed.
+	Roles *RoleRelease
 }
 
 // hasRaft reports whether any group declares a raft block, which is what
@@ -81,6 +91,9 @@ func (d *DatabasesConfig) validate(c *Config) error {
 			}
 		}
 	}
+	if err := d.Roles.validate(); err != nil {
+		return err
+	}
 	if d.hasRaft() && !c.VL1.Enabled {
 		return fmt.Errorf("databases groups with a raft block need VL1: their clusters run over the endpoint mesh")
 	}
@@ -98,15 +111,24 @@ func (d *DatabasesConfig) volumeDir(dataDir string) string {
 	return ""
 }
 
-// resolvedGroups returns the groups with their keys filled from KeyResolver,
-// or the groups as configured when there is none.
+// resolvedGroups returns the groups with their keys filled from KeyResolver and
+// their tokens from TokenResolver, each as configured where its resolver is nil.
 func (d *DatabasesConfig) resolvedGroups() ([]meshdbcfg.GroupConfig, error) {
 	groups := make([]meshdbcfg.GroupConfig, len(d.Groups))
 	copy(groups, d.Groups)
-	if d.KeyResolver == nil {
-		return groups, nil
-	}
 	for i := range groups {
+		if d.TokenResolver != nil {
+			tok, err := d.TokenResolver(groups[i].GroupName)
+			if err != nil {
+				return nil, fmt.Errorf("databases group %q: resolve auth token: %w", groups[i].GroupName, err)
+			}
+			if tok != "" {
+				groups[i].AuthToken = tok
+			}
+		}
+		if d.KeyResolver == nil {
+			continue
+		}
 		current, prior, err := d.KeyResolver(groups[i].GroupName)
 		if err != nil {
 			return nil, fmt.Errorf("databases group %q: resolve key: %w", groups[i].GroupName, err)

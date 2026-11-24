@@ -11,6 +11,7 @@ import (
 	"log"
 
 	"github.com/ORBTR/aether"
+	"github.com/bbmumford/loom/ports"
 	meshdb "github.com/bbmumford/tursoraft/manager"
 )
 
@@ -53,6 +54,20 @@ func (rt *Runtime) startMeshDBTransport() error {
 // root and, when a cluster is declared, the mesh database transport.
 func (rt *Runtime) openMeshDB(ctx context.Context) error {
 	dc := rt.cfg.Databases
+	names := make([]string, len(dc.Groups))
+	for i, g := range dc.Groups {
+		names[i] = g.GroupName
+	}
+	id := ports.NodeID(string(rt.identity.NodeID))
+	endorsed, err := dc.Roles.release(names, id, rt.identity.PublicKey)
+	if err != nil {
+		return err
+	}
+	if len(endorsed) > 0 {
+		rt.roleEndorsements = &roleEndorsements{set: endorsed}
+		roles, held, key := dc.Roles, rt.roleEndorsements, rt.identity.PublicKey
+		rt.Go("meshdb.role-endorsements", func() { roles.renew(rt.ctx, held, id, key) })
+	}
 	groups, err := dc.resolvedGroups()
 	if err != nil {
 		return err

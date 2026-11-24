@@ -423,6 +423,9 @@ type Runtime struct {
 	// meshDBTransport carries meshDB's Raft clusters over the endpoint mesh;
 	// nil unless a database group declares a raft block.
 	meshDBTransport *MeshDBTransport
+	// roleEndorsements is this node's endorsement of each role a held group's
+	// key is released under (RoleRelease); nil when no group needs one.
+	roleEndorsements *roleEndorsements
 	// ladClose closes the "local" LAD ledger and its file; nil otherwise.
 	ladClose func() error
 
