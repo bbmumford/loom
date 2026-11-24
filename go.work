@@ -47,3 +47,5 @@ use ../tursoraft
 // Replace every weft version with the local tree until a release is published
 // and loom bumps its pin.
 replace github.com/bbmumford/weft => ../weft
+
+replace github.com/bbmumford/ratelimit => ../ratelimit
