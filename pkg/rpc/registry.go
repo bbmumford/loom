@@ -157,10 +157,11 @@ func ownedAll(list []*Handler) []*Handler {
 	return out
 }
 
-// prepareStored validates the handler's scope tag and Requirement arm and returns
-// its FQN, role, and the stored Handler, an owned copy of h. It takes no lock and
-// touches no map, so it is the shared lock-free half of Register and the atomic
-// batch core (RegisterAll and RegisterProxy): scope validation and the copy live
+// prepareStored validates the handler's scope tag and Requirement arm, has the
+// installed DeclarationReader read the owned copy of h, and returns its FQN, role,
+// and that copy as the stored Handler. It takes no lock and touches no map, so it
+// is the shared lock-free half of Register and the atomic batch core (RegisterAll
+// and RegisterProxy): scope validation, the copy and the contract's reading live
 // here once. Collision checks and the store happen under the caller's lock.
 func (r *Registry) prepareStored(h Handler) (fqn, role string, stored *Handler, err error) {
 	if !scope.IsDeclared(h.Scope) {
@@ -169,7 +170,11 @@ func (r *Registry) prepareStored(h Handler) (fqn, role string, stored *Handler, 
 	if h.Requirement != nil && h.Requirement.Kind == scope.ArmUnset {
 		return "", "", nil, fmt.Errorf("handler %s declares a Requirement with no authorization arm: build it with scope.Open, scope.Capability or scope.Nexus", h.FQN())
 	}
-	return h.FQN(), h.Role(), owned(&h), nil
+	stored = owned(&h)
+	if err := readDeclaration(stored); err != nil {
+		return "", "", nil, err
+	}
+	return stored.FQN(), stored.Role(), stored, nil
 }
 
 // Register adds a handler to the registry.
@@ -340,7 +345,12 @@ func (r *Registry) Count() int {
 // (where Func actually runs); the gateway must not re-enforce it or we'd
 // double-charge the same auth checks. RegisterProxy strips Middleware
 // before storing — gateways apply their own gateway-tier middleware via
-// the HTTP bridge / per-route mounts.
+// the HTTP bridge / per-route mounts. The installed DeclarationReader then
+// reads the stripped copy like any other registration, so what the
+// operation's contract declares for its HTTP mounts (its exposure, a limit
+// it writes as Middleware) holds on the gateway's mount, which is where an
+// HTTP request reaches it: the mesh hop to the implementing node runs no
+// Middleware.
 func (r *Registry) RegisterProxy(handlers []Handler) error {
 	return r.registerAllAtomic(handlers, true)
 }
