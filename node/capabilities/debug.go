@@ -4,6 +4,6 @@
  */
 package capabilities
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbgCapabilities = debug.New("mesh.node.capabilities")

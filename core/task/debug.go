@@ -4,7 +4,7 @@
  */
 package task
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbgTaskDomain = debug.New("mesh.task.domain")
 var dbgTaskResources = debug.New("mesh.task.resources")

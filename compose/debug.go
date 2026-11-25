@@ -4,6 +4,6 @@
  */
 package compose
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbgCompose = debug.New("loom.compose")

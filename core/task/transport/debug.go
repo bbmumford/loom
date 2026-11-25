@@ -4,6 +4,6 @@
  */
 package transport
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbgTaskTransport = debug.New("mesh.task.transport")

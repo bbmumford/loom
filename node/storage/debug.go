@@ -4,7 +4,7 @@
  */
 package storage
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbgBackend = debug.New("mesh.node.storage.backend")
 var dbgDisk = debug.New("mesh.node.storage.disk")

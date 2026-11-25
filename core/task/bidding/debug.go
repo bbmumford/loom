@@ -4,7 +4,7 @@
  */
 package bidding
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbg = debug.New("mesh.task.bidding.aliases")
 var dbgBidding = debug.New("mesh.task.bidding")

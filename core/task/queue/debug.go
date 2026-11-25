@@ -4,7 +4,7 @@
  */
 package queue
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbg = debug.New("mesh.task.queue.aliases")
 var dbgQueue = debug.New("mesh.task.queue")

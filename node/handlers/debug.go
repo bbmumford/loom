@@ -4,6 +4,6 @@
  */
 package handlers
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbgNodeHandler = debug.New("mesh.node.handler")

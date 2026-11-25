@@ -4,7 +4,7 @@
  */
 package gateway
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbg = debug.New("mesh.task.gateway.aliases")
 var dbgGateway = debug.New("mesh.task.gateway")

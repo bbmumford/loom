@@ -31,6 +31,8 @@ github.com/antlr4-go/antlr/v4 v4.13.1 h1:SqQKkuVZ+zWkMMNkjy5FZe5mr5WURWnlpmOuzYW
 github.com/antlr4-go/antlr/v4 v4.13.1/go.mod h1:GKmUxMtwp6ZgGwZSva4eWPC5mS6vUAmOABFgjdkM7Nw=
 github.com/armon/go-metrics v0.4.1 h1:hR91U9KYmb6bLBYLQjyM+3j+rcd/UhE+G78SFnF8gJA=
 github.com/armon/go-metrics v0.4.1/go.mod h1:E6amYzXo6aW1tqzoZGT755KkbgrJsSdpwZ+3JqfkOG4=
+github.com/bbmumford/argus v0.1.0 h1:q30qW8TDOVFgB17Gq50m5Ho4X+/CzgyMgEI8lbyUzFI=
+github.com/bbmumford/argus v0.1.0/go.mod h1:DkONyNcY1p8+TbVoxONo4RUEwS25juOnY+nbM/8Bfrs=
 github.com/bbmumford/cfgload v0.0.2 h1:kNZz3iE0mIBpsJ7uOweCT0IO2F7jQEBYnmAnU2mjUHQ=
 github.com/bbmumford/cfgload v0.0.2/go.mod h1:jBdgF0N1h/EFtaCrNhJEzYgQoeQtAqqmagta6dUHf2k=
 github.com/bbmumford/diststore v0.0.1 h1:RZy6crwpO24souyFWmFAqjKNv+vOCZ99q4BLum7n2fM=

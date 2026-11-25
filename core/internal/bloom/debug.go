@@ -4,6 +4,6 @@
  */
 package bloom
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbgBloom = debug.New("mesh.internal.bloom")

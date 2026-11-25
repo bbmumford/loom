@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bbmumford/loom/internal/debug"
+	debug "github.com/bbmumford/argus"
 )
 
 // Covers split_brain.go's LamportClock.Merge and PartitionDetector.LogStatus.
@@ -129,12 +129,6 @@ func TestConcurrentMergesEachReturnADistinctStamp(t *testing.T) {
 // captureDebug redirects the debug logger to a buffer for the duration of a
 // test and restores stderr afterwards. debug.Configure is process-global, so
 // tests using it must not run in parallel with each other.
-//
-// 📌 MEASURED while writing this: debug.Configure has ZERO callers in the
-// estate outside its own doc comment, and internal/debug is not importable
-// from outside the module — so the documented "silence everything" control
-// (`debug.Configure(false, nil)`) is currently reachable only from tests. Noted,
-// not fixed: it is an ops-surface observation, not this file's subject.
 func captureDebug(t *testing.T) *syncBuffer {
 	t.Helper()
 	buf := &syncBuffer{}

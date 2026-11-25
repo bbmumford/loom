@@ -4,7 +4,7 @@
  */
 package gossip
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbgGossip = debug.New("mesh.lad.gossip")
 var dbgGossipDiscovery = debug.New("mesh.lad.gossip.discovery")

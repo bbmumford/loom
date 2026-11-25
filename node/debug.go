@@ -4,7 +4,7 @@
  */
 package node
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbgConfig = debug.New("mesh.node.config")
 var dbgHTTP = debug.New("mesh.node.http")

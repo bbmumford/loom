@@ -4,6 +4,6 @@
  */
 package execution
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbgTaskExec = debug.New("mesh.task.execution")

@@ -4,6 +4,6 @@
  */
 package audit
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbgAudit = debug.New("mesh.node.audit")

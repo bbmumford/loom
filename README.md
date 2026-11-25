@@ -116,6 +116,7 @@ Other packages of this estate:
 - `github.com/bbmumford/policypool`: the fail-closed connection policy of the
   directory's local store (`node/lad_store.go`).
 - `github.com/bbmumford/diststore/crypto`: the per-recipient key wrap.
+- `github.com/bbmumford/argus`: the debug loggers behind the `DEBUG` list.
 - `github.com/bbmumford/weft` and `github.com/bbmumford/cfgload`: HTTP helpers
   and configuration loading. (`go.mod` also requires
   `github.com/bbmumford/envreq`, which no loom package imports.)

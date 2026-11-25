@@ -4,7 +4,7 @@
  */
 package artifacts
 
-import "github.com/bbmumford/loom/internal/debug"
+import debug "github.com/bbmumford/argus"
 
 var dbgArtifacts = debug.New("mesh.task.artifacts")
 var dbgTaskArtifacts = debug.New("mesh.task.artifacts.types")

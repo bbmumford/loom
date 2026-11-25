@@ -8,6 +8,10 @@ go 1.25.0
 use .
 use ../swarm
 
+// argus is loom's debug registry (each package's debug.go); it resolves from the
+// sibling tree, as in every workspace that builds loom.
+use ../argus
+
 // Local dev bridge: loom/go.mod pins an aether release that lacks the
 // AuthenticatedPrincipal Subject, Partition and opaque ScopeAxis Axes fields
 // pkg/dispatch sends and node/rpc.go reads, and the NoiseTransportConfig
