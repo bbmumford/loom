@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/bbmumford/filekind"
 	"github.com/bbmumford/policypool"
 	"github.com/bbmumford/tursoraft/localdb"
 )
@@ -28,6 +29,10 @@ const ladKeyInfo = "loom/lad/v1"
 
 // ladFileName is the LAD file under LADDirectoryConfig.LocalDir.
 const ladFileName = "lad.db"
+
+// ladIdentity is the LAD file's identity in its header: filekind's lad kind,
+// generation 1. localdb stamps a new file with it and refuses any other.
+var ladIdentity = policypool.Identity{Kind: filekind.Lad, Generation: 1}
 
 // ladFileKey derives the key the LAD file is encrypted under:
 // HKDF-SHA256 over the node identity's 32-byte ed25519 seed, with no salt
@@ -42,13 +47,17 @@ func ladFileKey(priv ed25519.PrivateKey) ([]byte, error) {
 }
 
 // openLADFile opens dir/lad.db encrypted under key through tursoraft's
-// localdb (tursogo, AES-256-GCM, foreign keys proven on every connection).
+// localdb (tursogo, AES-256-GCM, foreign keys proven on every connection),
+// carrying ladIdentity in its header.
 //
 // LAD is a cache of gossip, so a file whose contents this node cannot read
 // is deleted and rebuilt rather than kept: a plaintext file, which localdb
-// refuses to open under a key (localdb.ErrPlaintext), and a file the engine
+// refuses to open under a key (localdb.ErrPlaintext), a file the engine
 // cannot read under this key (policypool.ErrNotADatabase), such as one
-// written under another node identity. Every other error, for example a
+// written under another node identity, and a file whose header is not
+// ladIdentity (policypool.ErrFileIdentity): another kind's file, another
+// format generation, or a LAD file written before its header was stamped,
+// which holds a schema and no stamp. Every other error, for example a
 // permission, I/O or context failure, is returned with the file left in
 // place: it says nothing about what the file holds, and Initialize fails on
 // it rather than discarding records a later start could read.
@@ -57,18 +66,18 @@ func openLADFile(ctx context.Context, dir string, key []byte) (*sql.DB, error) {
 		return nil, fmt.Errorf("LAD local directory %q must be an absolute path", dir)
 	}
 	path := filepath.Join(dir, ladFileName)
-	db, err := localdb.Open(ctx, path, key)
+	db, err := localdb.OpenFile(ctx, path, key, ladIdentity)
 	if err == nil {
 		return db, nil
 	}
-	if !errors.Is(err, localdb.ErrPlaintext) && !errors.Is(err, policypool.ErrNotADatabase) {
+	if !errors.Is(err, localdb.ErrPlaintext) && !errors.Is(err, policypool.ErrNotADatabase) && !errors.Is(err, policypool.ErrFileIdentity) {
 		return nil, fmt.Errorf("open LAD file: %w", err)
 	}
 	log.Printf("[NODE] LAD file %s does not open under this node's key (%v); deleting it, LAD is rebuilt from gossip", path, err)
 	if err := removeLADFile(path); err != nil {
 		return nil, err
 	}
-	db, err = localdb.Open(ctx, path, key)
+	db, err = localdb.OpenFile(ctx, path, key, ladIdentity)
 	if err != nil {
 		return nil, fmt.Errorf("open LAD file: %w", err)
 	}
