@@ -610,6 +610,14 @@ func (p *PeerPublisher) send(in publication) error {
 		}
 	}
 
+	// role_endorsement.<role>: this node's current endorsement of each role a
+	// held group or secret is released under, so a host that admits only a
+	// caller endorsed for a role (RoleTable.RoleEndorsement) can verify it under
+	// its own document's role keys.
+	if p.rt != nil {
+		tags = append(tags, p.rt.roleEndorsementTags()...)
+	}
+
 	// saturated / backoff_until: advertise connection-budget pressure so peers
 	// stop opening fresh paths to us. The bit is recomputed here (not cached on
 	// the struct), so it is automatically correct on the 5-min TTL refresh and

@@ -226,3 +226,28 @@ func verifyAnchorSnapshot(s *anchor.Snapshot, keys []ed25519.PublicKey) error {
 	}
 	return err
 }
+
+// RoleEndorsement returns the endorsement of role that peer id's latest
+// fleet.peer record carries (directory.RoleEndorsementTag), decoded. ok is
+// false when the record carries none, when it does not decode, or when it
+// names another role, another node or a key other than the one that signed
+// the record. It verifies nothing against role keys: the host judging id as a
+// caller does that with directory.VerifyRoleEndorsement under its own
+// document's RoleKeys, at the time it judges.
+func (t *RoleTable) RoleEndorsement(id ports.NodeID, role string) (directory.RoleEndorsement, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	info, ok := t.infoBy[string(id)]
+	if !ok || len(info.PubKey) != ed25519.PublicKeySize {
+		return directory.RoleEndorsement{}, false
+	}
+	v, ok := info.Tags[directory.RoleEndorsementTag(role)]
+	if !ok {
+		return directory.RoleEndorsement{}, false
+	}
+	e, err := directory.ParseRoleEndorsement(v)
+	if err != nil || e.Role != role || e.NodeID != id || !e.NodeKey.Equal(ed25519.PublicKey(info.PubKey)) {
+		return directory.RoleEndorsement{}, false
+	}
+	return e, true
+}

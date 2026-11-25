@@ -212,3 +212,16 @@ func ParseRoleEndorsement(v string) (RoleEndorsement, error) {
 		string(role), ports.NodeID(id), nodeKey, issuedAt, notAfter, roleKey, sig
 	return e, nil
 }
+
+// roleEndorsementTagPrefix opens the Capabilities.tags key a node's fleet.peer
+// record carries one role endorsement under.
+const roleEndorsementTagPrefix = "role_endorsement."
+
+// RoleEndorsementTag is the Capabilities.tags key under which a node's
+// fleet.peer record carries its current endorsement of role, as
+// "role_endorsement.<role>=<Encode value>". node's PeerPublisher writes one per
+// role the node holds an endorsement of, and node's RoleTable reads it back so
+// a host judging this node as a caller verifies the endorsement under its own
+// document's RoleKeys. It rides a tag for the reason AnchorEndorsementTag does:
+// swarm's PeerRecord has no endorsement field.
+func RoleEndorsementTag(role string) string { return roleEndorsementTagPrefix + role }

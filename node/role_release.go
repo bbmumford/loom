@@ -10,6 +10,7 @@ import (
 	"crypto/ed25519"
 	"errors"
 	"fmt"
+	"sort"
 	"sync"
 	"time"
 
@@ -34,9 +35,15 @@ type RoleRelease struct {
 	// GroupRoles maps a group to the role whose endorsement releases its key.
 	// A group it does not name is released as DatabasesConfig states.
 	GroupRoles map[string]string
-	// Lapsed is told the group and role whose endorsement lapsed, and why. It
-	// is required; the endpoint spine's stops the process.
-	Lapsed func(group, role string, err error)
+	// SecretRoles maps a named secret the host holds outside any group (an
+	// organisation token, a group's token) to the role whose endorsement
+	// releases it. Each is endorsed when Initialize opens the groups and
+	// renewed with them; the host reads the secret only once SecretReleased
+	// answers nil for its name.
+	SecretRoles map[string]string
+	// Lapsed is told the group or secret name and the role whose endorsement
+	// lapsed, and why. It is required; the endpoint spine's stops the process.
+	Lapsed func(name, role string, err error)
 	// Now is the clock; nil means time.Now.
 	Now func() time.Time
 }
@@ -62,6 +69,11 @@ func (r *RoleRelease) validate() error {
 	for group, role := range r.GroupRoles {
 		if role == "" {
 			return fmt.Errorf("databases group %q names an empty role", group)
+		}
+	}
+	for name, role := range r.SecretRoles {
+		if role == "" {
+			return fmt.Errorf("databases secret %q names an empty role", name)
 		}
 	}
 	return nil
@@ -113,6 +125,22 @@ func (r *RoleRelease) release(groups []string, id ports.NodeID, nodeKey ed25519.
 		}
 		out[role] = e
 	}
+	names := make([]string, 0, len(r.SecretRoles))
+	for name := range r.SecretRoles {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		role := r.SecretRoles[name]
+		if _, done := out[role]; done {
+			continue
+		}
+		e, err := r.endorse(role, id, nodeKey)
+		if err != nil {
+			return nil, fmt.Errorf("databases secret %q: role %q: no valid endorsement, so it is not released: %w", name, role, err)
+		}
+		out[role] = e
+	}
 	return out, nil
 }
 
@@ -151,11 +179,64 @@ func (r *RoleRelease) renewOnce(held *roleEndorsements, id ports.NodeID, nodeKey
 				r.Lapsed(group, role, err)
 			}
 		}
+		for name, sr := range r.SecretRoles {
+			if sr == role {
+				r.Lapsed(name, role, err)
+			}
+		}
 	}
 }
 
+// ErrSecretNotReleased refuses a named secret whose role this node holds no
+// current endorsement of, or that no RoleRelease.SecretRoles entry names.
+var ErrSecretNotReleased = errors.New("databases secret is not released")
+
+// SecretReleased answers nil when name is a RoleRelease.SecretRoles entry and
+// this node's current endorsement of its role verifies now under the
+// release's RoleKeys; otherwise ErrSecretNotReleased with the reason. The
+// host reads the named secret from its vault only after a nil answer.
+func (rt *Runtime) SecretReleased(name string) error {
+	if rt == nil || rt.cfg.Databases == nil || rt.cfg.Databases.Roles == nil {
+		return fmt.Errorf("%w: %q: no role release is configured", ErrSecretNotReleased, name)
+	}
+	r := rt.cfg.Databases.Roles
+	role, ok := r.SecretRoles[name]
+	if !ok {
+		return fmt.Errorf("%w: %q: no role releases it", ErrSecretNotReleased, name)
+	}
+	e, ok := rt.RoleEndorsement(role)
+	if !ok {
+		return fmt.Errorf("%w: %q: no endorsement of role %q", ErrSecretNotReleased, name, role)
+	}
+	if err := directory.VerifyRoleEndorsement(e, r.Keys, r.now()); err != nil {
+		return fmt.Errorf("%w: %q: role %q: %v", ErrSecretNotReleased, name, role, err)
+	}
+	return nil
+}
+
+// roleEndorsementTags returns the RoleEndorsementTag entries PeerPublisher
+// writes on every publish: one per role this node holds a current
+// endorsement of, in role order.
+func (rt *Runtime) roleEndorsementTags() []string {
+	if rt == nil || rt.roleEndorsements == nil {
+		return nil
+	}
+	rt.roleEndorsements.mu.Lock()
+	defer rt.roleEndorsements.mu.Unlock()
+	roles := make([]string, 0, len(rt.roleEndorsements.set))
+	for role := range rt.roleEndorsements.set {
+		roles = append(roles, role)
+	}
+	sort.Strings(roles)
+	out := make([]string, 0, len(roles))
+	for _, role := range roles {
+		out = append(out, directory.RoleEndorsementTag(role)+"="+rt.roleEndorsements.set[role].Encode())
+	}
+	return out
+}
+
 // RoleEndorsement returns this node's current endorsement of role, when a held
-// group needs that role.
+// group or secret needs that role.
 func (rt *Runtime) RoleEndorsement(role string) (directory.RoleEndorsement, bool) {
 	if rt == nil || rt.roleEndorsements == nil {
 		return directory.RoleEndorsement{}, false
