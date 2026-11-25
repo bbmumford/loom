@@ -117,6 +117,8 @@ Other packages of this estate:
   directory's local store (`node/lad_store.go`).
 - `github.com/bbmumford/diststore/crypto`: the per-recipient key wrap.
 - `github.com/bbmumford/argus`: the debug loggers behind the `DEBUG` list.
+- `github.com/bbmumford/ratelimit`: the per-client-IP limit of the snapshot and
+  VL1 upgrade routes (`Keyed`).
 - `github.com/bbmumford/weft` and `github.com/bbmumford/cfgload`: HTTP helpers
   and configuration loading. (`go.mod` also requires
   `github.com/bbmumford/envreq`, which no loom package imports.)

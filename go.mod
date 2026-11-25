@@ -10,6 +10,7 @@ require (
 	github.com/bbmumford/diststore v0.0.1
 	github.com/bbmumford/envreq v0.0.1
 	github.com/bbmumford/ledger v0.0.20
+	github.com/bbmumford/ratelimit v0.1.0
 	github.com/bbmumford/reach v0.0.14
 	github.com/bbmumford/route v0.0.3
 	github.com/bbmumford/swarm v0.0.9

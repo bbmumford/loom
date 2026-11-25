@@ -41,6 +41,8 @@ github.com/bbmumford/envreq v0.0.1 h1:ISzvkaupwPT6yl1oHsnJFEZXzZ4TsjrNr61wmBwj98
 github.com/bbmumford/envreq v0.0.1/go.mod h1:KrpBPleRbYyIl02gjgQmMbJIwhjJqDnZmV9F0N+8GcI=
 github.com/bbmumford/ledger v0.0.20 h1:5UYZE3ZwIm3p68dBNJ1Op9sR5oB1/7pttL2j5xLnpso=
 github.com/bbmumford/ledger v0.0.20/go.mod h1:2gfisEniI/SsrnfFrTNnJnGjnNXr7AqCw0S086uI9+w=
+github.com/bbmumford/ratelimit v0.1.0 h1:fWu+kXUECoqGOmpl1B+F6t4cx6JRQqBIQVlvClDAHEg=
+github.com/bbmumford/ratelimit v0.1.0/go.mod h1:1uuAP51WTZ2g/2k7kdZKg+Yg3btB3TB7AdaCAj/czMQ=
 github.com/bbmumford/reach v0.0.14 h1:25vGrGFxr9Ur8Z9XaBgZOBJX9z3UI8YLOeTwipxSlSw=
 github.com/bbmumford/reach v0.0.14/go.mod h1:hGTflRb3qhgBDdemXPqnbVzT+g+EImr/UpWSro+EFVM=
 github.com/bbmumford/route v0.0.3 h1:s8cX1QBQZnblT96bGLn959hFnv1C9r6PWZPU4qHAoMg=

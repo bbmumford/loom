@@ -41,6 +41,7 @@ import (
 	"github.com/bbmumford/ledger/storage"
 	"github.com/bbmumford/loom/core/directory/gossip"
 	"github.com/bbmumford/loom/core/transport/manager"
+	"github.com/bbmumford/ratelimit"
 	"github.com/bbmumford/reach"
 	"github.com/bbmumford/route"
 	meshdb "github.com/bbmumford/tursoraft/manager"
@@ -331,11 +332,6 @@ func (rt *Runtime) ingestPeerReachRecord(ctx context.Context, host, remoteNodeID
 	log.Printf("[NODE] Bootstrap: ingested signed reach for %s from %s (addrs=%d)", truncID(remoteNodeID), host, len(rec.Addresses))
 }
 
-type rateLimitEntry struct {
-	tokens     float64
-	lastUpdate time.Time
-}
-
 // Runtime manages the lifecycle of a mesh node
 type Runtime struct {
 	cfg Config
@@ -499,9 +495,10 @@ type Runtime struct {
 	shadowParityDiverged   atomic.Uint64
 	shadowParityMismatches atomic.Uint64
 
-	// Rate limiting for snapshots
-	snapshotRateLimitMu sync.Mutex
-	snapshotRateLimit   map[string]*rateLimitEntry
+	// snapshotLimit is the per-client-IP limit the snapshot and VL1 upgrade
+	// routes spend from, built and declared once by snapshotLimiter.
+	snapshotLimitOnce sync.Once
+	snapshotLimit     *ratelimit.Keyed
 
 	// Lifecycle management
 	ctx          context.Context
@@ -3383,62 +3380,39 @@ func (rt *Runtime) verifyAuthToken(token string) bool {
 	return false
 }
 
-// checkSnapshotRateLimit implements a token bucket rate limiter for snapshot requests
-// Returns true if request is allowed, false if rate limited
-// snapshotRateLimitTTL / snapshotRateLimitMaxIPs bound the per-IP rate-limit
-// map. The endpoint is public and keyed on the client IP,
-// so without eviction a rotating-source-IP flood grows the map without bound.
-// handleVL1Upgrade and SnapshotHandler pass weft.DefaultClientIP, the
-// connection's peer address or the client a trusted edge names, never a value
-// the caller writes, so one caller cannot mint keys to fill the map.
+// snapshotRateLimitTTL / snapshotRateLimitMaxIPs bound the per-IP buckets. The
+// endpoint is public and keyed on the client IP, so without a bound a
+// rotating-source-IP flood grows the limiter without bound: a bucket idle past the
+// TTL (fully refilled, so indistinguishable from a fresh one) is swept, and once
+// the cap's worth of IPs hold buckets a new IP is refused, never admitted
+// unlimited and never by evicting a held IP's budget. handleVL1Upgrade and
+// SnapshotHandler pass weft.DefaultClientIP, the connection's peer address or the
+// client a trusted edge names, never a value the caller writes, so one caller
+// cannot mint keys to fill it.
 const (
 	snapshotRateLimitTTL    = 10 * time.Minute
 	snapshotRateLimitMaxIPs = 4096
 )
 
+// snapshotLimitName is the one limit snapshotLimiter declares: a burst of five
+// requests per IP, refilled at one a second.
+const snapshotLimitName = "snapshot"
+
+// snapshotLimiter returns the runtime's snapshot limiter, building it and
+// declaring snapshotLimitName on first use.
+func (rt *Runtime) snapshotLimiter() *ratelimit.Keyed {
+	rt.snapshotLimitOnce.Do(func() {
+		rt.snapshotLimit = ratelimit.NewKeyed(snapshotRateLimitTTL, snapshotRateLimitMaxIPs)
+		rt.snapshotLimit.Set(snapshotLimitName, 1, 5, time.Second)
+	})
+	return rt.snapshotLimit
+}
+
+// checkSnapshotRateLimit reports whether a snapshot or VL1 upgrade request from ip
+// is within its budget, spending one request when it is.
 func (rt *Runtime) checkSnapshotRateLimit(ip string) bool {
-	rt.snapshotRateLimitMu.Lock()
-	defer rt.snapshotRateLimitMu.Unlock()
-
-	now := time.Now()
-	if rt.snapshotRateLimit == nil {
-		rt.snapshotRateLimit = make(map[string]*rateLimitEntry)
-	}
-
-	// Evict idle entries so the map can't grow without bound. An
-	// entry idle past the TTL has fully refilled its burst and is
-	// indistinguishable from a fresh one, so dropping it costs nothing.
-	for k, e := range rt.snapshotRateLimit {
-		if now.Sub(e.lastUpdate) > snapshotRateLimitTTL {
-			delete(rt.snapshotRateLimit, k)
-		}
-	}
-
-	entry, exists := rt.snapshotRateLimit[ip]
-	if !exists {
-		// Once saturated with distinct live IPs, refuse the new key's request
-		// rather than grow unbounded or evict a held key: an abuse limit
-		// fails closed for the newcomer and leaves every held budget intact.
-		if len(rt.snapshotRateLimit) >= snapshotRateLimitMaxIPs {
-			return false
-		}
-		entry = &rateLimitEntry{tokens: 5.0, lastUpdate: now} // Burst 5
-		rt.snapshotRateLimit[ip] = entry
-	}
-
-	// Refill: 1 token per second
-	elapsed := now.Sub(entry.lastUpdate).Seconds()
-	entry.tokens += elapsed
-	if entry.tokens > 5.0 {
-		entry.tokens = 5.0
-	}
-	entry.lastUpdate = now
-
-	if entry.tokens >= 1.0 {
-		entry.tokens -= 1.0
-		return true
-	}
-	return false
+	ok, _ := rt.snapshotLimiter().Allow(snapshotLimitName, ip)
+	return ok
 }
 
 // BootstrapHandler returns an http.HandlerFunc for VL1 upgrade requests.
