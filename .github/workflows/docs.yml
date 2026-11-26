@@ -22,6 +22,9 @@ concurrency:
 env:
   GO_VERSION: '1.27.4'
   MODULE_PATH: github.com/bbmumford/loom
+  # The repository's go.work names sibling checkouts that are not here, so the
+  # module is rendered alone, its dependencies from the module proxy.
+  GOWORK: 'off'
 
 jobs:
   docs:
@@ -50,6 +53,7 @@ jobs:
             fi
             sleep 1
           done
+          curl -fsS "http://127.0.0.1:8080/${MODULE_PATH}" >/dev/null || { echo "pkgsite did not serve ${MODULE_PATH}"; exit 1; }
 
       - name: Mirror documentation to static HTML
         run: |
@@ -65,6 +69,7 @@ jobs:
             --reject-regex '.*(search|fetch|mod/.*\?).*' \
             --directory-prefix=docs-build \
             "http://127.0.0.1:8080/${MODULE_PATH}" || true
+          test -s "docs-build/${MODULE_PATH}.html" || { echo "the module's page was not rendered"; exit 1; }
           # wget saves the module's page as ${MODULE_PATH}.html (--adjust-extension)
           # beside the directory of its packages, so the front page points there.
           cat > docs-build/index.html <<HTML
