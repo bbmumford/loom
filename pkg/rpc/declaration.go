@@ -16,7 +16,9 @@ import (
 // registration. It is handed the registry's own copy (owned), so what it writes
 // is what Get, All, the HTTP mounts, the mesh export and the publication read,
 // and nothing the registering caller still holds changes. It may set the
-// handler's Exposure and Middleware; a reader that changes the handler's
+// handler's Exposure, Middleware and Routes (each route then checked as any
+// declared route is, checkRoutes), and wrap its Func or Stream in a function
+// that calls the one it replaces; a reader that changes the handler's
 // namespace, domain or operation has the registration refused, because the FQN
 // is the key the registry has already checked.
 //

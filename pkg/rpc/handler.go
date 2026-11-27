@@ -119,6 +119,25 @@ const (
 	ExposureMeshOnly                    // the mesh alone; every HTTP surface answers it as unknown
 )
 
+// HTTPRoute is one more HTTP route an operation is served on beside POST
+// /rpc/<FQN>, as its contract's HTTP rule states it. Method is the HTTP method
+// (GET, HEAD, POST, PUT, PATCH or DELETE). Pattern is the path: "/" and segments
+// that are each a literal or a {field} variable naming a singular scalar field
+// of the operation's Request, which the segment's value fills. Body is "*" when
+// the request body is the whole Request, or "" when the route takes no body and
+// its query string fills the fields the path does not, by field name.
+//
+// pkg/rpc/http's RegisterAllWithBridge mounts each on the operation's own
+// Middleware and dispatch, so a route is judged, charged, stamped and run as the
+// operation's /rpc route is; a route of a handler declaring ExposureMeshOnly is
+// mounted nowhere. A registry refuses a registration whose route it cannot
+// serve: a malformed one, or one another of its operations is served on.
+type HTTPRoute struct {
+	Method  string
+	Pattern string
+	Body    string
+}
+
 // MeshOnly reports whether h declares its operation reachable over the mesh only.
 func (h *Handler) MeshOnly() bool {
 	return h.Exposure == ExposureMeshOnly
@@ -190,6 +209,7 @@ type Handler struct {
 	Effect           effect.Class            // what a second execution does (zero value: effect.Unsafe); dispatch sends only an effect.Class.Repeatable operation down more than one route or again after an unknown outcome
 	WebhookSignature *WebhookSignatureConfig // optional: declare this handler is a webhook-class receiver; the registry runs signature verification pre-dispatch
 	Exposure         Exposure                // where the operation is reached from (zero value: ExposureMeshAndHTTP); ExposureMeshOnly keeps every HTTP surface from mounting or dispatching it
+	Routes           []HTTPRoute             // more HTTP routes the operation is served on beside POST /rpc/<FQN> (HTTPRoute); none by default
 
 	// Stream, when set, serves this operation as a handler stream as well
 	// (node.serveHandlerStream, reached with OpenNodeStream): frames both ways

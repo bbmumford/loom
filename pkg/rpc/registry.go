@@ -18,6 +18,7 @@ type Registry struct {
 	authz    *scope.Policy         // two-arm op authorizer; EnforceScope consults it for a handler that declares a Requirement (nil → the Scope/PresencePolicy tier path)
 	refusals scope.RefusalRecorder // the server's refusal recorder; Enforce calls it for every refusal (nil returns the refusal unrecorded)
 	listed   map[string]string     // catalogue-only declarations (Catalogue): FQN → role; Roles reads it, no handler lookup does
+	routes   map[string]string     // routeKey of each stored handler's HTTPRoute → its FQN; a registration naming one another FQN holds is refused
 
 	// parent is the registry Derive built this one from: while a policy or the
 	// recorder is not set here (policySet, authzSet, refusalsSet), its accessor
@@ -31,6 +32,7 @@ func NewRegistry() *Registry {
 	return &Registry{
 		handlers: make(map[string]*Handler),
 		byRole:   make(map[string][]*Handler),
+		routes:   make(map[string]string),
 	}
 }
 
@@ -121,8 +123,8 @@ func (r *Registry) RefusalRecorder() scope.RefusalRecorder {
 }
 
 // owned returns a copy of h that shares no memory a caller can write with h:
-// the Middleware and Tags slices, the Requirement and the WebhookSignature
-// configuration are copied. The Request and Response prototypes are typed nil
+// the Middleware, Tags and Routes slices, the Requirement and the
+// WebhookSignature configuration are copied. The Request and Response prototypes are typed nil
 // pointers and the functions are values, so they are shared as they are.
 // prepareStored stores such a copy, and every accessor that hands a handler
 // out (Get, All, ByRole, ByNamespace, MetadataFor) and the mesh export
@@ -136,6 +138,9 @@ func owned(h *Handler) *Handler {
 	}
 	if len(h.Tags) > 0 {
 		c.Tags = append([]string(nil), h.Tags...)
+	}
+	if len(h.Routes) > 0 {
+		c.Routes = append([]HTTPRoute(nil), h.Routes...)
 	}
 	if h.Requirement != nil {
 		req := *h.Requirement
@@ -158,8 +163,9 @@ func ownedAll(list []*Handler) []*Handler {
 }
 
 // prepareStored validates the handler's scope tag and Requirement arm, has the
-// installed DeclarationReader read the owned copy of h, and returns its FQN, role,
-// and that copy as the stored Handler. It takes no lock and touches no map, so it
+// installed DeclarationReader read the owned copy of h, checks the copy's HTTP
+// routes (checkRoutes, which reads what the reader wrote), and returns its FQN,
+// role, and that copy as the stored Handler. It takes no lock and touches no map, so it
 // is the shared lock-free half of Register and the atomic batch core (RegisterAll
 // and RegisterProxy): scope validation, the copy and the contract's reading live
 // here once. Collision checks and the store happen under the caller's lock.
@@ -174,7 +180,33 @@ func (r *Registry) prepareStored(h Handler) (fqn, role string, stored *Handler, 
 	if err := readDeclaration(stored); err != nil {
 		return "", "", nil, err
 	}
+	if _, err := checkRoutes(stored); err != nil {
+		return "", "", nil, err
+	}
 	return stored.FQN(), stored.Role(), stored, nil
+}
+
+// routeTaken refuses stored when one of its routes is one another FQN of the
+// registry, or of taken (a batch's earlier members), is served on. Caller holds
+// r.mu.
+func (r *Registry) routeTaken(stored *Handler, taken map[string]string) error {
+	keys, _ := checkRoutes(stored)
+	for _, k := range keys {
+		for _, held := range []map[string]string{r.routes, taken} {
+			if owner, ok := held[k]; ok && owner != stored.FQN() {
+				return fmt.Errorf("handler %s: route %s is %s's", stored.FQN(), k, owner)
+			}
+		}
+	}
+	return nil
+}
+
+// storeRoutes records stored's routes as its own. Caller holds r.mu.
+func (r *Registry) storeRoutes(stored *Handler) {
+	keys, _ := checkRoutes(stored)
+	for _, k := range keys {
+		r.routes[k] = stored.FQN()
+	}
 }
 
 // Register adds a handler to the registry.
@@ -194,8 +226,12 @@ func (r *Registry) Register(h Handler) error {
 	if _, exists := r.handlers[fqn]; exists {
 		return fmt.Errorf("handler %s already registered", fqn)
 	}
+	if err := r.routeTaken(stored, nil); err != nil {
+		return err
+	}
 	r.handlers[fqn] = stored
 	r.byRole[role] = append(r.byRole[role], stored)
+	r.storeRoutes(stored)
 	return nil
 }
 
@@ -234,14 +270,23 @@ func (r *Registry) registerAllAtomic(handlers []Handler, proxy bool) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
+	batch := map[string]string{}
 	for _, p := range preps {
 		if _, exists := r.handlers[p.fqn]; exists {
 			return fmt.Errorf("handler %s already registered", p.fqn)
+		}
+		if err := r.routeTaken(p.stored, batch); err != nil {
+			return err
+		}
+		keys, _ := checkRoutes(p.stored)
+		for _, k := range keys {
+			batch[k] = p.fqn
 		}
 	}
 	for _, p := range preps {
 		r.handlers[p.fqn] = p.stored
 		r.byRole[p.role] = append(r.byRole[p.role], p.stored)
+		r.storeRoutes(p.stored)
 	}
 	return nil
 }
