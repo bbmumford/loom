@@ -103,10 +103,11 @@ the right UDP bind and origin detection. `Runtime.InitSwarm` and
 Other packages of this estate:
 
 - `github.com/ORBTR/aether` (with `adapter`, `noise`, `grpc`, `multipath`,
-  `nat`, `discovery`, `flow`, `metrics`): the transports and sessions.
+  `nat`, `flow`, `metrics`): the transports and sessions.
 - `github.com/bbmumford/swarm`: gossip, the CRDT store and anti-entropy.
 - `github.com/bbmumford/route`: path selection over the swarm fabric.
-- `github.com/bbmumford/reach`: publishing the node's own addresses.
+- `github.com/bbmumford/reach` (with `discovery`): publishing the node's own
+  addresses, and the discovery layers the runtime dials peers from.
 - `github.com/bbmumford/ledger` (with `anchor`, `cache`, `storage`): the
   directory's record store.
 - `github.com/bbmumford/whisper` (with `iblt`): topic gossip used by the

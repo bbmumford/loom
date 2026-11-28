@@ -30,7 +30,6 @@ import (
 	"time"
 
 	aether "github.com/ORBTR/aether"
-	"github.com/ORBTR/aether/discovery"
 	"github.com/ORBTR/aether/nat"
 	"github.com/ORBTR/aether/noise"
 	quictransport "github.com/ORBTR/aether/quic"
@@ -43,6 +42,7 @@ import (
 	"github.com/bbmumford/loom/core/transport/manager"
 	"github.com/bbmumford/ratelimit"
 	"github.com/bbmumford/reach"
+	"github.com/bbmumford/reach/discovery"
 	"github.com/bbmumford/route"
 	meshdb "github.com/bbmumford/tursoraft/manager"
 	"github.com/bbmumford/weft"
